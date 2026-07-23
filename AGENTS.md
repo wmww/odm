@@ -7,7 +7,7 @@ ODM is a CAD/3D modeling/animation framework and toolset for LLM agents. The age
 - Only commit or push when explicitly asked. Git push may hang without user approval.
 - Do not run formatting tools like `cargo fmt` unless explicitly asked.
 - Keep prose, comments, errors, and commit messages short unless extra detail is genuinely useful.
-- When on a worktree and asked to `merge worktree`, commit if needed, rebase onto main repo main and then put your commits on top of it. no merge commit.
+- When on a worktree and asked to `merge worktree`, commit if needed, rebase onto main repo main and then put your commits on top of it. no merge commit. Finish by reporting `git worktree list` and `git branch --no-merged main` (from the main repo): /exit always warns that the worktree has commits, and an empty `--no-merged` is what makes answering `Remove` provably lossless.
 
 ## Running the viewer
 Always use `--headless` when running `odm-engine`, unless explicitly asked or you're running inside a headless Wayland compositor (see below). The ODM CLI has enough tools to check most things to do with rendering and the 3D scene, the main thing you can't see with it is UI. For that, use:
