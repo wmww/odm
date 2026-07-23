@@ -1,0 +1,22 @@
+[package]
+name = "odm-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+odm-ir = { path = "../odm-ir" }
+odm-store = { path = "../odm-store" }
+odm-kernel = { path = "../odm-kernel" }
+odm-js = { path = "../odm-js" }
+odm-build = { path = "../odm-build" }
+odm-render = { path = "../odm-render" }
+serde = { version = "1", features = ["derive"] }
+eframe = { version = "=0.35.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+notify = "=8.2.0"
+serde_json = "1"
+anyhow.workspace = true
+
+[[bin]]
+name = "odm-engine"
+path = "src/main.rs"
