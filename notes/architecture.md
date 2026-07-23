@@ -65,6 +65,22 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
 - Version pins that move together: egui/eframe + wgpu (egui pins a wgpu
   major); deno_core + deno_error + v8. manifold-csg pinned =0.3.3.
 
+## Testing
+
+`cargo test` runs everything (66 tests, ~1s after compile). Almost all tests
+are integration tests in `crates/*/tests/`; the only unit tests in `src/` are
+in `odm-render/src/grid.rs`.
+
+Manifests suppress empty harness output: `doctest = false` on every lib (we
+write no doctests, and `odm-js` otherwise inherits an ignored one from a
+deno_core macro), `test = false` on the two bins and on the five libs with no
+`#[cfg(test)]` modules. **If you add unit tests to `src/` in odm-build/
+odm-ir/odm-js/odm-kernel/odm-store, flip that crate's `[lib] test` back to
+true** — the manifest carries a comment saying so.
+
+Useful invocations: `cargo test -p odm-build`, `cargo test --test render`,
+`cargo test <substring>`, `cargo test -q` (dots instead of one line per test).
+
 ## Acceptance status (MVP)
 
 Fresh checkout builds (needs network once for the Manifold clone);

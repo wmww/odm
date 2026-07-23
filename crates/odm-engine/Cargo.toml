@@ -20,3 +20,4 @@ anyhow.workspace = true
 [[bin]]
 name = "odm-engine"
 path = "src/main.rs"
+test = false

@@ -11,3 +11,4 @@ anyhow.workspace = true
 [[bin]]
 name = "odm"
 path = "src/main.rs"
+test = false
