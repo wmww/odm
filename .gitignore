@@ -6,3 +6,4 @@ node_modules/
 # agent scratch (worktrees, local settings); settings.json is tracked
 .claude/*
 !.claude/settings.json
+.worktrees
