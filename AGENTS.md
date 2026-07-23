@@ -8,6 +8,36 @@ ODM is a CAD/3D modeling/animation framework and toolset for LLM agents. The age
 - Do not run formatting tools like `cargo fmt` unless explicitly asked.
 - Keep prose, comments, errors, and commit messages short unless extra detail is genuinely useful.
 
+## Running the viewer
+Never run `odm-engine` without `--headless` outside a headless Wayland compositor —
+it would open a window on the user's desktop. Unless the user explicitly asks for
+that, use `--headless` (enough for almost everything: `odm render`, `build`, `tree`,
+`inspect`, `raycast`) or `scripts/ui-shot.sh`, which supplies its own compositor.
+
+When you need to *see* the UI (egui chrome, theme, layout — things `odm render`
+never touches):
+
+    cargo build --bins
+    scripts/ui-shot.sh -o /tmp/shot.png examples/hello-bracket   # then Read the png
+
+It starts `labwc` on wlroots' headless backend in a private `XDG_RUNTIME_DIR`
+(`mktemp -d`, so concurrent agents never collide), launches the engine on it,
+waits for the first built frame to settle, captures with `grim`, and tears down
+compositor, engine and runtime dir on exit — including after SIGINT/SIGTERM. A
+run killed with SIGKILL is reaped by the next run.
+
+- `-s WxH` output size, `-d SECS` extra settle delay, `-k KEYS` send keystrokes
+  via `wtype` before the shot (only `F` = frame is bound today).
+- `scripts/ui-shot.sh --session CMD...` runs anything inside the compositor with
+  `WAYLAND_DISPLAY`/`XDG_RUNTIME_DIR` set, for multi-shot or interactive work.
+  Pipe stdout through `stdbuf -oL` if you background a client and kill it later,
+  or you lose its buffered output. Don't read stdin in `CMD`.
+- No pointer injection is available (no ydotool/wlr virtual-pointer CLI), so
+  mouse-driven UI can't be exercised — keyboard only.
+- The engine socket path is fixed per project, so two runs on the same project
+  dir share it; the second viewer renders fine but `odm` talks to the first
+  engine. The script warns when this happens. Use distinct projects in parallel.
+
 ## Notes
 The `notes/` directory contains your persistent notes about the project state. Create/edit/rename/split/delete notes as needed (without being asked) to keep them correct and maximally useful to you. Keep `notes/README.md` up to date with an index of what is where.
 

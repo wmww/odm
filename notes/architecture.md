@@ -89,6 +89,25 @@ true** — the manifest carries a comment saying so.
 Useful invocations: `cargo test -p odm-build`, `cargo test --test render`,
 `cargo test <substring>`, `cargo test -q` (dots instead of one line per test).
 
+### Seeing the viewer
+
+`odm render` only exercises `odm-render`, so viewer/theme changes need a real
+screenshot. `scripts/ui-shot.sh` does it (usage in AGENTS.md): private
+`XDG_RUNTIME_DIR` + `labwc` on `WLR_BACKENDS=headless` + `grim`, all torn down
+on exit. Works because we own that compositor.
+
+Do *not* retry the ambient display: the host's sway runs as root and we reach it
+through a `wayland-root` socket symlink as uid 1006, where it advertises neither
+`zwlr_screencopy_manager_v1` nor `ext_image_copy_capture_manager_v1`, so `grim`
+fails with "compositor doesn't support the screen capture protocol". There is no
+Xwayland either, so `import`/`xwd` are out.
+
+Limits today: keyboard injection only (`wtype`; the viewer binds just `F`), no
+pointer injection, and the fixed per-project socket path means parallel runs
+should use different project dirs. An in-process egui frame dump (`egui_kittest`
+or a `--ui-shot` mode) would still be the way to get deterministic UI snapshot
+*tests*; this script is for looking, not asserting.
+
 ## Acceptance status (MVP)
 
 Fresh checkout builds (needs network once for the Manifold clone);
