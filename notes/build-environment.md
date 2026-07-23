@@ -8,10 +8,11 @@
 default `target/` *is* the shared one) and outside a git repo, and refuses to
 clobber a hand-written config. `.cargo/` is gitignored.
 
-Auto-applied by two hooks in the tracked `.claude/settings.json`: `SessionStart`
-(covers fresh clones and existing worktrees) and `WorktreeCreate` (covers
-worktrees made mid-session, which never fire SessionStart). Human devs can just
-run the script.
+Auto-applied by the `SessionStart` hook in the tracked `.claude/settings.json`,
+which covers fresh clones, existing worktrees, and `claude --worktree` (the new
+worktree gets its own session, so SessionStart fires there). Otherwise just run
+the script — including after `EnterWorktree`/agent-isolation worktrees made
+mid-session, which start no new session and so fire no hook.
 
 Why sharing works: cargo keys registry-dep artifacts by package + features +
 profile + rustc, *not* by workspace path, so all ~950 deps are shared. Local
