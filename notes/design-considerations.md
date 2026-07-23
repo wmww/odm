@@ -11,6 +11,16 @@ will be iterated after things are built — no freeze soon, agent-ergonomics tes
 a pre-implementation concern; egui RTL gap explicitly not a concern. MVP plan:
 plans/mvp.md.
 
+Post-verification decisions (2026-07-22, user delegated): nested builds via disposable
+per-thread isolates (see risk #1 — same-thread entry refuted); memo = lookup by
+(code, args) + Salsa-style validation of recorded deps (see open question #1); project
+format = directory of .js doohickeys, `main.js` root, path-string invoke, optional
+`odm.json` (params + animation.duration), engine-owned `.odm/` with socket (see
+plans/mvp.md "Project format"); golden PNGs lavapipe-only with pinned Mesa; IR-hash
+goldens regenerated on V8/Manifold upgrades; user→agent channel post-MVP except
+viewer-selection CLI query; manifold build-time network accepted for MVP
+(issues/hermetic-manifold-build.md).
+
 ## Core architectural insight: one renderer of record
 
 The concept as written has a latent contradiction: the framework is "built on Three.js
@@ -54,11 +64,15 @@ well-trodden.
 
 ## Open design questions
 
-1. **Incremental build / memoization** — the actual hard novel part. "Conceptually
-   pure" build() isn't enough: build() calls engine APIs (raycasts, kernel queries), so
-   soundness requires Salsa-style recorded dependencies — memo key = (code hash, args
-   hash, context keys read, query log). Manifold's deterministic mode helps hash
-   geometry. Design this early; everything else is commodity.
+1. **Incremental build / memoization — DECIDED (2026-07-22).** "Conceptually pure"
+   build() isn't enough: build() calls engine APIs (raycasts, kernel queries), so
+   soundness requires Salsa-style recorded dependencies. Semantics: lookup by (code
+   hash, args hash); the memo entry *stores* recorded deps (context values read,
+   hashes of inputs queried) which are validated on hit — deps can't be part of the
+   lookup key since they're only known after running. Queries are pure functions of
+   content-addressed inputs, so recorded input hashes suffice for validation (no
+   query replay). Manifold's always-on determinism (v3.5+) makes geometry hashing
+   sound. Entry schema lands in phase 1; everything else is commodity.
 2. **Animation model — DECIDED: build(t).** Time is a context value; no first-class
    animation tracks (would add complexity; focus is CAD). Made cheap by two mechanisms:
    (a) dependency-tracked context reads — a doohickey that never reads `t` has a cache
@@ -115,12 +129,20 @@ Ranked by cost-if-discovered-late. Top items each have a cheap de-risking spike.
 
 1. **Build-scheduler semantics (the novel core).** Nested synchronous cross-doohickey
    builds from worker threads risk pool-exhaustion deadlock (A blocks on B, B waits for
-   a worker...). Likely answer: depth-first same-thread execution — the worker running A
-   enters B's isolate on its own thread (isolates nest fine on one thread). Remaining
-   hard parts: in-flight dedup when two workers request the same node, cycle detection,
-   and what TerminateExecution means when a worker is 3 isolates deep. Salsa-shaped,
-   known-solvable, but this is where the design bugs will live. Spike: toy scheduler
-   with fake (sleep) builds; test dedup/cancel/cycles before real geometry exists.
+   a worker...). ~~Likely answer: the worker running A enters B's isolate on its own
+   thread~~ — **REFUTED 2026-07-22** (see stack-verification-2026-07-22.md): rusty_v8
+   `OwnedIsolate`/`JsRuntime` are `!Send`, entered at construction until drop; no
+   `v8::Locker` (removed, #643 open). Isolates can never be entered from another
+   thread. Viable patterns instead: (a) route nested-build requests to B's owning
+   thread and block on reply (deadlock analysis needed); (b) **preferred, fits the
+   purity model**: the requesting worker spins up its own disposable isolate for B
+   from the snapshot (a doohickey may have isolates on several threads; memo dedup
+   still prevents duplicate work in the common case, and duplicated builds are only
+   wasted work, never incorrect). Remaining hard parts: in-flight dedup when two
+   workers request the same node, cycle detection, and cancellation of a worker
+   mid-nested-build. Salsa-shaped, known-solvable, but this is where the design bugs
+   will live. Spike: toy scheduler with fake (sleep) builds; test dedup/cancel/cycles
+   before real geometry exists.
 2. **Agent ergonomics of the API (the product premise).** [Deprioritized by user: API
    will be iterated after things are built; no freeze soon. Keep in mind, don't spike.]
 3. **three.js-in-isolate + snapshot viability.** three core should run in a bare
@@ -151,7 +173,7 @@ list short: orbit camera, grid, flat shading, edges, picking, screenshot).
   build generation (immutable Arc'd IR snapshot from a content-addressed store) with a
   stale/progress indicator while a new build is in flight; atomic swap on completion.
 - Build worker pool: N threads, each owning its V8 isolates (isolates pinned to one
-  worker — rusty_v8 isolates are single-thread-at-a-time). Scheduler walks the dirty
+  worker — rusty_v8 isolates are `!Send`, bound to their creation thread for life). Scheduler walks the dirty
   doohickey graph, checks memo cache, dispatches ready nodes; independent doohickeys
   build in parallel. Framework API calls (raycast, Manifold ops) execute synchronously
   on the calling worker; Manifold has internal parallelism if needed.
