@@ -6,6 +6,7 @@
 mod scene;
 mod server;
 mod state;
+mod theme;
 mod viewer;
 
 use std::path::PathBuf;

@@ -4,6 +4,7 @@
 
 use crate::scene::{self, FlatInstance};
 use crate::state::{EngineState, Published};
+use crate::theme;
 use eframe::egui;
 use odm_render::wgpu;
 use odm_render::{
@@ -156,6 +157,7 @@ impl ViewerApp {
     fn new(cc: &eframe::CreationContext<'_>, state: Arc<EngineState>) -> ViewerApp {
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu render state (eframe wgpu backend)");
         let renderer = Renderer::with_device(rs.device.clone(), rs.queue.clone());
+        theme::install(&cc.egui_ctx);
         ViewerApp {
             state,
             renderer,
@@ -343,15 +345,15 @@ impl ViewerApp {
 
     fn viewport_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let avail = ui.available_size();
+        let (outer, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
+        // The viewport sits in a sunken well; render at the inner size.
+        let rect = outer.shrink(2.0);
         let ppp = ui.ctx().pixels_per_point();
         let px = [
-            ((avail.x * ppp) as u32).clamp(16, 8192),
-            ((avail.y * ppp) as u32).clamp(16, 8192),
+            ((rect.width() * ppp) as u32).clamp(16, 8192),
+            ((rect.height() * ppp) as u32).clamp(16, 8192),
         ];
         self.ensure_viewport(frame, px);
-
-        let (rect, response) =
-            ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
 
         // Input: orbit / pan / zoom / pick / frame.
         let modifiers = ui.input(|i| i.modifiers);
@@ -411,6 +413,7 @@ impl ViewerApp {
             ));
             image.paint_at(ui, rect);
         }
+        theme::bevel(ui.painter(), outer, theme::Bevel::Sunken);
         // Overlay hint.
         ui.painter().text(
             rect.left_top() + egui::vec2(8.0, 8.0),
@@ -453,52 +456,55 @@ impl ViewerApp {
 
     fn bottom_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("⛶ frame (F)").clicked()
+            if theme::button(ui, "Frame (F)").clicked()
                 && let Some(scene) = &self.scene
             {
                 self.orbit = Orbit::framed(scene.render.bounds);
                 self.needs_render = true;
             }
-            if ui.checkbox(&mut self.wireframe, "wireframe").changed() {
+            if theme::checkbox(ui, &mut self.wireframe, "Wireframe").changed() {
                 self.needs_render = true;
             }
-            if ui.checkbox(&mut self.grid, "grid").changed() {
+            if theme::checkbox(ui, &mut self.grid, "Grid").changed() {
                 self.needs_render = true;
             }
-            ui.separator();
-            ui.label(format!("gen {}", self.published.generation));
+            ui.add_space(4.0);
+            theme::status_field(ui, format!("gen {}", self.published.generation));
             if self.published.building {
-                ui.spinner();
-                ui.label("building…");
+                theme::status_field(ui, "Building…");
             }
             if let Some(sel) = &self.selected {
-                ui.separator();
-                ui.label(format!("selected: {}", if sel.is_empty() { "(root)" } else { sel }));
+                theme::status_field(
+                    ui,
+                    format!("selected: {}", if sel.is_empty() { "(root)" } else { sel }),
+                );
             }
         });
 
         if let Some(duration) = self.published.duration {
             ui.horizontal(|ui| {
                 ui.label("t");
-                let slider = egui::Slider::new(&mut self.scrubbing_t, 0.0..=duration)
-                    .fixed_decimals(2)
-                    .suffix(" s");
-                if ui.add(slider).changed() && !scrub_eq(self.scrubbing_t, self.t) {
+                if theme::trackbar(ui, &mut self.scrubbing_t, 0.0..=duration).changed()
+                    && !scrub_eq(self.scrubbing_t, self.t)
+                {
                     self.t = self.scrubbing_t;
                     self.state.request_build(self.t);
                 }
+                theme::status_field(ui, format!("{:.2} s", self.scrubbing_t));
             });
         }
 
         if let Some(err) = &self.published.error {
             let err = err.clone();
             egui::CollapsingHeader::new(
-                egui::RichText::new("build error").color(egui::Color32::from_rgb(230, 90, 90)),
+                egui::RichText::new("Build error").color(theme::ERROR),
             )
             .default_open(self.error_open)
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                    ui.label(egui::RichText::new(err).monospace().size(11.0));
+                theme::field(ui, theme::WINDOW, |ui| {
+                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                        ui.label(egui::RichText::new(err).monospace());
+                    });
                 });
             });
         }
@@ -509,21 +515,32 @@ impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.poll_published();
 
-        egui::Panel::left("tree")
+        let left = egui::Panel::left("tree")
             .resizable(true)
             .default_size(240.0)
+            .frame(theme::panel_frame())
             .show(ui, |ui| {
-                ui.heading("scene");
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| self.tree_ui(ui));
+                theme::field(ui, theme::WINDOW, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| self.tree_ui(ui));
+                });
             });
-        egui::Panel::bottom("timeline").show(ui, |ui| self.bottom_ui(ui));
+        theme::band(ui, left.response.rect);
+        let bottom = egui::Panel::bottom("timeline")
+            .frame(theme::panel_frame())
+            .show(ui, |ui| self.bottom_ui(ui));
+        theme::band(ui, bottom.response.rect);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| self.viewport_ui(ui, frame));
 
         // Poll for published changes even when idle.
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        theme::FACE.to_normalized_gamma_f32()
     }
 }
 

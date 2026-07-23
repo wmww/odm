@@ -48,7 +48,15 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
   (latest-wins, Pass::cancel on supersede), notify-based watcher (150ms
   debounce). Commands: status/sync/build/render/tree/inspect/raycast/
   selection; every command syncs first. Protocol: ndjson over unix socket,
-  `{ok: bool, ...}` responses.
+  `{ok: bool, ...}` responses. `theme.rs` holds the viewer's dark Windows 95
+  look (classic bevel structure, inverted luminance, white text):
+  a `Style`/`Visuals` preset plus widget wrappers (`button`, `checkbox`,
+  `field`, `trackbar`, …) that paint two-tone 3D bevels — egui's
+  `WidgetVisuals` has one uniform `bg_stroke`, so bevels can't be themed and
+  must be drawn over each widget's rect. Prefer these wrappers over bare
+  `ui.button`/`ui.checkbox`/`egui::Slider` in viewer code. Two standing rules:
+  no animation (`animation_time = 0`, `ScrollAnimation::none()`, no scroll-edge
+  fade, no busy spinner — state changes snap), and no hover feedback.
 - `odm-cli` — `odm` binary: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
   from `ok`.
