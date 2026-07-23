@@ -10,7 +10,7 @@ mod types;
 
 pub use canon::{Canonical, Hasher};
 pub use hash::Hash;
-pub use types::{Color, Mesh, MeshError, Node, Scene, Transform};
+pub use types::{Color, Mesh, MeshError, Node, Transform};
 
 use serde_json::Value;
 

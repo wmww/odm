@@ -23,6 +23,12 @@ pub fn serve(state: Arc<EngineState>, sock_path: &Path) -> anyhow::Result<()> {
         std::fs::remove_file(sock_path)?;
     }
     let listener = UnixListener::bind(sock_path)?;
+    // The socket accepts render commands with arbitrary output paths; keep it
+    // owner-only rather than default-umask.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(sock_path, std::fs::Permissions::from_mode(0o600))?;
+    }
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {

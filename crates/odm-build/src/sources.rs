@@ -78,13 +78,18 @@ fn walk(
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
         let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
-        if path.is_dir() {
+        // file_type() does not follow symlinks: a symlinked directory could
+        // otherwise recurse forever. Symlinked .js files are still read.
+        let ft = entry
+            .file_type()
+            .map_err(|e| ScanError::Io { path: rel.clone(), err: e.to_string() })?;
+        if ft.is_dir() {
             // Skip engine state, VCS, and other dot-dirs; also node_modules.
             if name.starts_with('.') || name == "node_modules" {
                 continue;
             }
             walk(&path, &rel, sources, generation_sources)?;
-        } else if name.ends_with(".js") {
+        } else if name.ends_with(".js") && (ft.is_file() || path.is_file()) {
             let code = std::fs::read_to_string(&path)
                 .map_err(|e| ScanError::Io { path: rel.clone(), err: e.to_string() })?;
             let hash = Hash::of_bytes(code.as_bytes());

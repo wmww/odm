@@ -147,7 +147,8 @@ impl BuildEngine {
 
     /// Build the root doohickey (`main.js`) for a pass.
     pub fn build_root(self: &Arc<Self>, pass: &Arc<Pass>) -> Result<PassResult, BuildFailure> {
-        let root = self.get_or_build(pass, &[], ROOT_DOOHICKEY, &Value::Object(Default::default()))?;
+        let root =
+            self.get_or_build(pass, &[], ROOT_DOOHICKEY, &Value::Object(Default::default()))?;
         Ok(PassResult { root, logs: pass.take_logs() })
     }
 
@@ -172,7 +173,7 @@ impl BuildEngine {
     fn get_or_build(
         self: &Arc<Self>,
         pass: &Arc<Pass>,
-        chain: &[String],
+        chain: &[(String, Hash)],
         path: &str,
         args: &Value,
     ) -> Result<Hash, BuildFailure> {
@@ -191,22 +192,36 @@ impl BuildEngine {
                 ),
             ));
         };
-        if chain.iter().any(|p| p == path) {
+        let args_hash = hash_json(args);
+        // Cycle = same (path, args) already building in this chain. Keying on
+        // args allows legitimate bounded recursion (invoke self with a
+        // smaller depth); identical args can never terminate.
+        if chain.iter().any(|(p, a)| p == path && *a == args_hash) {
+            let paths: Vec<&str> = chain.iter().map(|(p, _)| p.as_str()).collect();
             return Err(fail(
                 path,
                 FailureKind::Cycle,
-                format!("dependency cycle: {} -> {path}", chain.join(" -> ")),
+                format!(
+                    "dependency cycle (same doohickey, same args): {} -> {path}",
+                    paths.join(" -> ")
+                ),
             ));
         }
 
-        let key = MemoKey { code: *code_hash, args: hash_json(args) };
+        let key = MemoKey { code: *code_hash, args: args_hash };
         let rkey = RKey { context: pass.context_hash, code: key.code, args: key.args };
 
         loop {
             if let Some(entry) = self.store.memo_get(&key)
-                && self.validate(pass, chain, path, &entry)
+                && self.validate(pass, chain, path, args_hash, &entry)
             {
                 self.stats.memo_hits.fetch_add(1, Ordering::Relaxed);
+                // Replay the original run's console output so logs don't
+                // silently vanish on a hit.
+                if !entry.logs.is_empty() {
+                    let mut logs = pass.logs.lock().unwrap();
+                    logs.extend(entry.logs.iter().map(|l| (path.to_string(), l.clone())));
+                }
                 return Ok(entry.output);
             }
             match self.registry.acquire(rkey, &|| pass.is_cancelled()) {
@@ -219,7 +234,7 @@ impl BuildEngine {
                         format!(
                             "dependency cycle detected across builds at {path} \
                              (chain here: {})",
-                            chain.join(" -> ")
+                            chain.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>().join(" -> ")
                         ),
                     ));
                 }
@@ -238,18 +253,20 @@ impl BuildEngine {
     fn run_one(
         self: &Arc<Self>,
         pass: &Arc<Pass>,
-        chain: &[String],
+        chain: &[(String, Hash)],
         path: &str,
         code: &str,
         args: &Value,
         key: MemoKey,
     ) -> Result<Hash, BuildFailure> {
         self.stats.builds.fetch_add(1, Ordering::Relaxed);
-        let mut chain2: Vec<String> = chain.to_vec();
-        chain2.push(path.to_string());
+        let mut chain2: Vec<(String, Hash)> = chain.to_vec();
+        chain2.push((path.to_string(), key.args));
         let invoker = EngineInvoker { engine: self.clone(), pass: pass.clone(), chain: chain2 };
 
         let pass_for_isolate = pass.clone();
+        let pushed = Arc::new(AtomicBool::new(false));
+        let pushed_flag = pushed.clone();
         let result = run_build(
             &self.env,
             BuildInput {
@@ -263,15 +280,25 @@ impl BuildEngine {
                 invoker: Some(Box::new(invoker)),
                 on_isolate: Some(Box::new(move |handle| {
                     pass_for_isolate.isolates.lock().unwrap().push(handle);
+                    pushed_flag.store(true, Ordering::SeqCst);
                 })),
             },
         );
+        // Isolates nest LIFO, so ours is the top of the stack; drop the
+        // handle now that the isolate is gone (cancel() stays O(live builds)).
+        if pushed.load(Ordering::SeqCst) {
+            pass.isolates.lock().unwrap().pop();
+        }
 
         match result {
             Ok(out) => {
-                self.store.memo_insert(key, MemoEntry { deps: out.deps, output: out.output });
                 let mut logs = pass.logs.lock().unwrap();
-                logs.extend(out.logs.into_iter().map(|l| (path.to_string(), l)));
+                logs.extend(out.logs.iter().map(|l| (path.to_string(), l.clone())));
+                drop(logs);
+                self.store.memo_insert(
+                    key,
+                    MemoEntry { deps: out.deps, output: out.output, logs: out.logs },
+                );
                 Ok(out.output)
             }
             Err(e) => {
@@ -289,8 +316,9 @@ impl BuildEngine {
     fn validate(
         self: &Arc<Self>,
         pass: &Arc<Pass>,
-        chain: &[String],
+        chain: &[(String, Hash)],
         path: &str,
+        args_hash: Hash,
         entry: &MemoEntry,
     ) -> bool {
         for dep in &entry.deps {
@@ -302,8 +330,8 @@ impl BuildEngine {
                     }
                 }
                 Dep::Invoke { path: dep_path, args, output } => {
-                    let mut chain2: Vec<String> = chain.to_vec();
-                    chain2.push(path.to_string());
+                    let mut chain2: Vec<(String, Hash)> = chain.to_vec();
+                    chain2.push((path.to_string(), args_hash));
                     match self.get_or_build(pass, &chain2, dep_path, args) {
                         Ok(out) if out == *output => {}
                         _ => return false,
@@ -318,7 +346,7 @@ impl BuildEngine {
 struct EngineInvoker {
     engine: Arc<BuildEngine>,
     pass: Arc<Pass>,
-    chain: Vec<String>,
+    chain: Vec<(String, Hash)>,
 }
 
 impl Invoker for EngineInvoker {

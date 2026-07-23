@@ -1,27 +1,31 @@
-use odm_ir::{Canonical, Hash, Mesh, Node, Scene};
+use odm_ir::{Canonical, Hash, Mesh, Node};
 use odm_store::{Dep, MemoEntry, MemoKey, Object, Store};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 fn mesh(seed: f32) -> Mesh {
     Mesh {
         positions: vec![seed, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
         indices: vec![0, 1, 2],
-        normals: None,
     }
 }
 
-fn scene_with(mesh_hash: Hash) -> Scene {
-    Scene { root: Node { mesh: Some(mesh_hash), ..Default::default() } }
+fn mesh_obj(seed: f32) -> Object {
+    Object::Mesh(Arc::new(mesh(seed)))
+}
+
+fn node_with(mesh_hash: Hash) -> Node {
+    Node { mesh: Some(mesh_hash), ..Default::default() }
 }
 
 #[test]
 fn put_dedups() {
     let store = Store::new();
-    let h1 = store.put(Object::Mesh(mesh(0.5)));
-    let h2 = store.put(Object::Mesh(mesh(0.5)));
+    let h1 = store.put(mesh_obj(0.5));
+    let h2 = store.put(mesh_obj(0.5));
     assert_eq!(h1, h2);
     assert_eq!(store.object_count(), 1);
-    let h3 = store.put(Object::Mesh(mesh(0.6)));
+    let h3 = store.put(mesh_obj(0.6));
     assert_ne!(h1, h3);
     assert_eq!(store.object_count(), 2);
 }
@@ -30,38 +34,37 @@ fn put_dedups() {
 fn get_returns_equal_object() {
     let store = Store::new();
     let m = mesh(1.0);
-    let h = store.put(Object::Mesh(m.clone()));
+    let h = store.put(Object::Mesh(Arc::new(m.clone())));
     let got = store.get(h).unwrap();
-    assert_eq!(*got, Object::Mesh(m));
+    assert_eq!(*got, Object::Mesh(Arc::new(m)));
     assert!(store.get(mesh(2.0).hash()).is_none());
 }
 
 #[test]
 fn gc_keeps_generation_reachable_sweeps_rest() {
     let store = Store::new();
-    let kept_mesh = store.put(Object::Mesh(mesh(1.0)));
-    let scene = scene_with(kept_mesh);
-    let scene_hash = store.put(Object::Scene(scene));
-    let orphan = store.put(Object::Mesh(mesh(2.0)));
+    let kept_mesh = store.put(mesh_obj(1.0));
+    let root_hash = store.put(Object::Node(node_with(kept_mesh)));
+    let orphan = store.put(mesh_obj(2.0));
 
     let generation = store.new_generation(BTreeMap::new());
-    store.set_roots(generation, vec![scene_hash]);
+    store.set_roots(generation, vec![root_hash]);
 
     let dropped = store.gc();
     assert_eq!(dropped, 1);
-    assert!(store.contains(kept_mesh), "mesh referenced via scene tree must survive");
-    assert!(store.contains(scene_hash));
+    assert!(store.contains(kept_mesh), "mesh referenced via node tree must survive");
+    assert!(store.contains(root_hash));
     assert!(!store.contains(orphan));
 }
 
 #[test]
 fn gc_after_release_sweeps_generation_roots() {
     let store = Store::new();
-    let mesh_hash = store.put(Object::Mesh(mesh(1.0)));
-    let scene_hash = store.put(Object::Scene(scene_with(mesh_hash)));
+    let mesh_hash = store.put(mesh_obj(1.0));
+    let root_hash = store.put(Object::Node(node_with(mesh_hash)));
 
     let generation = store.new_generation(BTreeMap::new());
-    store.set_roots(generation, vec![scene_hash]);
+    store.set_roots(generation, vec![root_hash]);
     store.retain_generation(generation); // e.g. viewer holds it too
     store.release_generation(generation);
     assert_eq!(store.gc(), 0, "still retained once");
@@ -75,13 +78,14 @@ fn gc_after_release_sweeps_generation_roots() {
 #[test]
 fn memo_output_survives_gc() {
     let store = Store::new();
-    let out = store.put(Object::Mesh(mesh(3.0)));
+    let out = store.put(mesh_obj(3.0));
     let key = MemoKey { code: Hash::of_bytes(b"code"), args: Hash::of_bytes(b"args") };
     store.memo_insert(
         key,
         MemoEntry {
             deps: vec![Dep::Context { key: "t".into(), value: Hash::of_bytes(b"0.0") }],
             output: out,
+            logs: vec![],
         },
     );
     store.gc();
@@ -104,6 +108,7 @@ fn memo_round_trip() {
             output: Hash::of_bytes(b"o"),
         }],
         output: Hash::of_bytes(b"out"),
+        logs: vec![],
     };
     store.memo_insert(key, entry.clone());
     assert_eq!(store.memo_get(&key), Some(entry));
@@ -134,7 +139,7 @@ fn concurrent_puts_dedup() {
     let threads: Vec<_> = (0..8)
         .map(|_| {
             let store = store.clone();
-            std::thread::spawn(move || store.put(Object::Mesh(mesh(1.0))))
+            std::thread::spawn(move || store.put(mesh_obj(1.0)))
         })
         .collect();
     let hashes: Vec<Hash> = threads.into_iter().map(|t| t.join().unwrap()).collect();

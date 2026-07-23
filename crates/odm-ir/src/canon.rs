@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Bump when the canonical encoding of any type changes.
-const FORMAT_VERSION: u8 = 1;
+const FORMAT_VERSION: u8 = 2;
 
 // Type tags for domain separation.
 pub(crate) mod tag {
@@ -11,7 +11,6 @@ pub(crate) mod tag {
     pub const NODE: u8 = 2;
     pub const COLOR: u8 = 3;
     pub const TRANSFORM: u8 = 4;
-    pub const SCENE: u8 = 5;
     pub const JSON_NULL: u8 = 16;
     pub const JSON_BOOL: u8 = 17;
     pub const JSON_NUMBER: u8 = 18;

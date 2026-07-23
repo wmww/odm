@@ -9,34 +9,57 @@ type LocalBoundsCache = HashMap<Hash, Option<([f64; 3], [f64; 3])>>;
 /// Linear light gray for nodes with no color anywhere up the tree.
 pub const DEFAULT_COLOR: [f32; 4] = [0.7, 0.7, 0.75, 1.0];
 
-/// Flatten a stored Node (or Scene) into world-space render instances.
-/// Transforms accumulate in f64 and convert to f32 at the leaves; a node's
-/// own color wins over inherited ancestor color. Empty meshes are skipped.
+/// Node ids are child-index paths from the root: "" (root), "0", "0/2", ...
+pub fn node_id(prefix: &str, index: usize) -> String {
+    if prefix.is_empty() { index.to_string() } else { format!("{prefix}/{index}") }
+}
+
+/// A flattened solid instance in f64 world space, for picking/raycasts.
+/// `flatten_node` returns these aligned index-for-index with
+/// `RenderScene::instances`.
+pub struct FlatInstance {
+    pub id: String,
+    pub name: Option<String>,
+    pub mesh: Hash,
+    pub world: math::Mat4,
+}
+
+/// Flatten a stored Node hash into world-space render instances.
 pub fn flatten_scene(store: &Store, root: Hash) -> Result<RenderScene, RenderError> {
     let obj = store.get(root).ok_or(RenderError::MissingObject(root))?;
-    let root_node = match &*obj {
-        Object::Node(n) => n.clone(),
-        Object::Scene(s) => s.root.clone(),
-        Object::Mesh(_) => {
-            return Err(RenderError::BadScene(format!("{root} is a mesh, not a scene node")));
-        }
+    let Object::Node(node) = &*obj else {
+        return Err(RenderError::BadScene(format!("{root} is a mesh, not a scene node")));
     };
+    Ok(flatten_node(store, node)?.1)
+}
 
+/// The single scene flattener: transforms accumulate in f64 and convert to
+/// f32 at the leaves; a node's own color wins over inherited ancestor color;
+/// empty meshes are skipped. Used by headless renders, the viewer, and CLI
+/// raycasts so they can never drift apart.
+pub fn flatten_node(
+    store: &Store,
+    root: &Node,
+) -> Result<(Vec<FlatInstance>, RenderScene), RenderError> {
     let mut scene = RenderScene {
         instances: Vec::new(),
         meshes: HashMap::new(),
         bounds: None,
     };
+    let mut flat = Vec::new();
     let mut local_bounds: LocalBoundsCache = HashMap::new();
-    walk(store, &root_node, &math::IDENTITY, None, &mut scene, &mut local_bounds)?;
-    Ok(scene)
+    walk(store, root, "", &math::IDENTITY, None, &mut flat, &mut scene, &mut local_bounds)?;
+    Ok((flat, scene))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     store: &Store,
     node: &Node,
+    id: &str,
     parent: &math::Mat4,
     inherited: Option<[f32; 4]>,
+    flat: &mut Vec<FlatInstance>,
     scene: &mut RenderScene,
     local_bounds: &mut LocalBoundsCache,
 ) -> Result<(), RenderError> {
@@ -48,14 +71,14 @@ fn walk(
     let color = node.color.map(|c| [c.r, c.g, c.b, c.a]).or(inherited);
 
     if let Some(mesh_hash) = node.mesh {
-        let mesh = match scene.meshes.get(&mesh_hash) {
+        let mesh: Arc<Mesh> = match scene.meshes.get(&mesh_hash) {
             Some(m) => m.clone(),
             None => {
                 let obj = store.get(mesh_hash).ok_or(RenderError::MissingObject(mesh_hash))?;
                 let Object::Mesh(m) = &*obj else {
                     return Err(RenderError::BadScene(format!("{mesh_hash} is not a mesh")));
                 };
-                Arc::new(m.clone())
+                m.clone()
             }
         };
         if mesh.triangle_count() > 0 {
@@ -69,16 +92,23 @@ fn walk(
                 transform: math::to_f32_cols(&world),
                 color: color.unwrap_or(DEFAULT_COLOR),
             });
+            flat.push(FlatInstance {
+                id: id.to_string(),
+                name: node.name.clone(),
+                mesh: mesh_hash,
+                world,
+            });
         }
     }
 
-    for child in &node.children {
-        walk(store, child, &world, color, scene, local_bounds)?;
+    for (i, child) in node.children.iter().enumerate() {
+        walk(store, child, &node_id(id, i), &world, color, flat, scene, local_bounds)?;
     }
     Ok(())
 }
 
-fn mesh_aabb(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
+/// AABB of a mesh's positions (no kernel/Manifold involvement).
+pub fn mesh_aabb(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
     if mesh.positions.is_empty() {
         return None;
     }

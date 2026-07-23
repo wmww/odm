@@ -142,12 +142,15 @@ impl Kernel {
         twist_degrees: f64,
         scale_top: [f64; 2],
     ) -> Result<Hash> {
+        if slices < 1 {
+            return Err(KernelError::Other(format!("slices must be >= 1 (got {slices})")));
+        }
         let cs = cross_section(polygons)?;
         self.intern(
             Manifold::extrude_with_options(
                 &cs,
                 height,
-                slices.max(1),
+                slices,
                 twist_degrees,
                 scale_top[0],
                 scale_top[1],
@@ -256,18 +259,32 @@ impl Kernel {
         if len <= 0.0 || len.is_nan() || !max_dist.is_finite() || max_dist <= 0.0 {
             return Err(KernelError::Other("raycast needs a nonzero dir and positive max_dist".into()));
         }
+        // Manifold reports hits as a fraction of the origin→end segment and
+        // computes positions as origin + t*(end-origin), so a huge endpoint
+        // costs absolute precision. Clamp the segment to a bounds-derived
+        // length that still covers every possible hit.
+        let Some(bb) = m.bounding_box() else { return Ok(None) };
+        let (bmin, bmax) = (bb.min(), bb.max());
+        let mut to_center = 0.0f64;
+        let mut diag = 0.0f64;
+        for k in 0..3 {
+            let c = (bmin[k] + bmax[k]) / 2.0;
+            to_center += (c - origin[k]) * (c - origin[k]);
+            diag += (bmax[k] - bmin[k]) * (bmax[k] - bmin[k]);
+        }
+        let seg = max_dist.min(to_center.sqrt() + diag.sqrt() + 1.0);
         let end = [
-            origin[0] + dir[0] / len * max_dist,
-            origin[1] + dir[1] / len * max_dist,
-            origin[2] + dir[2] / len * max_dist,
+            origin[0] + dir[0] / len * seg,
+            origin[1] + dir[1] / len * seg,
+            origin[2] + dir[2] / len * seg,
         ];
         let hit = m
             .ray_cast(origin, end)
             .into_iter()
             .min_by(|a, b| a.distance.total_cmp(&b.distance));
-        // Manifold reports distance as a fraction of the origin→end segment.
+        // Distance comes back as a fraction of the segment.
         Ok(hit.map(|h| RayHit {
-            distance: h.distance * max_dist,
+            distance: h.distance * seg,
             position: h.position,
             normal: h.normal,
         }))
@@ -280,21 +297,22 @@ impl Kernel {
         let evaluated = match cancel {
             Some(tok) => {
                 let ctx_bound = m.with_context(&tok.0);
-                ctx_bound.status().map_err(map_csg_err)?;
+                ctx_bound.status().map_err(|e| csg_err(e, Some(tok)))?;
                 ctx_bound
             }
             None => {
-                m.status().map_err(map_csg_err)?;
+                m.status().map_err(|e| csg_err(e, None))?;
                 m
             }
         };
         let gl = evaluated.to_meshgl();
-        let mesh = Mesh {
-            positions: gl.vert_properties(),
-            indices: gl.tri_verts(),
-            normals: None,
-        };
-        let hash = self.store.put(Object::Mesh(mesh));
+        // A cancel landing between status() and to_meshgl() may truncate the
+        // mesh; don't intern junk into the content store.
+        if cancel.is_some_and(|t| t.is_cancelled()) {
+            return Err(KernelError::Cancelled);
+        }
+        let mesh = Mesh { positions: gl.vert_properties(), indices: gl.tri_verts() };
+        let hash = self.store.put(Object::Mesh(Arc::new(mesh)));
         self.cache.lock().unwrap().insert(hash, Arc::new(evaluated));
         Ok(hash)
     }
@@ -348,8 +366,14 @@ fn check_segments(segments: i32) -> Result<()> {
 }
 
 fn cross_section(polygons: &[Vec<[f64; 2]>]) -> Result<CrossSection> {
-    if polygons.is_empty() || polygons.iter().all(|p| p.len() < 3) {
-        return Err(KernelError::Other("cross-section needs at least one polygon with 3+ points".into()));
+    if polygons.is_empty() {
+        return Err(KernelError::Other("cross-section needs at least one polygon".into()));
+    }
+    if let Some(i) = polygons.iter().position(|p| p.len() < 3) {
+        return Err(KernelError::Other(format!(
+            "cross-section polygon {i} has {} points; every polygon needs 3+",
+            polygons[i].len()
+        )));
     }
     Ok(CrossSection::from_polygons(polygons))
 }
@@ -368,11 +392,12 @@ fn affine_3x4(t: &Transform) -> Result<[f64; 12]> {
     ])
 }
 
-fn map_csg_err(e: manifold_csg::CsgError) -> KernelError {
-    let msg = e.to_string();
-    if msg.contains("Cancelled") || msg.contains("cancelled") {
+/// Map a CSG failure, consulting the cancel token directly rather than
+/// matching on error strings (upstream wording is not a stable API).
+fn csg_err(e: manifold_csg::CsgError, tok: Option<&CancelToken>) -> KernelError {
+    if tok.is_some_and(|t| t.is_cancelled()) {
         KernelError::Cancelled
     } else {
-        KernelError::NotSolid(msg)
+        KernelError::NotSolid(e.to_string())
     }
 }

@@ -1,5 +1,5 @@
 //! wgpu renderer for ODM IR scenes: one render path serving both offscreen
-//! PNG (headless/CLI) and, later, the viewer viewport.
+//! PNG (headless/CLI) and the viewer viewport.
 //!
 //! Conventions: Z-up, right-handed, meshes are indexed CCW triangles with
 //! positions only — flat normals come from screen-space derivatives in the
@@ -9,10 +9,10 @@ mod camera;
 mod flatten;
 mod gpu;
 mod grid;
-mod math;
+pub mod math;
 
 pub use camera::{Camera, Projection};
-pub use flatten::{DEFAULT_COLOR, flatten_scene};
+pub use flatten::{DEFAULT_COLOR, FlatInstance, flatten_node, flatten_scene, mesh_aabb, node_id};
 pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES, Renderer};
 
 /// Re-exported so the viewer uses the exact same wgpu version.

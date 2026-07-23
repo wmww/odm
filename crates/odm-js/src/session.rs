@@ -17,11 +17,8 @@ pub struct SessionState {
     pub invoker: Option<Box<dyn Invoker>>,
 }
 
-#[derive(Clone, Debug)]
-pub struct LogLine {
-    pub level: String,
-    pub message: String,
-}
+/// Console line; defined in odm-store so memo entries can carry logs.
+pub use odm_store::LogLine;
 
 pub struct InvokeResult {
     /// Hash of the invoked doohickey's output Node in the store.

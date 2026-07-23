@@ -34,13 +34,22 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
 - `odm-build` — scan→generation; pass = generation+context (t + params);
   demand-driven `get_or_build` with Salsa-style validation and early cutoff;
   in-flight registry (wait-for-in-flight + wait-graph cycle detection);
-  cancellation (token + TerminateExecution post-module-eval).
+  cancellation (token + TerminateExecution post-module-eval). Cycle check is
+  keyed on (path, args-hash) so bounded recursion works; memo entries carry
+  console logs and replay them on hits. NOTE: builds are currently
+  single-threaded (get_or_build recurses inline, engine serializes passes
+  behind cmd_lock); the registry's cross-thread machinery is speculative
+  infrastructure for future parallelism, exercised only by
+  `concurrent_same_pass_dedups`.
 - `odm-render` — wgpu =29.0.4 (MUST track egui's pinned wgpu major);
-  flatten (color inheritance, world AABB) → instanced draw, flat shading
+  the single flattener `flatten_node` (color inheritance, world AABB, node
+  ids for picking — engine and viewer both use it) → one draw_indexed per
+  instance with dynamic uniform offsets (not instanced draws), flat shading
   via screen-space derivatives, MSAA 4x, wireframe overlay
   (POLYGON_MODE_LINE when available), auto-scaled grid, auto-framing
   perspective/ortho cameras; `render_png` and the viewer viewport share
-  `render_to_views`. `Renderer::with_device` for the shared eframe device.
+  `render_to_views`; the GPU mesh cache is pruned to the live scene after
+  every render/publish. `Renderer::with_device` for the shared eframe device.
 - `odm-engine` — binary. Headless: socket server only. Default: + eframe
   viewer (offscreen texture viewport via register_native_texture, orbit/
   pan/zoom, tree panel, timeline when duration set, error panel with

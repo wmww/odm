@@ -57,7 +57,9 @@ generators (`BoxGeometry`, `CylinderGeometry`, `SphereGeometry`,
 
 Named CSS colors (common subset — steelblue, crimson, silver, ...), hex
 `'#rrggbb'`/`'#rgb'`, numeric `0xRRGGBB`, `[r,g,b]`/`[r,g,b,a]` sRGB 0..1.
-Unknown names error with suggestions.
+Unknown names error with a hint. Alpha must be 1 — the renderer has no
+transparency yet, so translucent colors are rejected rather than silently
+drawn opaque.
 
 ## odm.json
 
