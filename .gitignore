@@ -1,4 +1,8 @@
 /target
 node_modules/
 .odm/
-.claude/worktrees
+# generated per-worktree by scripts/shared-target.sh
+.cargo/
+# agent scratch (worktrees, local settings); settings.json is tracked
+.claude/*
+!.claude/settings.json

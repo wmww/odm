@@ -1,6 +1,7 @@
 # Notes index
 
 - `architecture.md` — the system as built: project format, crate map, invariants, version-pin policies, MVP acceptance status. Start here.
+- `build-environment.md` — how worktrees share one cargo target dir (fast/cheap new worktrees), what's expensive to build, target-dir cruft.
 - `mvp-progress.md` — MVP execution log: what landed per phase + implementation gotchas/decisions discovered along the way (op2 quirks, kernel API facts, known gaps).
 - `design-considerations.md` — pre-implementation architecture decisions, recommended stack, risks, and open-question resolutions from the initial concept review.
 - `ecosystem-research-2026-07.md` — survey of geometry kernels, Rust viewer stacks, and web-viewer options (researched July 2026, with sources).
