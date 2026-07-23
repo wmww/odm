@@ -26,9 +26,20 @@ pub enum Dep {
     Invoke { path: String, args: serde_json::Value, output: Hash },
 }
 
+/// One captured console line from a build. Lives here (not odm-js) so memo
+/// entries can replay logs on a hit.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LogLine {
+    pub level: String,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MemoEntry {
     pub deps: Vec<Dep>,
     /// Hash of the build output object in the store.
     pub output: Hash,
+    /// Console output of the original run, replayed on memo hits so
+    /// `console.log` doesn't vanish when nothing changed.
+    pub logs: Vec<LogLine>,
 }

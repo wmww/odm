@@ -50,6 +50,10 @@ export function parseColor(c) {
     if (c.length < 3 || c.length > 4 || c.some((v) => typeof v !== 'number')) {
       throw new TypeError(`color array must be [r,g,b] or [r,g,b,a] in 0..1, got ${JSON.stringify(c)}`);
     }
+    if (c.length === 4 && c[3] !== 1) {
+      // The renderer has no blending yet; a silently opaque 0.3 would mislead.
+      throw new TypeError(`translucent colors are not supported yet: alpha must be 1, got ${c[3]}`);
+    }
     return [srgbToLinear(c[0]), srgbToLinear(c[1]), srgbToLinear(c[2]), c.length === 4 ? c[3] : 1];
   }
   if (typeof c === 'number') return fromInt(c);

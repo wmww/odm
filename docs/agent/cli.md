@@ -13,11 +13,13 @@ reflects the edit. All commands print one JSON object; exit code 0 = ok.
 
 ```
 odm status                    # files, generation, animation duration
+odm sync                      # force a rescan (every command syncs anyway)
 odm build [--t 1.5]           # build only; errors + console logs
 odm tree [--t] [--depth N]    # node ids, names, meshes, world bounds
 odm inspect <node-id> [--t]   # volume, area, bounds, world matrix
 odm raycast --origin 0,0,50 --dir 0,0,-1 [--t]
 odm render [options]          # PNG → prints path
+odm selection                 # current viewer selection (node id + name)
 ```
 
 Render options: `--t sec`, `--width/--height px` (default 1024×768),
@@ -47,5 +49,5 @@ odm render --t 2.5 --out /tmp/frame.png      # animation frame
   the engine picks up changes automatically.
 - The viewer shows the last good build while your code is broken; the CLI
   always tells you the current truth.
-- Viewer selection (user clicks a part) will be exposed as a query
-  post-viewer; for now coordinate through renders and node names.
+- When the user clicks a part in the viewer, `odm selection` tells you which
+  node they selected — useful for "make *this* one longer" instructions.

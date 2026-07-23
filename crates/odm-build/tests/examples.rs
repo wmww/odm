@@ -40,10 +40,10 @@ fn build_example(name: &str, t: f64) -> (Arc<BuildEngine>, odm_ir::Hash) {
 #[test]
 fn example_scene_hashes_are_stable() {
     let golden = [
-        ("hello-bracket", "30d19ba8fefa187174568f12280e3036e3521251f7ae58b2f2ac64d5adba65f0"),
-        ("parametric-box", "25cc58b08cdf650ce737ae4ac592607fc97eb7dff2f484bca4880a4c148df34d"),
-        ("assembly", "bbc753a8d5fa579e8044fe2d76a48f77841a90dc33442099f77e53081f022406"),
-        ("piston", "024df8460c9c57a130337b5b46519dd295a20207e51c0d607a867430364cbf53"),
+        ("hello-bracket", "8a29c005cae2243ea003aa9990d7888d408401aac88e66b24af2981cc3b59ab9"),
+        ("parametric-box", "f2702b016dd5ebdc6628af05def2fb4a21a4e2cd637c8d0a409b5ca7b8856bd1"),
+        ("assembly", "4782e8fe401c64cf5e4728715a6a4cc033126cf8e7118840f4fda25a9797cfa5"),
+        ("piston", "a58af4a26bdf6e4185b7df1bd207fbcb7a7523df3d6a979acf7b0ac49151d260"),
     ];
     let mut failures = vec![];
     for (name, want) in golden {

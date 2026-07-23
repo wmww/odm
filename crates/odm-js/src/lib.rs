@@ -182,11 +182,11 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Buil
     }
     let ir_value = match ir_value {
         Ok(v) => v,
-        Err(BuildError::Js(m)) => return Err(attach_logs(BuildError::Js(m), &session)),
-        Err(e) => return Err(e),
+        Err(e) => return Err(attach_logs(e, &session)),
     };
 
-    let node = ir_json::node_from_json(&store, &ir_value).map_err(BuildError::BadOutput)?;
+    let node = ir_json::node_from_json(&store, &ir_value)
+        .map_err(|m| attach_logs(BuildError::BadOutput(m), &session))?;
     let output = store.put(Object::Node(node));
     Ok(BuildOutput {
         output,
@@ -222,11 +222,15 @@ fn attach_logs(err: BuildError, session: &SessionState) -> BuildError {
     if session.logs.is_empty() {
         return err;
     }
-    let BuildError::Js(msg) = err else { return err };
+    let (msg, rewrap): (String, fn(String) -> BuildError) = match err {
+        BuildError::Js(m) => (m, BuildError::Js),
+        BuildError::BadOutput(m) => (m, BuildError::BadOutput),
+        other => return other,
+    };
     let mut out = msg;
     out.push_str("\n--- console output ---");
     for line in &session.logs {
         out.push_str(&format!("\n[{}] {}", line.level, line.message));
     }
-    BuildError::Js(out)
+    rewrap(out)
 }

@@ -2,16 +2,17 @@
 //! scene tree, timeline, error panel. Never blocks on builds — shows the
 //! last published scene with a building indicator.
 
-use crate::scene::{self, FlatInstance};
+use crate::scene;
 use crate::state::{EngineState, Published};
 use crate::theme;
 use eframe::egui;
+use odm_render::math::{cross, normalize};
 use odm_render::wgpu;
 use odm_render::{
-    Camera, DEFAULT_COLOR, Projection, RenderInstance, RenderOptions, RenderScene, Renderer,
+    Camera, FlatInstance, Projection, RenderInstance, RenderOptions, RenderScene, Renderer,
+    flatten_node,
 };
 use odm_store::Object;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub fn run_viewer(state: Arc<EngineState>) -> Result<(), String> {
@@ -100,23 +101,15 @@ impl Orbit {
     /// Camera basis (right, up, forward), for panning and picking.
     fn basis(&self) -> ([f64; 3], [f64; 3], [f64; 3]) {
         let eye = self.eye();
-        let f = norm([
+        let f = normalize([
             self.target[0] - eye[0],
             self.target[1] - eye[1],
             self.target[2] - eye[2],
         ]);
-        let s = norm(cross(f, [0.0, 0.0, 1.0]));
+        let s = normalize(cross(f, [0.0, 0.0, 1.0]));
         let u = cross(s, f);
         (s, u, f)
     }
-}
-
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-fn norm(v: [f64; 3]) -> [f64; 3] {
-    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-12);
-    [v[0] / l, v[1] / l, v[2] / l]
 }
 
 /// Offscreen viewport target registered as an egui texture.
@@ -183,17 +176,28 @@ impl ViewerApp {
             return;
         }
         let engine = self.state.build_engine();
-        if let Some(root_hash) = p.root
-            && self.published.root != Some(root_hash)
-            && let Some(Object::Node(root)) = engine.store.get(root_hash).as_deref()
+        if let Some((root_hash, root_obj)) = &p.root
+            && self.published.root.as_ref().map(|(h, _)| h) != Some(root_hash)
+            && let Object::Node(root) = &**root_obj
         {
-            let root = root.clone();
-            let (instances, render) = render_scene_from(&engine.store, scene::flatten(&root));
-            if !self.framed {
+            // The root object is kept alive by the Arc in Published, but its
+            // meshes may race a GC of a superseding build; on a miss keep the
+            // old scene and retry next poll (revision stays unrecorded).
+            let (instances, render) = match flatten_node(&engine.store, root) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("viewer flatten failed (retrying next poll): {e}");
+                    return;
+                }
+            };
+            if !self.framed && render.bounds.is_some() {
                 self.orbit = Orbit::framed(render.bounds);
                 self.framed = true;
             }
-            self.scene = Some(SceneCache { root, instances, render });
+            // Drop GPU buffers for meshes no longer shown (unbounded otherwise,
+            // e.g. while scrubbing the timeline).
+            self.renderer.prune_cache(&|h| render.meshes.contains_key(h));
+            self.scene = Some(SceneCache { root: root.clone(), instances, render });
             self.selected = None;
             self.state.set_selection(None);
             self.needs_render = true;
@@ -335,7 +339,7 @@ impl ViewerApp {
         let tan_x = tan_y * aspect;
         let x = (uv[0] as f64 * 2.0 - 1.0) * tan_x;
         let y = (1.0 - uv[1] as f64 * 2.0) * tan_y;
-        let dir = norm([
+        let dir = normalize([
             f[0] + x * s[0] + y * u[0],
             f[1] + x * s[1] + y * u[1],
             f[2] + x * s[2] + y * u[2],
@@ -444,9 +448,8 @@ impl ViewerApp {
             ui.label("no build yet");
             return;
         };
-        let root = scene.root.clone();
         let mut clicked: Option<(String, Option<String>)> = None;
-        tree_node_ui(ui, &root, "", self.selected.as_deref(), &mut clicked);
+        tree_node_ui(ui, &scene.root, "", self.selected.as_deref(), &mut clicked);
         if let Some((id, name)) = clicked {
             self.selected = Some(id.clone());
             self.state.set_selection(Some((id, name)));
@@ -575,63 +578,13 @@ fn tree_node_ui(
             .default_open(id.split('/').count() < 2 || id.is_empty())
             .show(ui, |ui| {
                 for (i, child) in node.children.iter().enumerate() {
-                    tree_node_ui(ui, child, &scene::node_id(id, i), selected, clicked);
+                    tree_node_ui(ui, child, &odm_render::node_id(id, i), selected, clicked);
                 }
             });
         if header.header_response.clicked() {
             *clicked = Some((id.to_string(), node.name.clone()));
         }
     }
-}
-
-/// Build a RenderScene; returns the kept FlatInstances aligned
-/// index-for-index with the render instances (empty meshes dropped).
-fn render_scene_from(
-    store: &odm_store::Store,
-    instances: Vec<FlatInstance>,
-) -> (Vec<FlatInstance>, RenderScene) {
-    let mut meshes: HashMap<odm_ir::Hash, Arc<odm_ir::Mesh>> = HashMap::new();
-    let mut out = Vec::with_capacity(instances.len());
-    let mut bounds: Option<([f64; 3], [f64; 3])> = None;
-    let mut kept = Vec::with_capacity(instances.len());
-    for fi in instances {
-        let mesh = match store.get(fi.mesh).as_deref() {
-            Some(Object::Mesh(m)) if m.triangle_count() > 0 => Arc::new(m.clone()),
-            _ => continue,
-        };
-        // Local AABB from positions, then world corners.
-        let mut min = [f64::INFINITY; 3];
-        let mut max = [f64::NEG_INFINITY; 3];
-        for p in mesh.positions.chunks_exact(3) {
-            for k in 0..3 {
-                min[k] = min[k].min(p[k] as f64);
-                max[k] = max[k].max(p[k] as f64);
-            }
-        }
-        let (wmin, wmax) =
-            scene::world_aabb(&odm_kernel::Bounds { min, max }, &fi.world);
-        bounds = Some(match bounds {
-            None => (wmin, wmax),
-            Some((bmin, bmax)) => (
-                [bmin[0].min(wmin[0]), bmin[1].min(wmin[1]), bmin[2].min(wmin[2])],
-                [bmax[0].max(wmax[0]), bmax[1].max(wmax[1]), bmax[2].max(wmax[2])],
-            ),
-        });
-        let mut transform = [[0.0f32; 4]; 4];
-        for (c, col) in transform.iter_mut().enumerate() {
-            for (r, v) in col.iter_mut().enumerate() {
-                *v = fi.world[c * 4 + r] as f32;
-            }
-        }
-        let color = match fi.color {
-            Some(c) => [c.r, c.g, c.b, c.a],
-            None => DEFAULT_COLOR,
-        };
-        meshes.entry(fi.mesh).or_insert(mesh);
-        out.push(RenderInstance { mesh: fi.mesh, transform, color });
-        kept.push(fi);
-    }
-    (kept, RenderScene { instances: out, meshes, bounds })
 }
 
 /// Selecting a group highlights its whole subtree.

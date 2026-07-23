@@ -1,14 +1,14 @@
 use crate::{Generation, GenerationId, MemoEntry, MemoKey};
-use odm_ir::{Canonical, Hash, Mesh, Node, Scene};
+use odm_ir::{Canonical, Hash, Mesh, Node};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 
-/// A content-addressed IR object.
+/// A content-addressed IR object. Meshes are behind an `Arc` so consumers
+/// (renderer, viewer) can hold vertex data without deep copies.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Object {
-    Mesh(Mesh),
+    Mesh(Arc<Mesh>),
     Node(Node),
-    Scene(Scene),
 }
 
 impl Object {
@@ -16,7 +16,6 @@ impl Object {
         match self {
             Object::Mesh(m) => m.hash(),
             Object::Node(n) => n.hash(),
-            Object::Scene(s) => s.hash(),
         }
     }
 
@@ -25,7 +24,6 @@ impl Object {
         match self {
             Object::Mesh(_) => {}
             Object::Node(n) => n.mesh_refs(out),
-            Object::Scene(s) => s.root.mesh_refs(out),
         }
     }
 }

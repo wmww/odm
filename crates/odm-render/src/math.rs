@@ -34,6 +34,15 @@ pub fn transform_point(m: &Mat4, p: Vec3) -> Vec3 {
     ]
 }
 
+/// Transform a direction (no translation, no perspective divide).
+pub fn transform_dir(m: &Mat4, d: Vec3) -> Vec3 {
+    [
+        m[0] * d[0] + m[4] * d[1] + m[8] * d[2],
+        m[1] * d[0] + m[5] * d[1] + m[9] * d[2],
+        m[2] * d[0] + m[6] * d[1] + m[10] * d[2],
+    ]
+}
+
 pub fn sub(a: Vec3, b: Vec3) -> Vec3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }

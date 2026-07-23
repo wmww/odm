@@ -20,7 +20,9 @@ pub struct Published {
     pub revision: u64,
     pub generation: u64,
     pub t: f64,
-    pub root: Option<odm_ir::Hash>,
+    /// Root hash plus the object itself: holding the `Arc` keeps the root
+    /// alive across store GCs, so the viewer never reads an unrooted hash.
+    pub root: Option<(odm_ir::Hash, Arc<Object>)>,
     pub error: Option<String>,
     pub building: bool,
     /// animation.duration from the manifest, if any.
@@ -114,7 +116,7 @@ impl EngineState {
             let sync = match self.sync() {
                 Ok(s) => s,
                 Err(e) => {
-                    self.publish_failure(0, t, format!("{e}"), false);
+                    self.publish_failure(None, t, format!("{e}"), false);
                     continue;
                 }
             };
@@ -130,26 +132,34 @@ impl EngineState {
                 Err(f) if f.kind == FailureKind::Cancelled => {
                     // Superseded; a newer request is (or will be) queued.
                 }
-                Err(f) => self.publish_failure(sync.generation.0, t, f.message.clone(), false),
+                Err(f) => {
+                    self.publish_failure(Some(sync.generation.0), t, f.message.clone(), false)
+                }
             }
         }
     }
 
     fn publish_success(&self, sync: &SyncResult, t: f64, root: odm_ir::Hash) {
+        // The root was just set as a GC root in `publish`, so it is alive;
+        // the Arc keeps it that way for the viewer even after later GCs.
+        let obj = self.build.store.get(root);
         let mut p = self.published.lock().unwrap();
         p.revision += 1;
         p.generation = sync.generation.0;
         p.t = t;
-        p.root = Some(root);
+        p.root = obj.map(|o| (root, o));
         p.error = None;
         p.building = self.queue.latest.lock().unwrap().is_some();
         p.duration = sync.snapshot.manifest.animation.as_ref().map(|a| a.duration);
     }
 
-    fn publish_failure(&self, generation: u64, t: f64, message: String, keep_building: bool) {
+    /// `generation: None` (e.g. scan errors) keeps the last known generation.
+    fn publish_failure(&self, generation: Option<u64>, t: f64, message: String, keep_building: bool) {
         let mut p = self.published.lock().unwrap();
         p.revision += 1;
-        p.generation = generation;
+        if let Some(g) = generation {
+            p.generation = g;
+        }
         p.t = t;
         p.error = Some(message);
         p.building = keep_building;
@@ -252,7 +262,7 @@ impl EngineState {
             }
             Err(f) => {
                 if f.kind != FailureKind::Cancelled {
-                    self.publish_failure(sync.generation.0, t, f.message.clone(), false);
+                    self.publish_failure(Some(sync.generation.0), t, f.message.clone(), false);
                 }
                 Err(failure_json(&f, &pass.take_logs()))
             }
@@ -325,9 +335,16 @@ impl EngineState {
         let png = renderer
             .render_png(&scene, &opts)
             .map_err(|e| err_json("render", e.to_string()))?;
+        // Drop GPU buffers for meshes not in this scene (unbounded otherwise).
+        renderer.prune_cache(&|h| scene.meshes.contains_key(h));
+        let wireframe_dropped = opts.wireframe && !renderer.wireframe_supported();
 
         let out_path = match req.get("out").and_then(|v| v.as_str()) {
-            Some(p) => PathBuf::from(p),
+            Some(p) => {
+                let path = PathBuf::from(p);
+                self.check_out_path(&path)?;
+                path
+            }
             None => {
                 let n = self.render_counter.fetch_add(1, Ordering::Relaxed);
                 let dir = self.project.join(".odm/renders");
@@ -339,7 +356,7 @@ impl EngineState {
         std::fs::write(&out_path, &png)
             .map_err(|e| err_json("render", format!("write {}: {e}", out_path.display())))?;
 
-        Ok(json!({
+        let mut resp = json!({
             "path": out_path.display().to_string(),
             "width": width,
             "height": height,
@@ -347,7 +364,34 @@ impl EngineState {
             "root": result.root.to_hex(),
             "instances": scene.instances.len(),
             "logs": logs_json(&result.logs),
-        }))
+        });
+        if wireframe_dropped {
+            resp["warnings"] = json!([
+                "wireframe overlay unavailable (GPU adapter lacks POLYGON_MODE_LINE); rendered shaded only"
+            ]);
+        }
+        Ok(resp)
+    }
+
+    /// The engine never writes ODM project files: reject `out` targets that
+    /// would overwrite a source file inside the project.
+    fn check_out_path(&self, path: &PathBuf) -> Result<(), Value> {
+        let inside_project = match (path.parent().and_then(|d| d.canonicalize().ok()),
+                                    self.project.canonicalize().ok()) {
+            (Some(dir), Some(project)) => dir.starts_with(project),
+            _ => false,
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if inside_project && (name.ends_with(".js") || name == "odm.json") {
+            return Err(err_json(
+                "bad-request",
+                format!("refusing to write {} — the engine never writes project source files", path.display()),
+            ));
+        }
+        Ok(())
     }
 
     fn cmd_tree(&self, req: &Value) -> Result<Value, Value> {
@@ -355,14 +399,8 @@ impl EngineState {
         let depth = f64_arg(req, "depth").unwrap_or(32.0) as usize;
         let (_sync, result) = self.build_scene(t)?;
         let root = self.root_node(&result)?;
-        let tree = scene::tree_json(
-            &self.build.store,
-            &self.build.kernel,
-            &root,
-            "",
-            &odm_ir::Transform::IDENTITY.0,
-            depth,
-        );
+        let tree =
+            scene::tree_json(&self.build.store, &root, "", &odm_ir::Transform::IDENTITY.0, depth);
         Ok(json!({ "t": t, "tree": tree, "logs": logs_json(&result.logs) }))
     }
 
@@ -371,26 +409,9 @@ impl EngineState {
         let id = req.get("node").and_then(|v| v.as_str()).unwrap_or("");
         let (_sync, result) = self.build_scene(t)?;
         let root = self.root_node(&result)?;
-        let Some(node) = scene::find_node(&root, id) else {
+        let Some((node, world)) = scene::find_node_world(&root, id) else {
             return Err(err_json("bad-request", format!("no node with id {id:?}; use `tree` to list ids")));
         };
-        // World transform: accumulate along the id path.
-        let mut world = odm_ir::Transform::IDENTITY.0;
-        let mut cur = &root;
-        if !id.is_empty() {
-            if !cur.transform.is_identity() {
-                world = cur.transform.0;
-            }
-            for part in id.split('/') {
-                let idx: usize = part.parse().unwrap();
-                cur = &cur.children[idx];
-                if !cur.transform.is_identity() {
-                    world = scene::mat_mul(&world, &cur.transform.0);
-                }
-            }
-        } else if !cur.transform.is_identity() {
-            world = cur.transform.0;
-        }
 
         let mesh_info = match node.mesh {
             Some(h) => {
@@ -433,7 +454,8 @@ impl EngineState {
         let dir = vec3_arg(req, "dir")?;
         let (_sync, result) = self.build_scene(t)?;
         let root = self.root_node(&result)?;
-        let instances = scene::flatten(&root);
+        let (instances, _) = odm_render::flatten_node(&self.build.store, &root)
+            .map_err(|e| err_json("internal", e.to_string()))?;
         let hit = scene::raycast(&self.build.kernel, &instances, origin, dir);
         Ok(json!({ "t": t, "hit": hit }))
     }

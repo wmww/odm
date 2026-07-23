@@ -3,12 +3,12 @@ use crate::hash::Hash;
 use serde::{Deserialize, Serialize};
 
 /// Triangle mesh, indexed. Positions are xyz triples; indices are CCW
-/// triangles. Normals, if present, are per-vertex xyz triples.
+/// triangles. No stored normals — the renderer derives flat normals in the
+/// fragment shader.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mesh {
     pub positions: Vec<f32>,
     pub indices: Vec<u32>,
-    pub normals: Option<Vec<f32>>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -17,8 +17,6 @@ pub enum MeshError {
     PositionsLen(usize),
     #[error("indices length {0} is not a multiple of 3")]
     IndicesLen(usize),
-    #[error("normals length {got} does not match positions length {want}")]
-    NormalsLen { got: usize, want: usize },
     #[error("index {index} out of range for {verts} vertices")]
     IndexRange { index: u32, verts: usize },
 }
@@ -39,14 +37,6 @@ impl Mesh {
         if !self.indices.len().is_multiple_of(3) {
             return Err(MeshError::IndicesLen(self.indices.len()));
         }
-        if let Some(n) = &self.normals
-            && n.len() != self.positions.len()
-        {
-            return Err(MeshError::NormalsLen {
-                got: n.len(),
-                want: self.positions.len(),
-            });
-        }
         let verts = self.vertex_count();
         for &i in &self.indices {
             if i as usize >= verts {
@@ -62,13 +52,6 @@ impl Canonical for Mesh {
         w.u8(tag::MESH);
         w.f32s(&self.positions);
         w.u32s(&self.indices);
-        match &self.normals {
-            None => w.u8(0),
-            Some(n) => {
-                w.u8(1);
-                w.f32s(n);
-            }
-        }
     }
 }
 
@@ -174,15 +157,3 @@ impl Canonical for Node {
     }
 }
 
-/// A fully built scene: the root doohickey's output.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Scene {
-    pub root: Node,
-}
-
-impl Canonical for Scene {
-    fn write(&self, w: &mut Hasher) {
-        w.u8(tag::SCENE);
-        self.root.write(w);
-    }
-}

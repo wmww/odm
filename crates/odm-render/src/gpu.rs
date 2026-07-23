@@ -163,7 +163,7 @@ impl Renderer {
     }
 
     /// The single scene-render path: draws into the given MSAA view with
-    /// resolve target. The (future) viewport uses this too.
+    /// resolve target. The viewer viewport uses this too.
     pub fn render_to_views(
         &mut self,
         scene: &RenderScene,
@@ -193,6 +193,14 @@ impl Renderer {
                 resource: globals_buf.as_entire_binding(),
             }],
         });
+
+        // Every instance must have its mesh in the scene (public API; don't
+        // panic on inconsistent input).
+        for inst in &scene.instances {
+            if !scene.meshes.contains_key(&inst.mesh) {
+                return Err(RenderError::MissingObject(inst.mesh));
+            }
+        }
 
         // Upload meshes not yet cached.
         for (hash, mesh) in &scene.meshes {

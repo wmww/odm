@@ -12,7 +12,7 @@ fn translation(x: f64, y: f64, z: f64) -> Transform {
 
 fn get_mesh(store: &Store, h: odm_ir::Hash) -> odm_ir::Mesh {
     match &*store.get(h).unwrap() {
-        Object::Mesh(m) => m.clone(),
+        Object::Mesh(m) => (**m).clone(),
         other => panic!("expected mesh, got {other:?}"),
     }
 }

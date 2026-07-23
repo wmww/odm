@@ -325,4 +325,48 @@ fn logs_are_collected_per_pass() {
         result.logs.iter().map(|(p, l)| format!("{p}: {}", l.message)).collect();
     assert!(lines.contains(&"main.js: root building".to_string()), "{lines:?}");
     assert!(lines.contains(&"part.js: part building".to_string()), "{lines:?}");
+
+    // Memo hits replay the original run's logs — an identical second build
+    // reports the same console output instead of silently dropping it.
+    let result2 = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
+    assert_eq!(builds(&e), 2, "second build must be pure memo hits");
+    let lines2: Vec<String> =
+        result2.logs.iter().map(|(p, l)| format!("{p}: {}", l.message)).collect();
+    assert!(lines2.contains(&"main.js: root building".to_string()), "{lines2:?}");
+    assert!(lines2.contains(&"part.js: part building".to_string()), "{lines2:?}");
+}
+
+#[test]
+fn bounded_recursion_is_allowed() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "main.js",
+        "export default (ctx) => ctx.invoke('tree.js', { depth: 3 })",
+    );
+    write(
+        dir.path(),
+        "tree.js",
+        r#"
+        export default function build(ctx) {
+            const box = odm.box(1).translate(ctx.args.depth * 2, 0, 0);
+            if (ctx.args.depth === 0) return box;
+            const sub = ctx.invoke('tree.js', { depth: ctx.args.depth - 1 });
+            return odm.group(box, sub);
+        }
+        "#,
+    );
+
+    let e = engine();
+    let sync = e.sync(dir.path()).unwrap();
+    let result = e.build_root(&e.start_pass(&sync, 0.0));
+    assert!(result.is_ok(), "recursion with a base case must build: {result:?}");
+    assert_eq!(builds(&e), 5, "main + tree at depths 3,2,1,0");
+
+    // Self-invoke with identical args is still a cycle, not a hang.
+    write(dir.path(), "main.js", "export default (ctx) => ctx.invoke('loop.js', { n: 1 })");
+    write(dir.path(), "loop.js", "export default (ctx) => ctx.invoke('loop.js', { n: 1 })");
+    let sync = e.sync(dir.path()).unwrap();
+    let err = e.build_root(&e.start_pass(&sync, 0.0)).unwrap_err();
+    assert!(err.message.contains("cycle"), "{err:?}");
 }

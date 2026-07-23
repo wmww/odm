@@ -6,7 +6,6 @@ fn tri_mesh(x_off: f32) -> Mesh {
     Mesh {
         positions: vec![x_off, 0.0, 0.0, x_off + 1.0, 0.0, 0.0, x_off, 1.0, 0.0],
         indices: vec![0, 1, 2],
-        normals: None,
     }
 }
 
@@ -21,8 +20,8 @@ fn translation(x: f64, y: f64, z: f64) -> Transform {
 #[test]
 fn flatten_accumulates_transforms_and_colors() {
     let store = Store::new();
-    let mesh = store.put(Object::Mesh(tri_mesh(0.0)));
-    let empty = store.put(Object::Mesh(Mesh { positions: vec![], indices: vec![], normals: None }));
+    let mesh = store.put(Object::Mesh(tri_mesh(0.0).into()));
+    let empty = store.put(Object::Mesh(Mesh { positions: vec![], indices: vec![] }.into()));
 
     let red = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
     let blue = Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
@@ -63,7 +62,7 @@ fn flatten_accumulates_transforms_and_colors() {
 #[test]
 fn colorless_gets_default() {
     let store = Store::new();
-    let mesh = store.put(Object::Mesh(tri_mesh(0.0)));
+    let mesh = store.put(Object::Mesh(tri_mesh(0.0).into()));
     let root = store.put(Object::Node(Node { mesh: Some(mesh), ..Default::default() }));
     let scene = flatten_scene(&store, root).unwrap();
     assert_eq!(scene.instances[0].color, DEFAULT_COLOR);
@@ -82,6 +81,6 @@ fn missing_objects_error() {
 #[test]
 fn mesh_as_root_rejected() {
     let store = Store::new();
-    let mesh = store.put(Object::Mesh(tri_mesh(0.0)));
+    let mesh = store.put(Object::Mesh(tri_mesh(0.0).into()));
     assert!(matches!(flatten_scene(&store, mesh), Err(RenderError::BadScene(_))));
 }
