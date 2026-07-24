@@ -45,15 +45,19 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
   the single flattener `flatten_node` (color inheritance, world AABB, node
   ids for picking — engine and viewer both use it) → one draw_indexed per
   instance with dynamic uniform offsets (not instanced draws), flat shading
-  via screen-space derivatives, MSAA 4x, wireframe overlay
-  (POLYGON_MODE_LINE when available), auto-scaled grid, auto-framing
+  via screen-space derivatives, MSAA 4x, wireframe mode (edges only, in the
+  instance color, no fill; one instanced quad per edge widened in the vertex
+  shader to `WIRE_WIDTH_PX` — WebGPU line primitives are stuck at 1px, and the
+  grid still uses them; `pick_wire` does the matching screen-space
+  selection), auto-scaled grid, auto-framing
   perspective/ortho cameras; `render_png` and the viewer viewport share
   `render_to_views`; the GPU mesh cache is pruned to the live scene after
   every render/publish. `Renderer::with_device` for the shared eframe device.
 - `odm-engine` — binary. Headless: socket server only. Default: + eframe
   viewer (offscreen texture viewport via register_native_texture, orbit/
   pan/zoom, tree panel, timeline when duration set, error panel with
-  last-good scene, click-select via CPU raycast), background build loop
+  last-good scene, click-select via CPU raycast when shaded / nearest-wire
+  screen-space pick when wireframe), background build loop
   (latest-wins, Pass::cancel on supersede), notify-based watcher (150ms
   debounce). Commands: status/sync/build/render/tree/inspect/raycast/
   selection; every command syncs first. Protocol: ndjson over unix socket,
@@ -84,7 +88,7 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
 
 ## Testing
 
-`cargo test` runs everything (66 tests, ~1s after compile). Almost all tests
+`cargo test` runs everything (70 tests, ~1s after compile). Almost all tests
 are integration tests in `crates/*/tests/`; the only unit tests in `src/` are
 in `odm-render/src/grid.rs`.
 
@@ -122,6 +126,6 @@ or a `--ui-shot` mode) would still be the way to get deterministic UI snapshot
 Fresh checkout builds (needs network once for the Manifold clone);
 `odm-engine examples/piston` opens the viewer (launch verified on Wayland;
 in-window interaction visuals not yet human-checked); edits propagate to
-viewer + CLI (verified via CLI); 66 tests green. Manual checklist left:
+viewer + CLI (verified via CLI); 70 tests green. Manual checklist left:
 viewport interaction feel (orbit/pan/zoom), timeline scrub visuals,
 selection highlight, clean exit on window close.

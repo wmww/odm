@@ -23,8 +23,8 @@ odm selection                 # current viewer selection (node id + name)
 ```
 
 Render options: `--t sec`, `--width/--height px` (default 1024×768),
-`--out file.png` (default under `.odm/renders/`), `--wireframe` (edge
-overlay), `--no-grid`, `--ortho`, `--direction x,y,z` (auto-framed view from
+`--out file.png` (default under `.odm/renders/`), `--wireframe` (edges only,
+in each object's own color — surfaces are not drawn), `--no-grid`, `--ortho`, `--direction x,y,z` (auto-framed view from
 that direction; default isometric), or explicit `--eye x,y,z --target x,y,z
 [--up x,y,z] [--fov deg | --ortho-height h]`.
 

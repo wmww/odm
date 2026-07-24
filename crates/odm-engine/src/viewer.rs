@@ -20,25 +20,8 @@ pub fn run_viewer(state: Arc<EngineState>) -> Result<(), String> {
         "ODM — {}",
         state.project().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
     );
-    let mut wgpu_options = eframe::egui_wgpu::WgpuConfiguration::default();
-    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut wgpu_options.wgpu_setup {
-        // Ask for POLYGON_MODE_LINE (wireframe overlay) when the adapter has it.
-        setup.device_descriptor = std::sync::Arc::new(|adapter: &wgpu::Adapter| {
-            let mut required_features = wgpu::Features::empty();
-            if adapter.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
-                required_features |= wgpu::Features::POLYGON_MODE_LINE;
-            }
-            wgpu::DeviceDescriptor {
-                label: Some("odm-viewer"),
-                required_features,
-                required_limits: wgpu::Limits::default(),
-                ..Default::default()
-            }
-        });
-    }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
-        wgpu_options,
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 840.0]).with_title(&title),
         ..Default::default()
     };
@@ -59,6 +42,9 @@ struct Orbit {
 }
 
 const FOV_Y_DEG: f64 = 45.0;
+
+/// How far from a wire a click still counts, in UI points.
+const PICK_RADIUS_PT: f64 = 6.0;
 
 impl Orbit {
     fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
@@ -282,12 +268,19 @@ impl ViewerApp {
         self.needs_render = true;
     }
 
-    fn render_viewport(&mut self) {
-        let (Some(tex), Some(scene)) = (&self.tex, &self.scene) else { return };
-        let mut opts = RenderOptions::default_with(tex.size[0], tex.size[1]);
+    /// Render options for the current viewport — also what picking projects
+    /// with, so clicks land on exactly what was drawn.
+    fn view_opts(&self, size: [u32; 2]) -> RenderOptions {
+        let mut opts = RenderOptions::default_with(size[0], size[1]);
         opts.camera = self.orbit.camera();
         opts.wireframe = self.wireframe;
         opts.grid = self.grid;
+        opts
+    }
+
+    fn render_viewport(&mut self) {
+        let (Some(tex), Some(scene)) = (&self.tex, &self.scene) else { return };
+        let opts = self.view_opts(tex.size);
 
         // Highlight the selected instance by brightening its color.
         let highlighted;
@@ -403,8 +396,15 @@ impl ViewerApp {
                 ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
                 ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0),
             ];
-            let (origin, dir) = self.pick_ray(uv, rect.width() as f64 / rect.height() as f64);
-            self.select_by_ray(origin, dir);
+            let selection = if self.wireframe {
+                // Nothing is solid: hit the wires themselves, in screen space.
+                self.pick_wire_at([uv[0] as f64 * px[0] as f64, uv[1] as f64 * px[1] as f64], ppp)
+            } else {
+                let (origin, dir) =
+                    self.pick_ray(uv, rect.width() as f64 / rect.height() as f64);
+                self.pick_solid(origin, dir)
+            };
+            self.set_selection(selection);
         }
 
         if self.needs_render {
@@ -428,16 +428,32 @@ impl ViewerApp {
         );
     }
 
-    fn select_by_ray(&mut self, origin: [f64; 3], dir: [f64; 3]) {
-        let Some(scene) = &self.scene else { return };
+    /// Nearest solid surface along the ray (shaded mode).
+    fn pick_solid(&self, origin: [f64; 3], dir: [f64; 3]) -> Option<(String, Option<String>)> {
+        let scene = self.scene.as_ref()?;
         let kernel = &self.state.build_engine().kernel;
-        let hit = scene::raycast(kernel, &scene.instances, origin, dir);
-        let sel = hit.as_ref().and_then(|h| {
-            Some((
-                h.get("node")?.as_str()?.to_string(),
-                h.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()),
-            ))
-        });
+        let hit = scene::raycast(kernel, &scene.instances, origin, dir)?;
+        Some((
+            hit.get("node")?.as_str()?.to_string(),
+            hit.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()),
+        ))
+    }
+
+    /// Nearest wire to a viewport pixel (wireframe mode). Objects behind are
+    /// selectable wherever the one in front has no wire over them.
+    fn pick_wire_at(
+        &self,
+        point_px: [f64; 2],
+        pixels_per_point: f32,
+    ) -> Option<(String, Option<String>)> {
+        let (scene, tex) = (self.scene.as_ref()?, self.tex.as_ref()?);
+        let radius = PICK_RADIUS_PT * pixels_per_point as f64;
+        let hit = odm_render::pick_wire(&scene.render, &self.view_opts(tex.size), point_px, radius)?;
+        let inst = scene.instances.get(hit.instance)?;
+        Some((inst.id.clone(), inst.name.clone()))
+    }
+
+    fn set_selection(&mut self, sel: Option<(String, Option<String>)>) {
         self.selected = sel.as_ref().map(|(id, _)| id.clone());
         self.state.set_selection(sel);
         self.needs_render = true;
@@ -450,10 +466,8 @@ impl ViewerApp {
         };
         let mut clicked: Option<(String, Option<String>)> = None;
         tree_node_ui(ui, &scene.root, "", self.selected.as_deref(), &mut clicked);
-        if let Some((id, name)) = clicked {
-            self.selected = Some(id.clone());
-            self.state.set_selection(Some((id, name)));
-            self.needs_render = true;
+        if clicked.is_some() {
+            self.set_selection(clicked);
         }
     }
 

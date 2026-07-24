@@ -111,6 +111,16 @@ pub fn orthographic(half_w: f64, half_h: f64, near: f64, far: f64) -> Mat4 {
     m
 }
 
+pub fn from_f32_cols(m: &[[f32; 4]; 4]) -> Mat4 {
+    let mut out = [0.0; 16];
+    for c in 0..4 {
+        for r in 0..4 {
+            out[c * 4 + r] = m[c][r] as f64;
+        }
+    }
+    out
+}
+
 pub fn to_f32_cols(m: &Mat4) -> [[f32; 4]; 4] {
     let mut out = [[0.0f32; 4]; 4];
     for c in 0..4 {

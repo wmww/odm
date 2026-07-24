@@ -74,7 +74,7 @@ fn option_variants_render() {
     opts.camera = Camera::Auto { direction: [0.0, 0.0, -1.0], ortho: true };
     renderer.render_png(&scene, &opts).unwrap();
 
-    // Wireframe overlay (or graceful no-op if unsupported).
+    // Wireframe (edges only).
     let mut opts = RenderOptions::default_with(160, 120);
     opts.wireframe = true;
     renderer.render_png(&scene, &opts).unwrap();

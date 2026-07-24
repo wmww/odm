@@ -337,7 +337,6 @@ impl EngineState {
             .map_err(|e| err_json("render", e.to_string()))?;
         // Drop GPU buffers for meshes not in this scene (unbounded otherwise).
         renderer.prune_cache(&|h| scene.meshes.contains_key(h));
-        let wireframe_dropped = opts.wireframe && !renderer.wireframe_supported();
 
         let out_path = match req.get("out").and_then(|v| v.as_str()) {
             Some(p) => {
@@ -356,7 +355,7 @@ impl EngineState {
         std::fs::write(&out_path, &png)
             .map_err(|e| err_json("render", format!("write {}: {e}", out_path.display())))?;
 
-        let mut resp = json!({
+        Ok(json!({
             "path": out_path.display().to_string(),
             "width": width,
             "height": height,
@@ -364,13 +363,7 @@ impl EngineState {
             "root": result.root.to_hex(),
             "instances": scene.instances.len(),
             "logs": logs_json(&result.logs),
-        });
-        if wireframe_dropped {
-            resp["warnings"] = json!([
-                "wireframe overlay unavailable (GPU adapter lacks POLYGON_MODE_LINE); rendered shaded only"
-            ]);
-        }
-        Ok(resp)
+        }))
     }
 
     /// The engine never writes ODM project files: reject `out` targets that

@@ -1,6 +1,6 @@
 use crate::grid::build_grid;
-use crate::math;
-use crate::{RenderError, RenderOptions, RenderScene};
+use crate::wire::mesh_edges;
+use crate::{RenderError, RenderOptions, RenderScene, math};
 use odm_ir::Hash;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
@@ -10,8 +10,11 @@ pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrg
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// mat4 + color, padded to uniform alignment.
 const INSTANCE_SIZE: u64 = 80;
+/// view_proj + camera_pos + viewport.
+const GLOBALS_SIZE: u64 = 96;
+/// Two f32x3 endpoints per wire instance.
+const WIRE_STRIDE: u64 = 24;
 
-const WIRE_COLOR: [f32; 4] = [0.08, 0.08, 0.1, 1.0];
 const GRID_MINOR_COLOR: [f32; 4] = [0.16, 0.16, 0.18, 1.0];
 const GRID_MAJOR_COLOR: [f32; 4] = [0.28, 0.28, 0.32, 1.0];
 
@@ -19,17 +22,19 @@ struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    /// Wire endpoint pairs (one instance per edge), built the first time this
+    /// mesh is drawn as wireframe.
+    wires: Option<(wgpu::Buffer, u32)>,
 }
 
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    wireframe_supported: bool,
     globals_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
     pipe_fill: wgpu::RenderPipeline,
-    pipe_wire: Option<wgpu::RenderPipeline>,
     pipe_lines: wgpu::RenderPipeline,
+    pipe_wire: wgpu::RenderPipeline,
     instance_stride: u64,
     mesh_cache: HashMap<Hash, GpuMesh>,
 }
@@ -46,15 +51,10 @@ impl Renderer {
         ))
         .map_err(|e| RenderError::NoAdapter(e.to_string()))?;
 
-        let mut required_features = wgpu::Features::empty();
-        if adapter.features().contains(wgpu::Features::POLYGON_MODE_LINE) {
-            required_features |= wgpu::Features::POLYGON_MODE_LINE;
-        }
-
         let (device, queue) = futures::executor::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("odm-render"),
-                required_features,
+                required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
             },
@@ -65,11 +65,7 @@ impl Renderer {
     }
 
     /// Create on an existing device (e.g. eframe's) — the viewer path.
-    /// Wireframe overlay needs the device created with POLYGON_MODE_LINE.
     pub fn with_device(device: wgpu::Device, queue: wgpu::Queue) -> Renderer {
-        let wireframe_supported =
-            device.features().contains(wgpu::Features::POLYGON_MODE_LINE);
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("odm-shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -89,16 +85,9 @@ impl Renderer {
             immediate_size: 0,
         });
 
-        let pipe_fill = make_pipeline(
-            &device,
-            &pipeline_layout,
-            &shader,
-            PipelineKind::Fill,
-        );
-        let pipe_wire = wireframe_supported.then(|| {
-            make_pipeline(&device, &pipeline_layout, &shader, PipelineKind::WireOverlay)
-        });
+        let pipe_fill = make_pipeline(&device, &pipeline_layout, &shader, PipelineKind::Fill);
         let pipe_lines = make_pipeline(&device, &pipeline_layout, &shader, PipelineKind::Lines);
+        let pipe_wire = make_pipeline(&device, &pipeline_layout, &shader, PipelineKind::Wire);
 
         let instance_stride =
             INSTANCE_SIZE.max(device.limits().min_uniform_buffer_offset_alignment as u64);
@@ -106,21 +95,14 @@ impl Renderer {
         Renderer {
             device,
             queue,
-            wireframe_supported,
             globals_layout,
             instance_layout,
             pipe_fill,
-            pipe_wire,
             pipe_lines,
+            pipe_wire,
             instance_stride,
             mesh_cache: HashMap::new(),
         }
-    }
-
-    /// False when the adapter lacks POLYGON_MODE_LINE; wireframe requests
-    /// then silently render without the overlay.
-    pub fn wireframe_supported(&self) -> bool {
-        self.wireframe_supported
     }
 
     /// Drop cached GPU buffers for meshes no longer alive.
@@ -175,11 +157,14 @@ impl Renderer {
         let cam = opts.camera.resolve(scene.bounds, opts.width as f64 / opts.height as f64);
 
         // Globals.
-        let mut globals = [0u8; 80];
+        let mut globals = [0u8; GLOBALS_SIZE as usize];
         let vp = math::to_f32_cols(&cam.view_proj);
         globals[..64].copy_from_slice(bytemuck::cast_slice(&vp));
         let eye = [cam.eye[0] as f32, cam.eye[1] as f32, cam.eye[2] as f32, 1.0f32];
-        globals[64..].copy_from_slice(bytemuck::cast_slice(&eye));
+        globals[64..80].copy_from_slice(bytemuck::cast_slice(&eye));
+        let viewport =
+            [opts.width as f32, opts.height as f32, crate::WIRE_WIDTH_PX / 2.0, 0.0f32];
+        globals[80..96].copy_from_slice(bytemuck::cast_slice(&viewport));
         let globals_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("globals"),
             contents: &globals,
@@ -202,32 +187,49 @@ impl Renderer {
             }
         }
 
-        // Upload meshes not yet cached.
+        // Upload meshes not yet cached (edge buffers only once wireframe asks).
+        let device = &self.device;
         for (hash, mesh) in &scene.meshes {
-            if !self.mesh_cache.contains_key(hash) {
-                let vertices =
-                    self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("mesh-verts"),
-                        contents: bytemuck::cast_slice(&mesh.positions),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                let indices = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            let entry = self.mesh_cache.entry(*hash).or_insert_with(|| {
+                let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh-verts"),
+                    contents: bytemuck::cast_slice(&mesh.positions),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("mesh-indices"),
                     contents: bytemuck::cast_slice(&mesh.indices),
                     usage: wgpu::BufferUsages::INDEX,
                 });
-                self.mesh_cache.insert(
-                    *hash,
-                    GpuMesh { vertices, indices, index_count: mesh.indices.len() as u32 },
-                );
+                GpuMesh {
+                    vertices,
+                    indices,
+                    index_count: mesh.indices.len() as u32,
+                    wires: None,
+                }
+            });
+            if opts.wireframe && entry.wires.is_none() {
+                // Endpoints are expanded rather than indexed: each wire is one
+                // instance carrying both of its ends.
+                let edges = mesh_edges(mesh);
+                let mut ends = Vec::with_capacity(edges.len() * 3);
+                for i in &edges {
+                    let v = *i as usize * 3;
+                    ends.extend_from_slice(&mesh.positions[v..v + 3]);
+                }
+                let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh-wires"),
+                    contents: bytemuck::cast_slice(&ends),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                entry.wires = Some((buf, edges.len() as u32 / 2));
             }
         }
 
-        // Instance slots: fill instances, optional wire copies, grid minor+major.
-        let draw_wire = opts.wireframe && self.pipe_wire.is_some();
-        let n_fill = scene.instances.len();
-        let n_wire = if draw_wire { n_fill } else { 0 };
-        let n_slots = n_fill + n_wire + 2;
+        // Instance slots: one per instance (wires reuse the instance color),
+        // then grid minor+major.
+        let n_inst = scene.instances.len();
+        let n_slots = n_inst + 2;
         let stride = self.instance_stride as usize;
         let mut inst_data = vec![0u8; n_slots * stride];
         fn write_slot(data: &mut [u8], stride: usize, i: usize, world: &[[f32; 4]; 4], color: &[f32; 4]) {
@@ -238,13 +240,8 @@ impl Renderer {
         for (i, inst) in scene.instances.iter().enumerate() {
             write_slot(&mut inst_data, stride, i, &inst.transform, &inst.color);
         }
-        if draw_wire {
-            for (i, inst) in scene.instances.iter().enumerate() {
-                write_slot(&mut inst_data, stride, n_fill + i, &inst.transform, &WIRE_COLOR);
-            }
-        }
         let identity = math::to_f32_cols(&math::IDENTITY);
-        let grid_minor_slot = n_fill + n_wire;
+        let grid_minor_slot = n_inst;
         let grid_major_slot = grid_minor_slot + 1;
         write_slot(&mut inst_data, stride, grid_minor_slot, &identity, &GRID_MINOR_COLOR);
         write_slot(&mut inst_data, stride, grid_major_slot, &identity, &GRID_MAJOR_COLOR);
@@ -317,29 +314,20 @@ impl Renderer {
 
             pass.set_bind_group(0, &globals_bg, &[]);
 
-            // Fill.
-            pass.set_pipeline(&self.pipe_fill);
-            for (i, inst) in scene.instances.iter().enumerate() {
-                let mesh = &self.mesh_cache[&inst.mesh];
-                pass.set_bind_group(1, &inst_bg, &[(i * stride) as u32]);
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-            }
-
-            // Wireframe overlay.
-            if draw_wire {
-                pass.set_pipeline(self.pipe_wire.as_ref().unwrap());
+            // Solid fill (shaded). Wireframe mode replaces it entirely.
+            if !opts.wireframe {
+                pass.set_pipeline(&self.pipe_fill);
                 for (i, inst) in scene.instances.iter().enumerate() {
                     let mesh = &self.mesh_cache[&inst.mesh];
-                    pass.set_bind_group(1, &inst_bg, &[((n_fill + i) * stride) as u32]);
+                    pass.set_bind_group(1, &inst_bg, &[(i * stride) as u32]);
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
                 }
             }
 
-            // Grid (after geometry so depth testing occludes it).
+            // Grid: after the fill so depth testing occludes it, before the
+            // wires so they stay legible where the two cross.
             if let Some((minor_buf, minor_n, major_buf, major_n)) = &grid_bufs {
                 pass.set_pipeline(&self.pipe_lines);
                 pass.set_bind_group(1, &inst_bg, &[(grid_minor_slot * stride) as u32]);
@@ -348,6 +336,18 @@ impl Renderer {
                 pass.set_bind_group(1, &inst_bg, &[(grid_major_slot * stride) as u32]);
                 pass.set_vertex_buffer(0, major_buf.slice(..));
                 pass.draw(0..*major_n, 0..1);
+            }
+
+            // Wires, in each instance's own color, nothing hidden.
+            if opts.wireframe {
+                pass.set_pipeline(&self.pipe_wire);
+                for (i, inst) in scene.instances.iter().enumerate() {
+                    let mesh = &self.mesh_cache[&inst.mesh];
+                    let Some((wire_buf, wire_count)) = &mesh.wires else { continue };
+                    pass.set_bind_group(1, &inst_bg, &[(i * stride) as u32]);
+                    pass.set_vertex_buffer(0, wire_buf.slice(..));
+                    pass.draw(0..4, 0..*wire_count);
+                }
             }
         }
         self.queue.submit([encoder.finish()]);
@@ -428,9 +428,14 @@ impl Renderer {
 }
 
 enum PipelineKind {
+    /// Shaded triangles.
     Fill,
-    WireOverlay,
+    /// Flat-colored 1px line lists (the grid).
     Lines,
+    /// Flat-colored wires: one instanced quad per edge, widened in screen
+    /// space. Like `Lines`, depth-tested but not depth-writing, so lines
+    /// never hide each other.
+    Wire,
 }
 
 fn uniform_entry(binding: u32, dynamic: bool) -> wgpu::BindGroupLayoutEntry {
@@ -452,30 +457,47 @@ fn make_pipeline(
     shader: &wgpu::ShaderModule,
     kind: PipelineKind,
 ) -> wgpu::RenderPipeline {
-    let (topology, polygon_mode, fragment_entry, depth_write, depth_compare, bias) = match kind {
+    // Positions for meshes and grid lines; wire quads pull both endpoints of
+    // an edge per instance instead.
+    const POSITIONS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x3];
+    const WIRE_ENDS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    let (topology, vertex_entry, fragment_entry, depth_write, vertex_buffer) = match kind {
         PipelineKind::Fill => (
             wgpu::PrimitiveTopology::TriangleList,
-            wgpu::PolygonMode::Fill,
+            "vs_main",
             "fs_mesh",
             true,
-            wgpu::CompareFunction::Less,
-            wgpu::DepthBiasState::default(),
-        ),
-        PipelineKind::WireOverlay => (
-            wgpu::PrimitiveTopology::TriangleList,
-            wgpu::PolygonMode::Line,
-            "fs_flat",
-            false,
-            wgpu::CompareFunction::LessEqual,
-            wgpu::DepthBiasState { constant: -2, slope_scale: -2.0, clamp: 0.0 },
+            wgpu::VertexBufferLayout {
+                array_stride: 12,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &POSITIONS,
+            },
         ),
         PipelineKind::Lines => (
             wgpu::PrimitiveTopology::LineList,
-            wgpu::PolygonMode::Fill,
+            "vs_main",
             "fs_flat",
             false,
-            wgpu::CompareFunction::Less,
-            wgpu::DepthBiasState::default(),
+            wgpu::VertexBufferLayout {
+                array_stride: 12,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &POSITIONS,
+            },
+        ),
+        PipelineKind::Wire => (
+            wgpu::PrimitiveTopology::TriangleStrip,
+            "vs_wire",
+            "fs_flat",
+            // Wires write depth: nothing else does in wireframe mode, so the
+            // view stays see-through, but crossing wires resolve near-first
+            // instead of by draw order — matching what `pick_wire` selects.
+            true,
+            wgpu::VertexBufferLayout {
+                array_stride: WIRE_STRIDE,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &WIRE_ENDS,
+            },
         ),
     };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -483,17 +505,9 @@ fn make_pipeline(
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(vertex_entry),
             compilation_options: Default::default(),
-            buffers: &[wgpu::VertexBufferLayout {
-                array_stride: 12,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 0,
-                    shader_location: 0,
-                }],
-            }],
+            buffers: &[vertex_buffer],
         },
         primitive: wgpu::PrimitiveState {
             topology,
@@ -501,15 +515,15 @@ fn make_pipeline(
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: None,
             unclipped_depth: false,
-            polygon_mode,
+            polygon_mode: wgpu::PolygonMode::Fill,
             conservative: false,
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(depth_write),
-            depth_compare: Some(depth_compare),
+            depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: Default::default(),
-            bias,
+            bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState {
             count: MSAA_SAMPLES,

@@ -10,10 +10,12 @@ mod flatten;
 mod gpu;
 mod grid;
 pub mod math;
+mod wire;
 
 pub use camera::{Camera, Projection};
 pub use flatten::{DEFAULT_COLOR, FlatInstance, flatten_node, flatten_scene, mesh_aabb, node_id};
 pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES, Renderer};
+pub use wire::{WireHit, mesh_edges, pick_wire};
 
 /// Re-exported so the viewer uses the exact same wgpu version.
 pub use wgpu;
@@ -21,6 +23,11 @@ pub use wgpu;
 use odm_ir::Hash;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Wireframe line thickness in pixels. Not a UI setting — change it here.
+/// Wires are screen-space quads, so this is exact at any zoom (WebGPU line
+/// primitives are always 1px).
+pub const WIRE_WIDTH_PX: f32 = 2.0;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
@@ -59,7 +66,8 @@ pub struct RenderOptions {
     pub width: u32,
     pub height: u32,
     pub camera: Camera,
-    /// Overlay triangle edges in a dark color (needs POLYGON_MODE_LINE).
+    /// Draw mesh edges only, in each instance's own color — no solid surfaces,
+    /// so everything behind shows through.
     pub wireframe: bool,
     /// Ground grid on the z=0 plane.
     pub grid: bool,
