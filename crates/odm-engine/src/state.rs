@@ -51,6 +51,8 @@ pub struct EngineState {
     queue: BuildQueue,
     /// Viewer selection: (node id, name).
     selection: Mutex<Option<(String, Option<String>)>>,
+    /// Wakes the viewer when `published` changes (unset when headless).
+    wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl EngineState {
@@ -69,6 +71,7 @@ impl EngineState {
             published: Mutex::new(Published::default()),
             queue: BuildQueue::default(),
             selection: Mutex::new(None),
+            wake: Mutex::new(None),
         }))
     }
 
@@ -84,6 +87,19 @@ impl EngineState {
         self.published.lock().unwrap().clone()
     }
 
+    /// Register the viewer's repaint hook: called whenever `published` changes,
+    /// so the viewer can sleep instead of polling.
+    pub fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
+        *self.wake.lock().unwrap() = Some(wake);
+    }
+
+    fn wake(&self) {
+        let wake = self.wake.lock().unwrap().clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+
     pub fn set_selection(&self, sel: Option<(String, Option<String>)>) {
         *self.selection.lock().unwrap() = sel;
     }
@@ -96,6 +112,10 @@ impl EngineState {
             pass.cancel();
         }
         self.queue.cv.notify_all();
+        // No `revision` bump, and no wake: a build that finishes in a few ms
+        // would flash "Building…" and take the status row's layout with it.
+        // The indicator is for builds slow enough that a publish lands while
+        // the next one is already queued.
         self.published.lock().unwrap().building = true;
     }
 
@@ -151,6 +171,8 @@ impl EngineState {
         p.error = None;
         p.building = self.queue.latest.lock().unwrap().is_some();
         p.duration = sync.snapshot.manifest.animation.as_ref().map(|a| a.duration);
+        drop(p);
+        self.wake();
     }
 
     /// `generation: None` (e.g. scan errors) keeps the last known generation.
@@ -163,6 +185,8 @@ impl EngineState {
         p.t = t;
         p.error = Some(message);
         p.building = keep_building;
+        drop(p);
+        self.wake();
     }
 
     /// File watcher: debounced rescan+rebuild at the published t.
@@ -171,10 +195,13 @@ impl EngineState {
         use notify::Watcher;
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         let project = self.project.clone();
+        let root = project.clone();
         let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             if let Ok(event) = res {
+                // Dot-components are only meaningful *inside* the project: the
+                // project itself may well live under one (`~/.local/…`).
                 let relevant = event.paths.iter().any(|p| {
-                    !p.components().any(|c| {
+                    !p.strip_prefix(&root).unwrap_or(p).components().any(|c| {
                         matches!(c, std::path::Component::Normal(n) if {
                             let n = n.to_string_lossy();
                             n == ".odm" || (n.starts_with('.') && n.len() > 1)

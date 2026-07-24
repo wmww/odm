@@ -13,6 +13,8 @@ odm-build = { path = "../odm-build" }
 odm-render = { path = "../odm-render" }
 serde = { version = "1", features = ["derive"] }
 eframe = { version = "=0.35.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+# Same pin eframe uses: the viewer drives its own winit event loop (see viewer.rs).
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
 notify = "=8.2.0"
 serde_json = "1"
 anyhow.workspace = true

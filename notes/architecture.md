@@ -59,7 +59,13 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
   last-good scene, click-select via CPU raycast when shaded / nearest-wire
   screen-space pick when wireframe), background build loop
   (latest-wins, Pass::cancel on supersede), notify-based watcher (150ms
-  debounce). Commands: status/sync/build/render/tree/inspect/raycast/
+  debounce; its dot-dir filter applies to the path *relative to the project*,
+  since the project itself may live under one). The viewer never polls: it
+  repaints when `EngineState::wake` fires (set by the viewer, unset when
+  headless), i.e. on every `published` change. It also owns its winit event
+  loop so `SlowIdle` can clamp the `ControlFlow::Poll` eframe leaves behind —
+  see viewer.rs; without it an invisible window pegs a core.
+  Commands: status/sync/build/render/tree/inspect/raycast/
   selection; every command syncs first. Protocol: ndjson over unix socket,
   `{ok: bool, ...}` responses. `theme.rs` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
@@ -114,6 +120,13 @@ through a `wayland-root` socket symlink as uid 1006, where it advertises neither
 `zwlr_screencopy_manager_v1` nor `ext_image_copy_capture_manager_v1`, so `grim`
 fails with "compositor doesn't support the screen capture protocol". There is no
 Xwayland either, so `import`/`xwd` are out.
+
+`ui-shot.sh --session CMD` runs anything inside that compositor, which is also
+how to measure viewer CPU: hide the window (`wlr-randr --output HEADLESS-1
+--off`, or start a second engine on another project to cover it), then diff
+utime+stime from `/proc/<pid>/stat` (per thread under `task/`) over a few
+seconds. That is how the invisible-window spin (2026-07-24) was found and
+fixed.
 
 Limits today: keyboard injection only (`wtype`; the viewer binds just `F`), no
 pointer injection, and the fixed per-project socket path means parallel runs
