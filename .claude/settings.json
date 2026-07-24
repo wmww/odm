@@ -5,9 +5,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/shared-target.sh\" 2>/dev/null || true",
-            "statusMessage": "Sharing cargo target dir",
-            "timeout": 10
+            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/seed-target.sh\" 2>/dev/null || true",
+            "statusMessage": "Seeding cargo target dir",
+            "timeout": 120
           }
         ]
       }

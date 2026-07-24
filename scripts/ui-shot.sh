@@ -39,8 +39,7 @@ else
   done
   shift $((OPTIND - 1))
   project=${1:-$repo/examples/hello-bracket}
-  # Worktrees share the main checkout's target dir (scripts/shared-target.sh),
-  # so ask cargo where it actually is.
+  # Ask cargo for the target dir rather than assuming ./target.
   target=$(cd "$repo" && cargo metadata --format-version 1 --no-deps 2>/dev/null |
     sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
   target=${target:-$repo/target}

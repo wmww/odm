@@ -1,10 +1,8 @@
 /target
+/.target-seed.*
 node_modules/
 .odm/
-# generated per-worktree by scripts/shared-target.sh
-.cargo/
 # agent-local settings; settings.json is tracked
 .claude/*
 !.claude/settings.json
-# worktrees the user creates with the `wt` shell functions
 .worktrees

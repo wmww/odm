@@ -1,51 +1,66 @@
 # Build environment
 
-## Worktrees share the main checkout's target dir
+## Every checkout gets its own target dir, seeded from the main one
 
-`scripts/shared-target.sh` writes `<worktree>/.cargo/config.toml` with
-`build.target-dir = "<main checkout>/target"`. It derives the main checkout from
-`git rev-parse --git-common-dir`, is idempotent, no-ops in the main checkout (its
-default `target/` *is* the shared one) and outside a git repo, and refuses to
-clobber a hand-written config. `.cargo/` is gitignored.
+`scripts/seed-target.sh` gives a linked checkout its own `target/`, copied from
+the main checkout's the first time it runs. Auto-applied by the `SessionStart`
+hook in the tracked `.claude/settings.json`; idempotent, and a no-op in the main
+checkout, outside a git repo, or once `target/` exists. Run it by hand if a
+checkout is set up without a new session.
 
-Auto-applied by the `SessionStart` hook in the tracked `.claude/settings.json`,
-so it covers any session started in a checkout — including worktrees the user
-makes with the `wt`/`wt-claude` shell functions in `~/.bashrc`, which `git
-worktree add .worktrees/<name>` and start the agent there. If a checkout is
-somehow set up without a new session, just run the script.
+Measured 2026-07-24: seed 0.8 s, first build **6.2 s** (the 8 local crates and
+nothing else), 1.7 GiB of real disk once built — versus a ~3.6 GiB cold build
+that re-downloads the 177 MiB prebuilt `librusty_v8.a` and re-runs the
+Manifold/TBB cmake build. The main checkout's 13,075 target files were byte- and
+stat-identical afterwards.
 
-Why sharing works for deps: cargo keys registry-dep artifacts by package +
-features + profile + rustc, *not* by workspace path, so all ~950 deps are
-shared.
+What the seed does, and why each part:
 
-**Local crates do NOT get a path-dependent `-C metadata` hash — they clobber
-each other.** See `issues/shared-target-clobbers-worktrees.md`; this note
-claimed the opposite until it was measured on 2026-07-24. Every checkout writes
-the same `deps/libodm_render-<hash>.rlib` and the same `.fingerprint/` entry,
-and freshness is decided by source mtime, so a checkout whose sources predate
-another checkout's build links that other checkout's code. Two agents in two
-worktrees will silently build each other's crates.
+- `deps/` **hardlinked** (5.7 GiB, free). rustc *replaces* an artifact it
+  rebuilds — unlink, then create — so a rebuild here never writes through to the
+  peer. Verified: the peer's rlib kept its inode and content, link count just
+  dropped back to 1.
+- `.fingerprint/`, `build/`, `gn_out/` **copied** (~700 MiB). These cargo *does*
+  rewrite in place, and `build/*/output` records absolute paths into the target
+  dir it ran under, so the copies get those paths rewritten to point here.
+- local-crate artifacts, `incremental/`, uplifted binaries **skipped**. This
+  checkout builds its own in 6 s.
 
-Measured 2026-07-22: fresh worktree build **5s** and ~0 disk growth, vs a cold
-build of ~3.6 GiB. The "no fingerprint thrash between checkouts" measured then
-only held because the checkouts were identical — it stops holding the moment a
-worktree edits a local crate.
+Do not "optimize" the copy into a `cp -al` of the whole tree. Measured: the
+seeded checkout's build then rewrote the *peer's*
+`deps/odm_render-<hash>.d` and
+`.fingerprint/odm-render-<hash>/dep-lib-odm_render` through the hardlink, in
+place, leaving main's dep-info pointing at the other checkout's target dir.
 
-Expensive shared pieces this reuses:
-- prebuilt `librusty_v8.a` (177 MiB download) → `target/debug/gn_out/obj/`
-- `manifold-csg-sys` cmake build of Manifold + TBB
-- wgpu/naga/deno_core/egui rlibs (196 MiB v8, 77 MiB deno_core, 73 MiB ash, …)
+Trap worth remembering: rewriting the paths in `build/*/output` must preserve
+the file's mtime (`touch -r`) and skip files that don't contain the old path.
+Cargo compares a build script's output mtime against its consumers', so a
+gratuitous rewrite marks every crate with a build script stale — that turned a
+6 s build into 1m20 until it was fixed.
 
-Caveats: cargo takes an exclusive lock on the artifact dir, so simultaneous
-builds across worktrees serialize ("Blocking waiting for file lock"). And
-`cargo clean` from any worktree wipes the shared dir.
+### Why not one shared dir
+
+That's what this used to do (`shared-target.sh`, `build.target-dir` pointed at
+the main checkout) and it silently mixed checkouts up. Cargo keys registry-dep
+artifacts by package + features + profile + rustc, not by workspace path, so
+those really are shareable — but local crates get a path-*independent*
+`-C metadata` hash. Every checkout wrote the same
+`deps/libodm_render-<hash>.rlib` and the same `.fingerprint/` entry, freshness
+came down to source mtime, and a checkout whose sources predated a peer's last
+build was judged fresh and linked the peer's code. Observed both as a build
+failure (`cannot find function pick_wire in crate odm_render`, code that existed
+locally) and, worse, as a binary quietly running another checkout's renderer.
+
+Two lesser annoyances also go away with the split: cargo's exclusive lock on the
+artifact dir no longer serializes builds across checkouts, and `cargo clean` no
+longer wipes everyone's cache.
 
 ## Pruning stale artifacts
 
-`scripts/sweep-target.py` (`--dry-run` to preview). cargo never GCs a target
-dir: every profile edit, dep bump, rustc upgrade, or build-script rerun orphans
-the previous artifacts forever. Measured 2026-07-22: 15.7 GiB → 4.7 GiB, 4560
-orphans, no live artifact lost (all three checkouts still built as no-ops after).
+`scripts/sweep-target.py` (`--dry-run` to preview) sweeps the current checkout's
+target dir. cargo never GCs one: every profile edit, dep bump, rustc upgrade, or
+build-script rerun orphans the previous artifacts forever. Measured 2026-07-22:
+15.7 GiB → 4.7 GiB, 4560 orphans, no live artifact lost.
 
 Not `cargo-sweep`: it prunes by mtime, which can't distinguish live from orphaned
 in a young target dir — `--time 1` here would have deleted ~everything, `--time
@@ -57,25 +72,41 @@ unit) and deletes only unreferenced entries in `deps/`, `build/`, and
 `incremental/` is dropped wholesale (it's a recompile accelerator, not an input
 to freshness — dropping it doesn't even make the next build non-fresh).
 
+In a seeded checkout most of `deps/` is hardlinked, so sweeping there frees real
+disk only for entries the seed source no longer holds.
+
 Worst offender observed: 14 `build/v8-*` dirs and 4 × 196 MiB `libv8-*.rlib`.
 Two of the variants trace to a `[profile.dev]` edit; the rest to the v8 build
 script re-running and cascading a new `-C metadata` hash into the v8 rlib. Its
 `rerun-if-env-changed` list includes `OUT_DIR`, `HOST`, `SCCACHE`, `CCACHE`,
 `CLANG_BASE_PATH`, `V8_FROM_SOURCE`, so almost any env difference between
 invocations orphans another ~200 MiB. Expect to re-run the sweep periodically.
+(A seeded target dir does *not* trip this: cargo kept every build script fresh
+across the copy.)
 
 ## mold / sccache: installed, deliberately unused
 
-Both would force a full rebuild of the shared cache to adopt: `RUSTFLAGS` and
-`RUSTC_WRAPPER` are cargo fingerprint inputs.
+Both would force a full rebuild to adopt: `RUSTFLAGS` and `RUSTC_WRAPPER` are
+cargo fingerprint inputs.
 
 - **mold** buys little: rustc 1.93 already links with `rust-lld` by default on
   x86_64-unknown-linux-gnu (confirmed — `readelf -p .comment target/debug/odm-engine`
   says `LLD`), and a touch-one-file rebuild+link of `odm-engine` is 0.95s total.
   Link is not the bottleneck.
 - **sccache** is redundant here: it accelerates *cold* compiles of identical
-  inputs, and a shared target dir already makes deps cold-compile exactly once
-  per machine, without a second copy in `~/.cache/sccache`. It also can't cache
-  everything (a trivial 1-crate probe: 0 of 6 rustc calls cacheable — "missing
-  input", "crate-type"), and absolute source paths in the rustc command line
-  differ per worktree, so local crates would miss anyway.
+  inputs, and seeding already means deps cold-compile exactly once per machine,
+  without a second copy in `~/.cache/sccache` (178 MiB of stale probe entries sit
+  there now; sccache is off, so it's dead weight).
+
+  It also can't cache much: a 2-crate probe executed only 3 of 12 rustc calls,
+  9 non-cacheable ("missing input" ×6, "crate-type" ×2).
+
+  Decisive, measured 2026-07-24 on a single-crate no-deps workspace: same path +
+  wiped target dir → **hit**; byte-identical sources at a *different* path →
+  **miss**; per-checkout `SCCACHE_BASEDIRS=<checkout root>` (the env var is
+  plural; `SCCACHE_BASE_DIR` is silently ignored) → still **miss**. So sccache
+  gives zero cross-checkout reuse for `crates/*` — exactly the units a fresh
+  checkout has to build — while `RUSTC_WRAPPER` being a fingerprint input would
+  cost one full rebuild of the 7.8 GiB target dir to adopt. Build scripts aren't
+  rustc calls, so the v8 download and the Manifold/TBB cmake build wouldn't be
+  cached either.

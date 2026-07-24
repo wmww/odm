@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prune orphaned artifacts from the shared cargo target dir.
+"""Prune orphaned artifacts from a cargo target dir.
 
 cargo never garbage-collects: every profile edit, dep bump, rustc upgrade, or
 build-script rerun leaves the previous artifacts behind forever. cargo-sweep
@@ -11,8 +11,7 @@ Usage:
   scripts/sweep-target.py --dry-run            # report, delete nothing
   scripts/sweep-target.py                      # prune
   scripts/sweep-target.py --keep-incremental   # don't drop incremental/
-Checkouts to consider live are auto-detected (main checkout + all worktrees);
-pass paths to override.
+Sweeps this checkout by default; pass checkout paths to sweep others too.
 """
 
 import argparse
@@ -116,24 +115,15 @@ def main():
     ap.add_argument("--keep-incremental", action="store_true")
     args = ap.parse_args()
 
-    checkouts = args.checkouts
-    if not checkouts:
-        here = Path(__file__).resolve().parent.parent
-        common = Path(subprocess.run(["git", "rev-parse", "--path-format=absolute",
-                                      "--git-common-dir"], cwd=here,
-                                     capture_output=True, text=True,
-                                     check=True).stdout.strip())
-        checkouts = [common.parent]
-        wt = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=here,
-                            capture_output=True, text=True, check=True).stdout
-        checkouts += [Path(l.split(" ", 1)[1]) for l in wt.splitlines()
-                      if l.startswith("worktree ")]
+    checkouts = args.checkouts or [Path(__file__).resolve().parent.parent]
 
     busy = subprocess.run(["pgrep", "-x", "rustc"], capture_output=True).returncode == 0
     if busy and not args.dry_run:
         sys.exit("rustc is running — another build is in flight; try again later.")
 
-    roots, live = {}, set()
+    # Checkouts keep separate target dirs, so each root is swept against its own
+    # live set. (Two checkouts still land on one root if CARGO_TARGET_DIR says so.)
+    roots = {}
     seen = set()
     for c in checkouts:
         c = c.resolve()
@@ -144,10 +134,9 @@ def main():
         h, _ = live_hashes(c)
         print(f"{c}: {len(h)} live units -> {root}")
         roots.setdefault(root, set()).update(h)
-        live |= h
 
     total = 0
-    for root, _ in roots.items():
+    for root, live in roots.items():
         before = sum(f.stat().st_size for f in root.rglob("*") if f.is_file())
         freed, kept, removed = sweep(root, live, args.dry_run,
                                      not args.keep_incremental)
