@@ -9,10 +9,10 @@ default `target/` *is* the shared one) and outside a git repo, and refuses to
 clobber a hand-written config. `.cargo/` is gitignored.
 
 Auto-applied by the `SessionStart` hook in the tracked `.claude/settings.json`,
-which covers fresh clones, existing worktrees, and `claude --worktree` (the new
-worktree gets its own session, so SessionStart fires there). Otherwise just run
-the script — including after `EnterWorktree`/agent-isolation worktrees made
-mid-session, which start no new session and so fire no hook.
+so it covers any session started in a checkout — including worktrees the user
+makes with the `wt`/`wt-claude` shell functions in `~/.bashrc`, which `git
+worktree add .worktrees/<name>` and start the agent there. If a checkout is
+somehow set up without a new session, just run the script.
 
 Why sharing works: cargo keys registry-dep artifacts by package + features +
 profile + rustc, *not* by workspace path, so all ~950 deps are shared. Local
