@@ -14,13 +14,22 @@ makes with the `wt`/`wt-claude` shell functions in `~/.bashrc`, which `git
 worktree add .worktrees/<name>` and start the agent there. If a checkout is
 somehow set up without a new session, just run the script.
 
-Why sharing works: cargo keys registry-dep artifacts by package + features +
-profile + rustc, *not* by workspace path, so all ~950 deps are shared. Local
-crates get a path-dependent `-C metadata` hash and coexist without clobbering.
+Why sharing works for deps: cargo keys registry-dep artifacts by package +
+features + profile + rustc, *not* by workspace path, so all ~950 deps are
+shared.
+
+**Local crates do NOT get a path-dependent `-C metadata` hash — they clobber
+each other.** See `issues/shared-target-clobbers-worktrees.md`; this note
+claimed the opposite until it was measured on 2026-07-24. Every checkout writes
+the same `deps/libodm_render-<hash>.rlib` and the same `.fingerprint/` entry,
+and freshness is decided by source mtime, so a checkout whose sources predate
+another checkout's build links that other checkout's code. Two agents in two
+worktrees will silently build each other's crates.
 
 Measured 2026-07-22: fresh worktree build **5s** and ~0 disk growth, vs a cold
-build of ~3.6 GiB. Builds in main and in a worktree stay no-ops for each other —
-no fingerprint thrash.
+build of ~3.6 GiB. The "no fingerprint thrash between checkouts" measured then
+only held because the checkouts were identical — it stops holding the moment a
+worktree edits a local crate.
 
 Expensive shared pieces this reuses:
 - prebuilt `librusty_v8.a` (177 MiB download) → `target/debug/gn_out/obj/`

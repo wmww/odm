@@ -39,8 +39,13 @@ else
   done
   shift $((OPTIND - 1))
   project=${1:-$repo/examples/hello-bracket}
-  engine=${ODM_ENGINE_BIN:-$repo/target/debug/odm-engine}
-  cli=${ODM_CLI_BIN:-$repo/target/debug/odm}
+  # Worktrees share the main checkout's target dir (scripts/shared-target.sh),
+  # so ask cargo where it actually is.
+  target=$(cd "$repo" && cargo metadata --format-version 1 --no-deps 2>/dev/null |
+    sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+  target=${target:-$repo/target}
+  engine=${ODM_ENGINE_BIN:-$target/debug/odm-engine}
+  cli=${ODM_CLI_BIN:-$target/debug/odm}
   [[ -x $engine ]] || { echo "no engine binary at $engine (cargo build?)" >&2; exit 1; }
   [[ -d $project ]] || { echo "no project dir $project" >&2; exit 1; }
   project=$(cd "$project" && pwd)
