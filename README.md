@@ -9,7 +9,7 @@ queries over a CLI designed for agent feedback loops.
 
 ```sh
 cargo build --release
-target/release/odm-engine examples/piston --headless &
+target/release/odm run examples/piston --headless &   # drop --headless for the viewer
 cd examples/piston
 ../../target/release/odm render --t 1.0     # writes a PNG, prints its path
 ../../target/release/odm tree
@@ -28,8 +28,9 @@ what changed.
 - `crates/odm-build` — scheduler: generations, memoized demand-driven builds,
   in-flight dedup, cycle detection, cancellation
 - `crates/odm-render` — wgpu renderer (offscreen PNG; viewer shares the code path)
-- `crates/odm-engine` — the engine binary (socket server, viewer)
-- `crates/odm-cli` — the `odm` CLI binary
+- `crates/odm-engine` — the engine (socket server, viewer)
+- `crates/odm-cli` — the client commands (JSON over the project socket)
+- `crates/odm` — the one `odm` binary: `run` is the engine, the rest is the client
 - `framework/` — JS framework + vendored three.js subset (r185)
 - `examples/` — example projects (double as integration tests)
 - `docs/agent/` — docs for agents *using* ODM on a project

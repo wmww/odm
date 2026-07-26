@@ -1,5 +1,6 @@
-//! `odm` — agent-facing CLI. Thin JSON pipe to a running odm-engine over the
-//! project's unix socket (found by walking up from cwd, like git).
+//! Agent-facing CLI commands: a thin JSON pipe to a running engine over the
+//! project's unix socket (found by walking up from cwd, like git). `odm run`
+//! lives in the `odm` binary crate; everything else lands here.
 
 use anyhow::{Context, bail};
 use serde_json::{Map, Value, json};
@@ -7,13 +8,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "\
-odm — CLI for a running ODM engine (start one with: odm-engine <project-dir>)
-
-usage: odm [--project <dir>] <command> [options]
-
-commands:
-  status                     project overview: files, generation, animation
+// No `\`-continuation after the quote: it would eat this block's first indent.
+/// The command list, for the binary's `--help`.
+pub const USAGE: &str = "  status                     project overview: files, generation, animation
   sync                       force a rescan (every command also syncs first)
   build   [--t <sec>]        build the scene; reports errors + console logs
   render  [--t] [--width N] [--height N] [--out FILE] [--wireframe]
@@ -25,22 +22,22 @@ commands:
   raycast --origin x,y,z --dir x,y,z [--t]
                              nearest hit in the scene
   selection                  viewer selection: list of {node, name}
-
-Every command prints a single JSON object. Exit code 0 = ok, 1 = error.
 ";
 
-fn main() {
-    match run() {
-        Ok(exit) => std::process::exit(exit),
-        Err(e) => {
-            eprintln!("odm: {e}");
-            std::process::exit(2);
-        }
-    }
+/// True if `args` asks for help rather than naming a command — including
+/// after a leading `--project <dir>`, which is why this lives here.
+pub fn is_help(args: &[String]) -> bool {
+    let rest = match args.first().map(|a| a.as_str()) {
+        Some("--project") => args.get(2..).unwrap_or(&[]),
+        _ => args,
+    };
+    matches!(rest.first().map(|a| a.as_str()), Some("--help" | "-h" | "help"))
 }
 
-fn run() -> anyhow::Result<i32> {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
+/// Run one command against the project's engine. `args` is the full argument
+/// list (a leading `--project <dir>` is honoured here). Returns the exit code.
+pub fn run(args: &[String]) -> anyhow::Result<i32> {
+    let mut args = args.to_vec();
     let mut project: Option<PathBuf> = None;
     if args.first().map(|a| a.as_str()) == Some("--project") {
         args.remove(0);
@@ -50,16 +47,11 @@ fn run() -> anyhow::Result<i32> {
         project = Some(PathBuf::from(args.remove(0)));
     }
     let Some(cmd) = args.first().cloned() else {
-        print!("{USAGE}");
-        return Ok(2);
+        bail!("--project needs a command after it; run `odm --help`");
     };
     let rest = &args[1..];
 
     let request = match cmd.as_str() {
-        "--help" | "-h" | "help" => {
-            print!("{USAGE}");
-            return Ok(0);
-        }
         "status" | "sync" | "selection" => parse_opts(&cmd, rest, &[])?,
         "build" => parse_opts(&cmd, rest, &[("t", ArgKind::Num)])?,
         "tree" => parse_opts(&cmd, rest, &[("t", ArgKind::Num), ("depth", ArgKind::Num)])?,
@@ -103,7 +95,7 @@ fn run() -> anyhow::Result<i32> {
     let sock = project.join(".odm/engine.sock");
     let mut stream = UnixStream::connect(&sock).with_context(|| {
         format!(
-            "no engine at {} — start one with: odm-engine {} --headless",
+            "no engine at {} — start one with: odm run {} --headless",
             sock.display(),
             project.display()
         )
@@ -215,7 +207,7 @@ fn take_positional<'a>(
 
 /// Walk up from `start` looking for `.odm/engine.sock` (like git); fall back
 /// to the first ancestor containing `main.js` or `odm.json`.
-fn find_project(start: &Path) -> anyhow::Result<PathBuf> {
+pub fn find_project(start: &Path) -> anyhow::Result<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
         if dir.join(".odm/engine.sock").exists() {
@@ -236,7 +228,7 @@ fn find_project(start: &Path) -> anyhow::Result<PathBuf> {
     }
     bail!(
         "no ODM project found from {} upward (looked for .odm/engine.sock, then main.js/odm.json); \
-         pass --project <dir> or start an engine first",
+         name the project dir explicitly",
         start.display()
     )
 }

@@ -90,8 +90,8 @@ Both would force a full rebuild to adopt: `RUSTFLAGS` and `RUSTC_WRAPPER` are
 cargo fingerprint inputs.
 
 - **mold** buys little: rustc 1.93 already links with `rust-lld` by default on
-  x86_64-unknown-linux-gnu (confirmed — `readelf -p .comment target/debug/odm-engine`
-  says `LLD`), and a touch-one-file rebuild+link of `odm-engine` is 0.95s total.
+  x86_64-unknown-linux-gnu (confirmed — `readelf -p .comment target/debug/odm`
+  says `LLD`), and a touch-one-file rebuild+link of the `odm` binary is ~1s total.
   Link is not the bottleneck.
 - **sccache** is redundant here: it accelerates *cold* compiles of identical
   inputs, and seeding already means deps cold-compile exactly once per machine,

@@ -29,6 +29,8 @@ pub fn serve(state: Arc<EngineState>, sock_path: &Path) -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(sock_path, std::fs::Permissions::from_mode(0o600))?;
     }
+    // Announced here, not before the bind, so a refused start says only that.
+    println!("odm: serving {} at {}", state.project().display(), sock_path.display());
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {

@@ -53,7 +53,8 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
   perspective/ortho cameras; `render_png` and the viewer viewport share
   `render_to_views`; the GPU mesh cache is pruned to the live scene after
   every render/publish. `Renderer::with_device` for the shared eframe device.
-- `odm-engine` — binary. Headless: socket server only. Default: + eframe
+- `odm-engine` — library, entered via `odm run` (`run(project, headless)`).
+  Headless: socket server only. Default: + eframe
   viewer (offscreen texture viewport via register_native_texture, orbit/
   pan/zoom, tree panel, timeline when duration set, error panel with
   last-good scene, click-select via CPU raycast when shaded / nearest-wire
@@ -79,9 +80,17 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
   fade, no busy spinner — state changes snap), and no hover feedback.
   Text is bundled bitmap fonts and tree icons are bundled pixel art, not system
   ones — see "Viewer fonts" and "Viewer icons" below.
-- `odm-cli` — `odm` binary: dependency-light JSON pipe + arg parsing
+- `odm-cli` — client commands: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
-  from `ok`.
+  from `ok`. Also owns `find_project` (the walk-up), which `run` reuses.
+- `odm` — the only binary. `odm run [<dir>] [--headless]` → `odm_engine::run`;
+  everything else → `odm_cli::run`. Top-level `--help` splices in
+  `odm_cli::USAGE`. Splitting the two halves into libs behind one bin keeps
+  the client's dependency-light layering and leaves room for a
+  client-only build later, while shipping one binary: no CLI/engine version
+  skew, one `--help`, and a place to hang engine auto-start if we want it.
+  Costs measured before merging: +1.7ms per client invocation (0.66→2.4ms,
+  the binary is ~500MB in debug), and a touched-CLI relink goes 0.22s→1.05s.
 
 ### Viewer fonts
 
@@ -182,10 +191,10 @@ in `odm-render/src/grid.rs` and `odm-engine/src/icons.rs`.
 
 Manifests suppress empty harness output: `doctest = false` on every lib (we
 write no doctests, and `odm-js` otherwise inherits an ignored one from a
-deno_core macro), `test = false` on `odm-cli`'s bin and on the five libs with no
+deno_core macro), `test = false` on the `odm` bin and on the six libs with no
 `#[cfg(test)]` modules. **If you add unit tests to `src/` in odm-build/
-odm-ir/odm-js/odm-kernel/odm-store, flip that crate's `[lib] test` back to
-true** — the manifest carries a comment saying so.
+odm-cli/odm-ir/odm-js/odm-kernel/odm-store, flip that crate's `[lib] test`
+back to true** — the manifest carries a comment saying so.
 
 Useful invocations: `cargo test -p odm-build`, `cargo test --test render`,
 `cargo test <substring>`, `cargo test -q` (dots instead of one line per test).
@@ -244,7 +253,7 @@ different project dirs. An in-process egui frame dump (`egui_kittest` or a
 ## Acceptance status (MVP)
 
 Fresh checkout builds (needs network once for the Manifold clone);
-`odm-engine examples/piston` opens the viewer (launch verified on Wayland;
+`odm run examples/piston` opens the viewer (launch verified on Wayland;
 in-window interaction visuals not yet human-checked); edits propagate to
 viewer + CLI (verified via CLI); 70 tests green. Manual checklist left:
 viewport interaction feel (orbit/pan/zoom), timeline scrub visuals,

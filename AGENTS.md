@@ -9,7 +9,7 @@ ODM is a CAD/3D modeling/animation framework and toolset for LLM agents. The age
 - Keep prose, comments, errors, and commit messages short unless extra detail is genuinely useful.
 
 ## Running the viewer
-Always use `--headless` when running `odm-engine`, unless explicitly asked or you're running inside a headless Wayland compositor (see below). The ODM CLI has enough tools to check most things to do with rendering and the 3D scene, the main thing you can't see with it is UI. For that, use:
+Always use `--headless` when running `odm run`, unless explicitly asked or you're running inside a headless Wayland compositor (see below). The ODM CLI has enough tools to check most things to do with rendering and the 3D scene, the main thing you can't see with it is UI. For that, use:
 
 ```
 cargo build --bins

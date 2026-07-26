@@ -2537,6 +2537,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "odm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "odm-cli",
+ "odm-engine",
+]
+
+[[package]]
 name = "odm-build"
 version = "0.1.0"
 dependencies = [

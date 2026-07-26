@@ -34,7 +34,7 @@ pub fn run_viewer(state: Arc<EngineState>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let mut app = SlowIdle {
         inner: eframe::create_native(
-            "odm-engine",
+            "odm",
             options,
             Box::new(move |cc| Ok(Box::new(ViewerApp::new(cc, state)))),
             &event_loop,

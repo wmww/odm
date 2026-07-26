@@ -48,9 +48,8 @@ else
   target=$(cd "$repo" && cargo metadata --format-version 1 --no-deps 2>/dev/null |
     sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
   target=${target:-$repo/target}
-  engine=${ODM_ENGINE_BIN:-$target/debug/odm-engine}
-  cli=${ODM_CLI_BIN:-$target/debug/odm}
-  [[ -x $engine ]] || { echo "no engine binary at $engine (cargo build?)" >&2; exit 1; }
+  odm=${ODM_BIN:-$target/debug/odm}
+  [[ -x $odm ]] || { echo "no odm binary at $odm (cargo build --bins?)" >&2; exit 1; }
   [[ -d $project ]] || { echo "no project dir $project" >&2; exit 1; }
   project=$(cd "$project" && pwd)
 fi
@@ -137,19 +136,17 @@ if (( session_mode )); then
   exit $?
 fi
 
-"$engine" "$project" >"$runtime/engine.log" 2>&1 &
+"$odm" run "$project" >"$runtime/engine.log" 2>&1 &
 app_pid=$!
 note_owner
 
 # `odm build` blocks until the scene is built, so we don't screenshot a viewer
 # that is still showing an empty generation.
-if [[ -x $cli ]]; then
-  for _ in $(seq 1 100); do
-    [[ -S $project/.odm/engine.sock ]] && break
-    sleep 0.1
-  done
-  "$cli" --project "$project" build >"$runtime/build.log" 2>&1 || true
-fi
+for _ in $(seq 1 100); do
+  [[ -S $project/.odm/engine.sock ]] && break
+  sleep 0.1
+done
+"$odm" --project "$project" build >"$runtime/build.log" 2>&1 || true
 
 # Wait for the window to appear and stop changing: two identical frames in a
 # row that differ from the bare desktop. Falls through after ~15s.

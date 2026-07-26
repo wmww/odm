@@ -1,7 +1,7 @@
 # CLI usage
 
 The `odm` CLI talks to the running engine (the user starts it:
-`odm-engine <project-dir>`, `--headless` for no viewer). Run `odm` from
+`odm run <project-dir>`, `--headless` for no viewer). Run `odm` from
 anywhere inside the project; it finds the engine socket by walking up, or
 pass `--project <dir>` (must come first).
 
