@@ -125,13 +125,29 @@ that bite:
   fonts, and why `icons::SCALE` is an integer.
 - **Don't paint pixel art as rects.** egui replaces rects thinner than 2px with
   feathered line segments, which smears 1px rows and drops single pixels
-  entirely. (The first cut of this drew per-pixel rects, and looked it.)
+  entirely. (The first cut of this drew per-pixel rects, and looked it.) Where
+  a texture is overkill — the tree's dotted lines — hand the pixels to
+  `Painter::add` as a `Mesh` of `add_colored_rect`s, which skips tessellation
+  and so skips feathering.
 - One texture per icon = one draw call per tree row. Cheap at this count; atlas
   them if icons ever number in the dozens.
 
-Drawing the tree also needs `CollapsingState::show_header` rather than
-`CollapsingHeader`: the icon has to sit beside the arrow, and this way the arrow
-toggles while the row selects (a plain header did both at once).
+### Scene tree
+
+`theme::tree_row` draws a whole row — nesting gutter, icon, name — and
+`viewer.rs` walks the node graph telling it where each row sits (depth, which
+ancestors still have siblings below, whether this row is the last of its own).
+The gutter is the era's registry-tree look: 1px dotted lines on a
+`(x + y) even` checkerboard of the screen, and a boxed `+`/`-` where a node has
+children. Consequences:
+
+- Rows must abut, so `tree_ui` zeroes `item_spacing.y` and the padding lives in
+  the row instead — a gap would break the dotted lines between rows.
+- `TREE_INDENT` is even and the row midline is nudged onto the checkerboard, so
+  every column and rule shares a parity and corners get a dot.
+- egui's `CollapsingState` is kept for open/closed persistence only; the layout
+  and the +/- hit target are ours (the box toggles, the name selects, a
+  double-click on the name does both).
 
 ## Invariants & policies
 

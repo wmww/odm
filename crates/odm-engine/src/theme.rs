@@ -291,30 +291,153 @@ pub fn snap(ui: &Ui, pos: Pos2) -> Pos2 {
     pos2((pos.x * ppp).round() / ppp, (pos.y * ppp).round() / ppp)
 }
 
-/// One row of the scene tree: an icon, then the name, as a single click target.
-pub fn tree_row(ui: &mut Ui, icon: Icon, text: &str, selected: bool) -> Response {
+/// Width of one nesting level in the scene tree. Even, so every depth's
+/// dotted line lands on the same checkerboard (see [`dotted_v`]).
+pub const TREE_INDENT: f32 = 16.0;
+/// Side of the +/- box. Odd, so its glyph has a true center pixel.
+const EXPANDER: f32 = 9.0;
+/// Nesting lines and the border of the +/- box.
+const TREE_LINE: Color32 = Color32::from_rgb(0x6a, 0x6a, 0x6a);
+
+/// Where a row sits in the tree, which is all the gutter needs to draw itself.
+pub struct TreeRow<'a> {
+    pub depth: usize,
+    /// For each ancestor depth, whether its sibling line runs past this row.
+    pub trunk: &'a [bool],
+    /// Last of its siblings: the sibling line stops at this row.
+    pub last: bool,
+    /// `Some(open)` if the node has children — i.e. gets a +/- box.
+    pub expander: Option<bool>,
+    pub icon: Icon,
+    pub selected: bool,
+}
+
+pub struct TreeRowResponse {
+    /// The icon and name: a single click target.
+    pub row: Response,
+    /// The +/- box, if this row has one.
+    pub expander: Option<Response>,
+}
+
+/// One row of the scene tree: the nesting gutter (dotted lines, and a boxed
+/// +/- where the node has children), then an icon and the node's name.
+///
+/// Rows must abut vertically for the dotted lines to run unbroken, so callers
+/// zero `item_spacing.y` — the breathing room is in `PAD` instead.
+pub fn tree_row(ui: &mut Ui, id: egui::Id, row: TreeRow<'_>, text: &str) -> TreeRowResponse {
     /// Gap between icon and name, and around the pair.
     const GAP: f32 = 4.0;
-    const PAD: Vec2 = Vec2 { x: 3.0, y: 1.0 };
+    const PAD: Vec2 = Vec2 { x: 3.0, y: 2.0 };
 
-    let icon_size = icons::size(ui, icon);
+    let icon_size = icons::size(ui, row.icon);
     let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(UI_SIZE), TEXT);
-    let size = vec2(
+    let gutter = TREE_INDENT * (row.depth + 1) as f32;
+    let label_size = vec2(
         PAD.x * 2.0 + icon_size.x + GAP + galley.size().x,
         PAD.y * 2.0 + galley.size().y.max(icon_size.y),
     );
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    if selected {
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, ACCENT);
+    let (rect, _) = ui
+        .allocate_exact_size(vec2(gutter + label_size.x, label_size.y), egui::Sense::hover());
+    let label_rect = Rect::from_min_size(pos2(rect.left() + gutter, rect.top()), label_size);
+
+    // Column centers: the sibling line of depth `d`, and so the middle of the
+    // +/- boxes sitting on it.
+    let col = |d: usize| snap(ui, pos2(rect.left() + TREE_INDENT * (d as f32 + 0.5), 0.0)).x;
+    // Every column shares a parity (the indent is even), so nudging the row's
+    // midline onto the dot grid puts a dot in each corner where lines meet.
+    let mut mid = snap(ui, rect.center()).y;
+    if !on_grid(col(0), mid) {
+        mid -= 1.0;
     }
-    let left = rect.left() + PAD.x;
+    let p = ui.painter();
+    for (d, running) in row.trunk.iter().enumerate().take(row.depth) {
+        if *running {
+            dotted_v(p, col(d), rect.top(), rect.bottom(), TREE_LINE);
+        }
+    }
+    if row.depth > 0 {
+        // Up to the previous sibling (or the parent's row), and on down unless
+        // this is the last child.
+        dotted_v(p, col(row.depth), rect.top(), if row.last { mid } else { rect.bottom() }, TREE_LINE);
+    }
+    if row.depth > 0 || row.expander.is_some() {
+        dotted_h(p, mid, col(row.depth), label_rect.left() + PAD.x, TREE_LINE);
+    }
+
+    if row.selected {
+        p.rect_filled(label_rect, CornerRadius::ZERO, ACCENT);
+    }
+    let left = label_rect.left() + PAD.x;
     // Untinted: icons carry their own color, and must read on both the window
     // background and the selection fill.
-    icons::paint(ui, icon, pos2(left, rect.center().y - icon_size.y / 2.0), Color32::WHITE);
-    let text_pos =
-        snap(ui, pos2(left + icon_size.x + GAP, rect.center().y - galley.size().y / 2.0));
+    icons::paint(ui, row.icon, pos2(left, mid - icon_size.y / 2.0), Color32::WHITE);
+    let text_pos = snap(ui, pos2(left + icon_size.x + GAP, mid - galley.size().y / 2.0));
     ui.painter().galley(text_pos, galley, TEXT);
-    response
+
+    // Painted last: the box is opaque, and covers the lines it sits on.
+    let expander = row.expander.map(|open| {
+        let half = (EXPANDER / 2.0).floor();
+        let box_rect =
+            Rect::from_min_size(pos2(col(row.depth) - half, mid - half), Vec2::splat(EXPANDER));
+        let p = ui.painter();
+        p.rect_filled(box_rect, CornerRadius::ZERO, WINDOW);
+        edges(p, box_rect, TREE_LINE, TREE_LINE);
+        let bar = |w: f32, h: f32| {
+            p.rect_filled(
+                Rect::from_min_size(pos2(col(row.depth) - w, mid - h), vec2(w * 2.0 + 1.0, h * 2.0 + 1.0)),
+                CornerRadius::ZERO,
+                TEXT,
+            )
+        };
+        bar(2.0, 0.0);
+        if !open {
+            bar(0.0, 2.0);
+        }
+        ui.interact(box_rect, id.with("expander"), egui::Sense::click())
+    });
+
+    TreeRowResponse { row: ui.interact(label_rect, id.with("row"), egui::Sense::click()), expander }
+}
+
+/// Dotted 1px rules, as the era's tree controls drew them. Dots land on a
+/// shared checkerboard, so runs meet at corners and stay in step from row to
+/// row however tall the rows are.
+///
+/// The dots go out as a raw mesh: a 1px rect handed to the tessellator is
+/// approximated by a feathered line segment, and disappears.
+fn dotted_v(p: &egui::Painter, x: f32, y0: f32, y1: f32, color: Color32) {
+    let (x, mut y) = (x.round(), y0.ceil());
+    if !on_grid(x, y) {
+        y += 1.0;
+    }
+    let mut mesh = egui::Mesh::default();
+    while y < y1 {
+        dot(&mut mesh, x, y, color);
+        y += 2.0;
+    }
+    p.add(mesh);
+}
+
+fn dotted_h(p: &egui::Painter, y: f32, x0: f32, x1: f32, color: Color32) {
+    let (y, mut x) = (y.round(), x0.ceil());
+    if !on_grid(x, y) {
+        x += 1.0;
+    }
+    let mut mesh = egui::Mesh::default();
+    while x < x1 {
+        dot(&mut mesh, x, y, color);
+        x += 2.0;
+    }
+    p.add(mesh);
+}
+
+/// Whether the pixel at `(x, y)` is one the dots land on.
+fn on_grid(x: f32, y: f32) -> bool {
+    (x as i64 + y as i64).rem_euclid(2) == 0
+}
+
+fn dot(mesh: &mut egui::Mesh, x: f32, y: f32, color: Color32) {
+    mesh.add_colored_rect(Rect::from_min_size(pos2(x, y), Vec2::splat(1.0)), color);
 }
 
 /// A status-bar cell: thin sunken box around a label.

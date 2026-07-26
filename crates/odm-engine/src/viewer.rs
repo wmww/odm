@@ -577,8 +577,10 @@ impl ViewerApp {
             ui.label("no build yet");
             return;
         };
+        // Rows abut, so the dotted nesting lines run unbroken between them.
+        ui.spacing_mut().item_spacing.y = 0.0;
         let mut clicked: Option<(String, Option<String>)> = None;
-        tree_node_ui(ui, &scene.root, "", self.selected.as_deref(), &mut clicked);
+        tree_node_ui(ui, &scene.root, "", 0, &mut Vec::new(), true, self.selected.as_deref(), &mut clicked);
         if clicked.is_some() {
             self.set_selection(clicked);
         }
@@ -671,10 +673,15 @@ impl eframe::App for ViewerApp {
     }
 }
 
+/// Draw `node` and, if it is open, its subtree. `trunk` carries, per ancestor
+/// depth, whether that ancestor's sibling line runs past these rows.
 fn tree_node_ui(
     ui: &mut egui::Ui,
     node: &odm_ir::Node,
     id: &str,
+    depth: usize,
+    trunk: &mut Vec<bool>,
+    last: bool,
     selected: Option<&str>,
     clicked: &mut Option<(String, Option<String>)>,
 ) {
@@ -688,37 +695,47 @@ fn tree_node_ui(
             }
         }
     };
-    let icon = if node.mesh.is_some() { Icon::Mesh } else { Icon::Empty };
-    let is_selected = selected == Some(id);
-    let row = if node.children.is_empty() {
-        ui.horizontal(|ui| {
-            // Line the icon up with the ones under a collapsing arrow.
-            let indent = ui.spacing().indent;
-            let spacing = std::mem::take(&mut ui.spacing_mut().item_spacing.x);
-            ui.allocate_space(egui::vec2(indent, 0.0));
-            ui.spacing_mut().item_spacing.x = spacing;
-            theme::tree_row(ui, icon, &label, is_selected)
-        })
-        .inner
-    } else {
-        // Arrow toggles, row selects — a plain `CollapsingHeader` would do both
-        // on one click, and leaves no room for an icon beside the arrow.
-        let state = egui::collapsing_header::CollapsingState::load_with_default_open(
-            ui.ctx(),
-            ui.make_persistent_id(format!("tree-{id}")),
-            id.split('/').count() < 2,
-        );
-        let (_, header, _) = state
-            .show_header(ui, |ui| theme::tree_row(ui, icon, &label, is_selected))
-            .body(|ui| {
-                for (i, child) in node.children.iter().enumerate() {
-                    tree_node_ui(ui, child, &odm_render::node_id(id, i), selected, clicked);
-                }
-            });
-        header.inner
-    };
-    if row.clicked() {
+    let row_id = ui.make_persistent_id(format!("tree-{id}"));
+    // Open the top two levels by default; deeper subtrees start folded.
+    let mut state = (!node.children.is_empty()).then(|| {
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), row_id, depth < 2)
+    });
+    let mut open = state.as_ref().is_some_and(|s| s.is_open());
+
+    let res = theme::tree_row(
+        ui,
+        row_id,
+        theme::TreeRow {
+            depth,
+            trunk,
+            last,
+            expander: state.as_ref().map(|_| open),
+            icon: if node.mesh.is_some() { Icon::Mesh } else { Icon::Empty },
+            selected: selected == Some(id),
+        },
+        &label,
+    );
+    if res.row.clicked() {
         *clicked = Some((id.to_string(), node.name.clone()));
+    }
+    // The box toggles, the name selects — and double-clicking the name does
+    // both, as the era's tree controls did.
+    if res.expander.is_some_and(|e| e.clicked()) || res.row.double_clicked() {
+        open = !open;
+    }
+    if let Some(state) = &mut state {
+        state.set_open(open);
+        state.store(ui.ctx());
+    }
+
+    if open {
+        trunk.push(!last);
+        let n = node.children.len();
+        for (i, child) in node.children.iter().enumerate() {
+            let child_id = odm_render::node_id(id, i);
+            tree_node_ui(ui, child, &child_id, depth + 1, trunk, i + 1 == n, selected, clicked);
+        }
+        trunk.pop();
     }
 }
 
