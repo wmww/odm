@@ -9,23 +9,27 @@ ODM is a CAD/3D modeling/animation framework and toolset for LLM agents. The age
 - Keep prose, comments, errors, and commit messages short unless extra detail is genuinely useful.
 
 ## Running the viewer
-Always use `--headless` when running `odm run`, unless explicitly asked or you're running inside a headless Wayland compositor (see below). The ODM CLI has enough tools to check most things to do with rendering and the 3D scene, the main thing you can't see with it is UI. For that, use:
+Always use `--headless` when running `odm run`, unless explicitly asked or you're
+running inside a headless session (see below). The ODM CLI has enough tools to
+check most things to do with rendering and the 3D scene; the main thing you can't
+see with it is UI. For that, use the **gui-testing** skill — it starts a private
+headless Wayland session you can screenshot and inject input into:
 
-```
+```sh
 cargo build --bins
-scripts/ui-shot.sh -o ./shot.png examples/hello-bracket
-# then read the png and delete it
+DIR=$(/abs/path/to/gui-testing/guibox start -- ./target/debug/odm run examples/hello-bracket)
+. $DIR/env                              # needed in every later shell
+grim $DIR/1.png                         # screenshot, then read it
+wdotool mousemove 336 705 click 1       # toggle the Wireframe box
+$GUIBOX stop $DIR                       # tears down the session and the pngs
 ```
 
-To shoot the UI in a particular state, drive it first (`-h` for the full list):
-
-```
-scripts/ui-shot.sh -a 'mousemove 323 704; click 1'   # toggle the Wireframe box
-scripts/ui-shot.sh -a 'mousemove 760 450; scroll 0 5' -k 'f'   # zoom, then frame
-```
-
-Clicks, scrolls and keys are reliable and repeatable; **drags are not possible**,
-so orbit/pan can't be exercised this way (see notes/architecture.md).
+The skill is declared in `.claude/settings.json`; if it isn't installed, install
+it from https://github.com/wmww/agent-skills. Read its SKILL.md for the details.
+ODM-specific quirks are in notes/architecture.md ("Seeing the viewer") — notably
+that anything holding a button or modifier (orbit, pan, shift-select) needs one
+chained `wdotool` call **with real gaps in it**, and that the first scroll of a
+session is swallowed.
 
 ## Notes
 The `notes/` directory contains your persistent notes about the project state. Create/edit/rename/split/delete notes as needed (without being asked) to keep them correct and maximally useful to you. Keep `notes/README.md` up to date with an index of what is where.

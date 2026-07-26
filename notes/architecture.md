@@ -168,8 +168,9 @@ children. Consequences:
   replaces the whole selection. `odm selection` returns the list.
 - `viewer::tests` drives rows through a headless `egui::Context` (real hit
   testing, real modifiers — note egui reads `modifiers` off `RawInput`, not
-  off the events). Input injection can't hold shift across processes (see the
-  ui-shot notes below), so this is the only way to test modifier-clicks.
+  off the events). That is how modifier-clicks are *tested*; injecting one into
+  a live viewer also works, but only as a chained call (see "Seeing the
+  viewer").
 
 ## Invariants & policies
 
@@ -202,53 +203,58 @@ Useful invocations: `cargo test -p odm-build`, `cargo test --test render`,
 ### Seeing the viewer
 
 `odm render` only exercises `odm-render`, so viewer/theme changes need a real
-screenshot. `scripts/ui-shot.sh` does it (usage in AGENTS.md): private
-`XDG_RUNTIME_DIR` + `labwc` on `WLR_BACKENDS=headless` + `grim`, all torn down
-on exit. Works because we own that compositor.
+screenshot. That is the **gui-testing** skill's job (`guibox` + `grim` +
+`wdotool` in a private headless sway; AGENTS.md has the short version, the
+skill's SKILL.md the rest). The repo only references it, from
+`.claude/settings.json`; nothing ODM-side wraps it.
 
 Do *not* retry the ambient display: the host's sway runs as root and we reach it
 through a `wayland-root` socket symlink as uid 1006, where it advertises neither
 `zwlr_screencopy_manager_v1` nor `ext_image_copy_capture_manager_v1`, so `grim`
 fails with "compositor doesn't support the screen capture protocol". There is no
-Xwayland either, so `import`/`xwd` are out.
+Xwayland either, so `import`/`xwd` are out. If `$DIR/env` isn't sourced (or the
+session has expired) every tool silently aims at that display instead, which is
+what those errors mean.
 
-`ui-shot.sh --session CMD` runs anything inside that compositor, which is also
-how to measure viewer CPU: hide the window (`wlr-randr --output HEADLESS-1
---off`, or start a second engine on another project to cover it), then diff
-utime+stime from `/proc/<pid>/stat` (per thread under `task/`) over a few
-seconds. That is how the invisible-window spin (2026-07-24) was found and
-fixed.
+`swaymsg exec` runs anything else inside the session, which is also how to
+measure viewer CPU: hide the window (switch workspace, or start a second engine
+on another project to cover it), then diff utime+stime from `/proc/<pid>/stat`
+(per thread under `task/`) over a few seconds. That is how the invisible-window
+spin (2026-07-24) was found and fixed.
 
-Input injection is `wdotool` on its wlr-protocols backend (`-k` for key chains,
-`-a` for pointer actions); it replaced `wtype`, which was keyboard-only. libei
-wants a RemoteDesktop portal we don't have, so the backend auto-selects
-wlr-protocols, which labwc speaks. Verified 2026-07-24 on wdotool 0.5.3: clicks
-(widgets and 3D pick), scrolls and keys all land and are byte-repeatable across
-runs. Three quirks, all worked around inside `ui-shot.sh`:
+Input injection is `wdotool` on its wlr-protocols backend (libei wants a
+RemoteDesktop portal the session doesn't have, so it auto-selects). Verified
+2026-07-26 on wdotool 0.5.3 against sway: clicks (widgets and 3D pick), scrolls,
+keys, drags and modifier-clicks all land. Two quirks:
 
-- Every `wdotool` call creates its own short-lived virtual device. Nothing at all
-  reaches the app unless a `wdotool prime` is held open alongside to keep the
-  seat's devices alive; without it every op is silently dropped.
-- The first *vertical* scroll of a primed session is always swallowed (100% over
-  ~20 trials). Sleeps, throwaway moves, keys and `scroll 0 0` don't clear it; one
-  horizontal `scroll 1 0` does, and the viewer ignores dx, so that's the warm-up.
-- Key and button state dies with the process that sent it, so `mousedown` /
-  `mousemove` / `mouseup` in separate calls arrive as a plain click at the press
-  point, and a `keydown Shift_L` is already released by the time the next call's
-  click lands (verified 2026-07-26). **No drags and no modifier-clicks**, so
-  orbit, pan and shift-select are untestable this way — use a headless
-  `egui::Context` instead, as `viewer::tests` does. `wdotool replay` doesn't
-  help: its `RecEvent` set is key-chords, atomic clicks, moves and scrolls, with
-  no down/up of its own. See `issues/no-drag-injection.md`.
+- **Held state needs real time inside one call.** Button/modifier state dies with
+  the `wdotool` process, so a drag has to be one chained invocation — but a chain
+  runs in ~20ms, which is a single egui frame, and egui only sees a drag if the
+  press survives a frame boundary. Pad the chain with a spacer that actually
+  costs time: `type zzzzz` is ~12ms/char and the viewer ignores letters.
+
+  ```sh
+  G="type zzzzz"
+  wdotool mousemove 400 200 $G mousedown 1 $G mousemove 500 250 $G mousemove 600 300 $G mouseup 1
+  ```
+
+  Orbit, middle-drag pan and shift-click-to-deselect all verified this way.
+  Do *not* use `click 8 --repeat 2 --delay N` as the spacer: it produces the same
+  gap but the extra button breaks egui's drag tracking (it works fine for
+  modifier-only holds).
+- The first *vertical* scroll of a session is always swallowed. Throw one away,
+  or warm up with a horizontal `scroll 1 0` — the viewer ignores dx.
 
 `getmouselocation` and `getwindowgeometry` are unavailable on this backend (both
 are send-only on Wayland); `search` / `getactivewindow` / `getwindowname` /
 `getwindowclassname` / `outputs` all work.
 
 Other limits: the fixed per-project socket path means parallel runs should use
-different project dirs. An in-process egui frame dump (`egui_kittest` or a
-`--ui-shot` mode) would still be the way to get deterministic UI snapshot
-*tests*; this script is for looking, not asserting.
+different project dirs (`odm --project <dir> …` from outside the session reaches
+an engine inside it fine — handy for checking `selection` after a click). An
+in-process egui frame dump (`egui_kittest`, or an engine flag) would still be
+the way to get deterministic UI snapshot *tests*; this is for looking, not
+asserting.
 
 ## Acceptance status (MVP)
 

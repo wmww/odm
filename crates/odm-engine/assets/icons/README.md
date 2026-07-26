@@ -68,9 +68,11 @@ art and never brighten it.
   handful of icons; if there are ever dozens, pack them into one atlas and
   offset the UV instead.
 
-To see changes, screenshot and zoom — pixel work is unreadable at 1:1:
+To see changes, screenshot (gui-testing skill; see AGENTS.md) and zoom — pixel
+work is unreadable at 1:1:
 
 ```sh
-scripts/ui-shot.sh -o ./shot.png examples/piston
-python3 -c "from PIL import Image; Image.open('shot.png').crop((0,36,240,160)).resize((720,372), Image.NEAREST).save('zoom.png')"
+DIR=$(.../guibox start -- ./target/debug/odm run examples/piston) && . $DIR/env
+grim $DIR/shot.png
+python3 -c "from PIL import Image; Image.open('$DIR/shot.png').crop((0,36,240,160)).resize((720,372), Image.NEAREST).save('$DIR/zoom.png')"
 ```

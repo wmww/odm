@@ -1,4 +1,15 @@
 {
+  "extraKnownMarketplaces": {
+    "wmww-agent-skills": {
+      "source": {
+        "source": "github",
+        "repo": "wmww/agent-skills"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "gui-testing@wmww-agent-skills": true
+  },
   "hooks": {
     "SessionStart": [
       {
