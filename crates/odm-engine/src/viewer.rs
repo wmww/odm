@@ -2,6 +2,7 @@
 //! scene tree, timeline, error panel. Never blocks on builds — shows the
 //! last published scene with a building indicator.
 
+use crate::icons::Icon;
 use crate::scene;
 use crate::state::{EngineState, Published};
 use crate::theme;
@@ -677,7 +678,7 @@ fn tree_node_ui(
     selected: Option<&str>,
     clicked: &mut Option<(String, Option<String>)>,
 ) {
-    let mut label = match &node.name {
+    let label = match &node.name {
         Some(n) => n.clone(),
         None => {
             if id.is_empty() {
@@ -687,26 +688,37 @@ fn tree_node_ui(
             }
         }
     };
-    if node.mesh.is_some() {
-        label.push_str("  ▪");
-    }
+    let icon = if node.mesh.is_some() { Icon::Mesh } else { Icon::Empty };
     let is_selected = selected == Some(id);
-    if node.children.is_empty() {
-        if ui.selectable_label(is_selected, label).clicked() {
-            *clicked = Some((id.to_string(), node.name.clone()));
-        }
+    let row = if node.children.is_empty() {
+        ui.horizontal(|ui| {
+            // Line the icon up with the ones under a collapsing arrow.
+            let indent = ui.spacing().indent;
+            let spacing = std::mem::take(&mut ui.spacing_mut().item_spacing.x);
+            ui.allocate_space(egui::vec2(indent, 0.0));
+            ui.spacing_mut().item_spacing.x = spacing;
+            theme::tree_row(ui, icon, &label, is_selected)
+        })
+        .inner
     } else {
-        let header = egui::CollapsingHeader::new(label)
-            .id_salt(format!("tree-{id}"))
-            .default_open(id.split('/').count() < 2 || id.is_empty())
-            .show(ui, |ui| {
+        // Arrow toggles, row selects — a plain `CollapsingHeader` would do both
+        // on one click, and leaves no room for an icon beside the arrow.
+        let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+            ui.ctx(),
+            ui.make_persistent_id(format!("tree-{id}")),
+            id.split('/').count() < 2,
+        );
+        let (_, header, _) = state
+            .show_header(ui, |ui| theme::tree_row(ui, icon, &label, is_selected))
+            .body(|ui| {
                 for (i, child) in node.children.iter().enumerate() {
                     tree_node_ui(ui, child, &odm_render::node_id(id, i), selected, clicked);
                 }
             });
-        if header.header_response.clicked() {
-            *clicked = Some((id.to_string(), node.name.clone()));
-        }
+        header.inner
+    };
+    if row.clicked() {
+        *clicked = Some((id.to_string(), node.name.clone()));
     }
 }
 

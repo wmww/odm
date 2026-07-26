@@ -16,10 +16,13 @@ eframe = { version = "=0.35.0", default-features = false, features = ["wgpu", "d
 # Same pin eframe uses: the viewer drives its own winit event loop (see viewer.rs).
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
 notify = "=8.2.0"
+# Icon art (assets/icons); same version odm-render encodes renders with.
+png = "0.18"
 serde_json = "1"
 anyhow.workspace = true
 
 [[bin]]
 name = "odm-engine"
 path = "src/main.rs"
-test = false
+# `icons.rs` has unit tests; flip back to false if that ever stops being true.
+test = true

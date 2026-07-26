@@ -12,9 +12,10 @@
 //! edge) but inverted in luminance: the face is dark and text is white, so
 //! the light edge is a mid gray rather than white.
 
+use crate::icons::{self, Icon};
 use eframe::egui::{
-    self, Color32, CornerRadius, FontData, FontFamily, FontId, FontTweak, Margin, Rect, Response,
-    Shadow, Stroke, TextStyle, Ui, Vec2, pos2, vec2,
+    self, Color32, CornerRadius, FontData, FontFamily, FontId, FontTweak, Margin, Pos2, Rect,
+    Response, Shadow, Stroke, TextStyle, Ui, Vec2, pos2, vec2,
 };
 use eframe::egui::style::{
     HandleShape, ScrollAnimation, ScrollFadeStyle, ScrollStyle, Selection, WidgetVisuals,
@@ -281,6 +282,39 @@ pub fn field<R>(ui: &mut Ui, fill: Color32, add: impl FnOnce(&mut Ui) -> R) -> R
     let res = egui::Frame::new().fill(fill).inner_margin(Margin::same(3)).show(ui, add);
     bevel(ui.painter(), res.response.rect, Bevel::Sunken);
     res.inner
+}
+
+/// Snap a position to whole physical pixels. Bitmap art (icons, text) placed
+/// off the pixel grid blurs, and layout arithmetic lands on halves easily.
+pub fn snap(ui: &Ui, pos: Pos2) -> Pos2 {
+    let ppp = ui.ctx().pixels_per_point();
+    pos2((pos.x * ppp).round() / ppp, (pos.y * ppp).round() / ppp)
+}
+
+/// One row of the scene tree: an icon, then the name, as a single click target.
+pub fn tree_row(ui: &mut Ui, icon: Icon, text: &str, selected: bool) -> Response {
+    /// Gap between icon and name, and around the pair.
+    const GAP: f32 = 4.0;
+    const PAD: Vec2 = Vec2 { x: 3.0, y: 1.0 };
+
+    let icon_size = icons::size(ui, icon);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(UI_SIZE), TEXT);
+    let size = vec2(
+        PAD.x * 2.0 + icon_size.x + GAP + galley.size().x,
+        PAD.y * 2.0 + galley.size().y.max(icon_size.y),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if selected {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, ACCENT);
+    }
+    let left = rect.left() + PAD.x;
+    // Untinted: icons carry their own color, and must read on both the window
+    // background and the selection fill.
+    icons::paint(ui, icon, pos2(left, rect.center().y - icon_size.y / 2.0), Color32::WHITE);
+    let text_pos =
+        snap(ui, pos2(left + icon_size.x + GAP, rect.center().y - galley.size().y / 2.0));
+    ui.painter().galley(text_pos, galley, TEXT);
+    response
 }
 
 /// A status-bar cell: thin sunken box around a label.

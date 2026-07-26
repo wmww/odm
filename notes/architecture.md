@@ -76,7 +76,8 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
   `ui.button`/`ui.checkbox`/`egui::Slider` in viewer code. Two standing rules:
   no animation (`animation_time = 0`, `ScrollAnimation::none()`, no scroll-edge
   fade, no busy spinner — state changes snap), and no hover feedback.
-  Text is bundled bitmap fonts, not system ones — see "Viewer fonts" below.
+  Text is bundled bitmap fonts and tree icons are bundled pixel art, not system
+  ones — see "Viewer fonts" and "Viewer icons" below.
 - `odm-cli` — `odm` binary: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
   from `ok`.
@@ -108,6 +109,30 @@ Consequences worth remembering:
 - Coverage is trimmed (Latin/Greek/Cyrillic, punctuation, arrows, box drawing);
   anything else falls back to egui's antialiased built-ins.
 
+### Viewer icons
+
+`crates/odm-engine/assets/icons/` holds one 11×11 RGBA PNG per icon,
+`include_bytes!`d by `icons.rs`, decoded and uploaded once (egui memory owns the
+`TextureHandle`), then drawn as one `NEAREST`-sampled quad — currently left of
+each scene-tree name, via `theme::tree_row`. Color and alpha work; the art is
+drawn untinted, and screen pixels match the file exactly. Colors have to read on
+the window background and on the blue selection fill both.
+`scripts/icon-png.py` converts a PNG to an editable text grid and back — the PNG
+stays the only asset. The README next to the art covers the rest; the things
+that bite:
+
+- **Whole pixels only**, snapped via `theme::snap` — same pixel-grid rule as the
+  fonts, and why `icons::SCALE` is an integer.
+- **Don't paint pixel art as rects.** egui replaces rects thinner than 2px with
+  feathered line segments, which smears 1px rows and drops single pixels
+  entirely. (The first cut of this drew per-pixel rects, and looked it.)
+- One texture per icon = one draw call per tree row. Cheap at this count; atlas
+  them if icons ever number in the dozens.
+
+Drawing the tree also needs `CollapsingState::show_header` rather than
+`CollapsingHeader`: the icon has to sit beside the arrow, and this way the arrow
+toggles while the row selects (a plain header did both at once).
+
 ## Invariants & policies
 
 - Consistency: every published result is byte-equivalent to a from-scratch
@@ -122,13 +147,13 @@ Consequences worth remembering:
 
 ## Testing
 
-`cargo test` runs everything (70 tests, ~1s after compile). Almost all tests
+`cargo test` runs everything (71 tests, ~1s after compile). Almost all tests
 are integration tests in `crates/*/tests/`; the only unit tests in `src/` are
-in `odm-render/src/grid.rs`.
+in `odm-render/src/grid.rs` and `odm-engine/src/icons.rs`.
 
 Manifests suppress empty harness output: `doctest = false` on every lib (we
 write no doctests, and `odm-js` otherwise inherits an ignored one from a
-deno_core macro), `test = false` on the two bins and on the five libs with no
+deno_core macro), `test = false` on `odm-cli`'s bin and on the five libs with no
 `#[cfg(test)]` modules. **If you add unit tests to `src/` in odm-build/
 odm-ir/odm-js/odm-kernel/odm-store, flip that crate's `[lib] test` back to
 true** — the manifest carries a comment saying so.

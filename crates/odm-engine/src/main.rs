@@ -3,6 +3,7 @@
 //! `--headless`. Every command syncs (rescans + hashes sources) first, so CLI
 //! results always reflect the files on disk.
 
+mod icons;
 mod scene;
 mod server;
 mod state;
