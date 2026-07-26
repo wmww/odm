@@ -1,5 +1,9 @@
 //! Windows 95 look for the viewer, in a dark palette.
 //!
+//! Text is a pair of bundled bitmap faces (see `assets/fonts/README.md`), so
+//! the sizes here are not free: each face only lines up with the pixel grid at
+//! its own design size.
+//!
 //! egui's `WidgetVisuals` only carries a single uniform `bg_stroke`, so the
 //! two-tone 3D bevel can't be expressed as a theme — it is painted over each
 //! widget's rect by the helpers below.
@@ -9,13 +13,14 @@
 //! the light edge is a mid gray rather than white.
 
 use eframe::egui::{
-    self, Color32, CornerRadius, FontId, Margin, Rect, Response, Shadow, Stroke, TextStyle, Ui,
-    Vec2, pos2, vec2,
+    self, Color32, CornerRadius, FontData, FontFamily, FontId, FontTweak, Margin, Rect, Response,
+    Shadow, Stroke, TextStyle, Ui, Vec2, pos2, vec2,
 };
 use eframe::egui::style::{
     HandleShape, ScrollAnimation, ScrollFadeStyle, ScrollStyle, Selection, WidgetVisuals,
 };
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 
 /// Control face — panels, buttons, toolbars.
 pub const FACE: Color32 = Color32::from_rgb(0x3c, 0x3c, 0x3c);
@@ -79,18 +84,57 @@ fn edges(p: &egui::Painter, r: Rect, tl: Color32, br: Color32) {
 
 // ----------------------------------------------------------------------------
 
+/// Design size of `odm-sans-14`, and so the size of every bit of UI text —
+/// the era had one UI font at one size, and the bitmap only fits its own grid.
+pub const UI_SIZE: f32 = 14.0;
+/// Design size of `odm-mono-14`.
+pub const CODE_SIZE: f32 = 14.0;
+
 pub fn install(ctx: &egui::Context) {
+    ctx.set_fonts(fonts());
     ctx.set_theme(egui::ThemePreference::Dark);
     ctx.all_styles_mut(apply);
 }
 
+/// The bundled bitmap faces, ahead of egui's built-ins — those stay on as
+/// fallback for the codepoints the trimmed bitmaps don't cover.
+fn fonts() -> egui::FontDefinitions {
+    // The outlines are already whole pixels on the pixel grid, so hinting has
+    // nothing to fix and sub-pixel binning would only smear them.
+    let tweak = FontTweak {
+        hinting: Some(false),
+        subpixel_binning: Some(false),
+        ..Default::default()
+    };
+    let faces = [
+        (
+            "odm-sans-14",
+            include_bytes!("../assets/fonts/odm-sans-14.ttf") as &[u8],
+            FontFamily::Proportional,
+        ),
+        (
+            "odm-mono-14",
+            include_bytes!("../assets/fonts/odm-mono-14.ttf") as &[u8],
+            FontFamily::Monospace,
+        ),
+    ];
+
+    let mut defs = egui::FontDefinitions::default();
+    for (name, bytes, family) in faces {
+        let data = FontData::from_static(bytes).tweak(tweak.clone());
+        defs.font_data.insert(name.to_owned(), Arc::new(data));
+        defs.families.entry(family).or_default().insert(0, name.to_owned());
+    }
+    defs
+}
+
 fn apply(style: &mut egui::Style) {
     style.text_styles = [
-        (TextStyle::Heading, FontId::proportional(13.0)),
-        (TextStyle::Body, FontId::proportional(12.0)),
-        (TextStyle::Button, FontId::proportional(12.0)),
-        (TextStyle::Small, FontId::proportional(10.0)),
-        (TextStyle::Monospace, FontId::monospace(11.0)),
+        (TextStyle::Heading, FontId::proportional(UI_SIZE)),
+        (TextStyle::Body, FontId::proportional(UI_SIZE)),
+        (TextStyle::Button, FontId::proportional(UI_SIZE)),
+        (TextStyle::Small, FontId::proportional(UI_SIZE)),
+        (TextStyle::Monospace, FontId::monospace(CODE_SIZE)),
     ]
     .into();
 

@@ -535,7 +535,7 @@ impl ViewerApp {
             rect.left_top() + egui::vec2(8.0, 8.0),
             egui::Align2::LEFT_TOP,
             "drag orbit · shift/middle-drag pan · scroll zoom · click select · F frame",
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(theme::UI_SIZE),
             egui::Color32::from_white_alpha(60),
         );
     }

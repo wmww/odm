@@ -76,9 +76,37 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
   `ui.button`/`ui.checkbox`/`egui::Slider` in viewer code. Two standing rules:
   no animation (`animation_time = 0`, `ScrollAnimation::none()`, no scroll-edge
   fade, no busy spinner — state changes snap), and no hover feedback.
+  Text is bundled bitmap fonts, not system ones — see "Viewer fonts" below.
 - `odm-cli` — `odm` binary: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
   from `ok`.
+
+### Viewer fonts
+
+`crates/odm-engine/assets/fonts/` holds two bitmap faces, `include_bytes!`d by
+`theme.rs` and pushed to the front of egui's Proportional/Monospace family
+lists (the built-ins stay on as fallback). They come from the X11 font
+distribution via `scripts/bdf2ttf.py`, which emits one square outline per
+bitmap pixel:
+
+- `odm-sans-14` ← Adobe `helvR10` (100dpi), 14px. MS Sans Serif was itself a
+  Helvetica-clone bitmap, so this is the period-correct UI face. MIT-style
+  Adobe/DEC license.
+- `odm-mono-14` ← misc-fixed `7x14`, 14px. Public domain. Only the build-error
+  panel uses it.
+
+Consequences worth remembering:
+
+- **Sizes are not free.** A pixel font is only crisp at its design size, so
+  `theme::UI_SIZE`/`CODE_SIZE` are both pinned to 14 and *every* text style uses
+  them (Win95 had one UI size anyway). Resizing the UI means regenerating from
+  a different BDF strike, not typing a new number — the README next to the
+  fonts lists which strikes each pack ships.
+- Both faces set `FontTweak { hinting: false, subpixel_binning: false }` —
+  egui's defaults would smear outlines that already sit on the pixel grid.
+- Whole-number `pixels_per_point` scales fine; a fractional one blurs them.
+- Coverage is trimmed (Latin/Greek/Cyrillic, punctuation, arrows, box drawing);
+  anything else falls back to egui's antialiased built-ins.
 
 ## Invariants & policies
 
