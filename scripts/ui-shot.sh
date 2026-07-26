@@ -3,13 +3,16 @@
 # compositor. Each run gets its own XDG_RUNTIME_DIR, so concurrent agents never
 # clobber each other, and everything is torn down on exit.
 #
-#   scripts/ui-shot.sh [-o OUT] [-s WxH] [-d SECS] [-k KEYS] [PROJECT]
+#   scripts/ui-shot.sh [-o OUT] [-s WxH] [-d SECS] [-k KEYS] [-a ACTS] [PROJECT]
 #   scripts/ui-shot.sh --session CMD [ARGS...]
 #
 #   -o OUT     png path (default /tmp/odm-ui-shot.png)
 #   -s WxH     output size (default 1280x720)
 #   -d SECS    extra settle delay after the frame stops changing (default 0)
-#   -k KEYS    keystrokes to send with wtype before the shot, e.g. -k 'f'
+#   -k KEYS    key chains to press before the shot, e.g. -k 'f' or -k 'ctrl+s f'
+#   -a ACTS    wdotool actions before the shot, ';'-separated, e.g.
+#              -a 'mousemove 323 704; click 1'. `sleep N` is also accepted.
+#              Drags are NOT possible (see below).
 #   PROJECT    project dir to open (default examples/hello-bracket)
 #   --session  run CMD inside the compositor instead; $WAYLAND_DISPLAY and
 #              $XDG_RUNTIME_DIR are set, so plain `grim out.png` works.
@@ -20,6 +23,7 @@ out=/tmp/odm-ui-shot.png
 size=1280x720
 delay=0
 keys=
+acts=
 session_mode=0
 
 if [[ ${1-} == --session ]]; then
@@ -27,13 +31,14 @@ if [[ ${1-} == --session ]]; then
   shift
   [[ $# -gt 0 ]] || { echo "--session needs a command" >&2; exit 2; }
 else
-  while getopts ':o:s:d:k:h' opt; do
+  while getopts ':o:s:d:k:a:h' opt; do
     case $opt in
       o) out=$OPTARG ;;
       s) size=$OPTARG ;;
       d) delay=$OPTARG ;;
       k) keys=$OPTARG ;;
-      h) sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      a) acts=$OPTARG ;;
+      h) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
       *) echo "bad flag -$OPTARG" >&2; exit 2 ;;
     esac
   done
@@ -61,6 +66,7 @@ export WAYLAND_DISPLAY=wayland-0
 runtime=$XDG_RUNTIME_DIR
 comp_pid=
 app_pid=
+prime_pid=
 
 group_alive() { [[ -n $1 ]] && kill -0 -- "-$1" 2>/dev/null; }
 kill_group() { [[ -n $1 ]] && kill "-$2" -- "-$1" 2>/dev/null || true; }
@@ -71,6 +77,7 @@ note_owner
 
 cleanup() {
   local rc=$?
+  kill_group "$prime_pid" TERM
   kill_group "$app_pid" TERM
   kill_group "$comp_pid" TERM
   for _ in $(seq 1 15); do
@@ -158,8 +165,54 @@ for _ in $(seq 1 75); do
 done
 
 [[ $delay != 0 ]] && sleep "$delay"
-if [[ -n $keys ]]; then
-  wtype "$keys"
+
+# Input injection, via wdotool on its wlr-protocols backend. Three quirks, all
+# of them worked around here (see notes/architecture.md):
+#   1. Every wdotool call makes its own short-lived virtual device, and nothing
+#      lands unless a `wdotool prime` holds the seat's devices open alongside.
+#   2. The first vertical scroll of a primed session is swallowed; a horizontal
+#      scroll (which the viewer ignores) burns it off.
+#   3. Button state dies with the process that sent it, so mousedown/mouseup in
+#      separate calls arrive as a click. Drags are not expressible.
+if [[ -n $keys || -n $acts ]]; then
+  # wdotool logs backend probing to stderr on every call; keep it in the log
+  # unless something actually fails.
+  wd() {
+    if ! wdotool "$@" >>"$runtime/wdotool.log" 2>&1; then
+      echo "wdotool $* failed:" >&2
+      tail -n 5 "$runtime/wdotool.log" >&2
+      exit 1
+    fi
+  }
+
+  wdotool prime >"$runtime/prime.log" 2>&1 &
+  prime_pid=$!
+  note_owner
+  for _ in $(seq 1 50); do
+    grep -q ready "$runtime/prime.log" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -q ready "$runtime/prime.log" 2>/dev/null ||
+    { echo "wdotool prime never came up" >&2; cat "$runtime/prime.log" >&2; exit 1; }
+
+  read -r sw sh <<<"${size/x/ }"
+  wd mousemove $((sw / 2)) $((sh / 2))
+  sleep 0.2
+  wd scroll 1 0
+  sleep 0.3
+
+  # Actions are eval'd so quoting works, e.g. -a 'type "hello world"'.
+  while IFS= read -r act; do
+    act=${act#"${act%%[![:space:]]*}"}
+    [[ -n $act ]] || continue
+    if [[ $act == sleep\ * ]]; then eval "$act"; else eval wd "$act"; fi
+    sleep 0.2
+  done <<<"${acts//;/$'\n'}"
+
+  for chain in $keys; do
+    wd key "$chain"
+    sleep 0.2
+  done
   sleep 0.5
 fi
 

@@ -17,6 +17,16 @@ scripts/ui-shot.sh -o ./shot.png examples/hello-bracket
 # then read the png and delete it
 ```
 
+To shoot the UI in a particular state, drive it first (`-h` for the full list):
+
+```
+scripts/ui-shot.sh -a 'mousemove 323 704; click 1'   # toggle the Wireframe box
+scripts/ui-shot.sh -a 'mousemove 760 450; scroll 0 5' -k 'f'   # zoom, then frame
+```
+
+Clicks, scrolls and keys are reliable and repeatable; **drags are not possible**,
+so orbit/pan can't be exercised this way (see notes/architecture.md).
+
 ## Notes
 The `notes/` directory contains your persistent notes about the project state. Create/edit/rename/split/delete notes as needed (without being asked) to keep them correct and maximally useful to you. Keep `notes/README.md` up to date with an index of what is where.
 

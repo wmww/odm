@@ -128,10 +128,32 @@ utime+stime from `/proc/<pid>/stat` (per thread under `task/`) over a few
 seconds. That is how the invisible-window spin (2026-07-24) was found and
 fixed.
 
-Limits today: keyboard injection only (`wtype`; the viewer binds just `F`), no
-pointer injection, and the fixed per-project socket path means parallel runs
-should use different project dirs. An in-process egui frame dump (`egui_kittest`
-or a `--ui-shot` mode) would still be the way to get deterministic UI snapshot
+Input injection is `wdotool` on its wlr-protocols backend (`-k` for key chains,
+`-a` for pointer actions); it replaced `wtype`, which was keyboard-only. libei
+wants a RemoteDesktop portal we don't have, so the backend auto-selects
+wlr-protocols, which labwc speaks. Verified 2026-07-24 on wdotool 0.5.3: clicks
+(widgets and 3D pick), scrolls and keys all land and are byte-repeatable across
+runs. Three quirks, all worked around inside `ui-shot.sh`:
+
+- Every `wdotool` call creates its own short-lived virtual device. Nothing at all
+  reaches the app unless a `wdotool prime` is held open alongside to keep the
+  seat's devices alive; without it every op is silently dropped.
+- The first *vertical* scroll of a primed session is always swallowed (100% over
+  ~20 trials). Sleeps, throwaway moves, keys and `scroll 0 0` don't clear it; one
+  horizontal `scroll 1 0` does, and the viewer ignores dx, so that's the warm-up.
+- Button state dies with the process that sent it, so `mousedown` / `mousemove` /
+  `mouseup` in separate calls arrive as a plain click at the press point. **No
+  drags**, so orbit and pan are untestable this way. `wdotool replay` doesn't
+  help: its `RecEvent::Click` carries only `{t_ms, button}`, i.e. press+release
+  are atomic. See `issues/no-drag-injection.md`.
+
+`getmouselocation` and `getwindowgeometry` are unavailable on this backend (both
+are send-only on Wayland); `search` / `getactivewindow` / `getwindowname` /
+`getwindowclassname` / `outputs` all work.
+
+Other limits: the fixed per-project socket path means parallel runs should use
+different project dirs. An in-process egui frame dump (`egui_kittest` or a
+`--ui-shot` mode) would still be the way to get deterministic UI snapshot
 *tests*; this script is for looking, not asserting.
 
 ## Acceptance status (MVP)
