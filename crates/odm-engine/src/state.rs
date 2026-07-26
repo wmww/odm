@@ -49,8 +49,8 @@ pub struct EngineState {
     render_counter: AtomicU64,
     published: Mutex<Published>,
     queue: BuildQueue,
-    /// Viewer selection: (node id, name).
-    selection: Mutex<Option<(String, Option<String>)>>,
+    /// Viewer selection, in the order it was picked: (node id, name).
+    selection: Mutex<Vec<(String, Option<String>)>>,
     /// Wakes the viewer when `published` changes (unset when headless).
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
@@ -70,7 +70,7 @@ impl EngineState {
             render_counter: AtomicU64::new(0),
             published: Mutex::new(Published::default()),
             queue: BuildQueue::default(),
-            selection: Mutex::new(None),
+            selection: Mutex::new(Vec::new()),
             wake: Mutex::new(None),
         }))
     }
@@ -100,7 +100,7 @@ impl EngineState {
         }
     }
 
-    pub fn set_selection(&self, sel: Option<(String, Option<String>)>) {
+    pub fn set_selection(&self, sel: Vec<(String, Option<String>)>) {
         *self.selection.lock().unwrap() = sel;
     }
 
@@ -298,9 +298,9 @@ impl EngineState {
 
     fn cmd_selection(&self) -> Result<Value, Value> {
         let sel = self.selection.lock().unwrap().clone();
-        Ok(json!({
-            "selection": sel.map(|(node, name)| json!({ "node": node, "name": name })),
-        }))
+        let sel: Vec<Value> =
+            sel.into_iter().map(|(node, name)| json!({ "node": node, "name": name })).collect();
+        Ok(json!({ "selection": sel }))
     }
 
     fn root_node(&self, result: &PassResult) -> Result<Node, Value> {

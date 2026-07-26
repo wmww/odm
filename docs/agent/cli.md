@@ -19,7 +19,7 @@ odm tree [--t] [--depth N]    # node ids, names, meshes, world bounds
 odm inspect <node-id> [--t]   # volume, area, bounds, world matrix
 odm raycast --origin 0,0,50 --dir 0,0,-1 [--t]
 odm render [options]          # PNG → prints path
-odm selection                 # current viewer selection (node id + name)
+odm selection                 # viewer selection: list of {node, name}
 ```
 
 Render options: `--t sec`, `--width/--height px` (default 1024×768),
@@ -49,5 +49,7 @@ odm render --t 2.5 --out /tmp/frame.png      # animation frame
   the engine picks up changes automatically.
 - The viewer shows the last good build while your code is broken; the CLI
   always tells you the current truth.
-- When the user clicks a part in the viewer, `odm selection` tells you which
-  node they selected — useful for "make *this* one longer" instructions.
+- When the user clicks parts in the viewer, `odm selection` tells you which
+  nodes they selected — useful for "make *this* one longer" instructions. It
+  is a list in pick order (shift-click selects more than one), empty if
+  nothing is selected.

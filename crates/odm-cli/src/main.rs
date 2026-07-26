@@ -24,7 +24,7 @@ commands:
   inspect <node-id> [--t]    details for one node (volume, bounds, transform)
   raycast --origin x,y,z --dir x,y,z [--t]
                              nearest hit in the scene
-  selection                  current viewer selection (node id + name)
+  selection                  viewer selection: list of {node, name}
 
 Every command prints a single JSON object. Exit code 0 = ok, 1 = error.
 ";

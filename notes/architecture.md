@@ -57,7 +57,8 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
   viewer (offscreen texture viewport via register_native_texture, orbit/
   pan/zoom, tree panel, timeline when duration set, error panel with
   last-good scene, click-select via CPU raycast when shaded / nearest-wire
-  screen-space pick when wireframe), background build loop
+  screen-space pick when wireframe, shift-click to select several),
+  background build loop
   (latest-wins, Pass::cancel on supersede), notify-based watcher (150ms
   debounce; its dot-dir filter applies to the path *relative to the project*,
   since the project itself may live under one). The viewer never polls: it
@@ -145,9 +146,21 @@ children. Consequences:
   the row instead — a gap would break the dotted lines between rows.
 - `TREE_INDENT` is even and the row midline is nudged onto the checkerboard, so
   every column and rule shares a parity and corners get a dot.
-- egui's `CollapsingState` is kept for open/closed persistence only; the layout
-  and the +/- hit target are ours (the box toggles, the name selects, a
-  double-click on the name does both).
+- The +/- hit target is ours, and so is open/closed state: `TreeState` in
+  viewer.rs, not egui's `CollapsingState`. The box toggles, the name selects,
+  a double-click on the name does both.
+- Selecting a node auto-expands its ancestors, and collapsing them again when
+  the selection goes away is why the state is ours: `TreeState::auto` remembers
+  what each auto-expand displaced, and any user toggle (`set_manual`) takes
+  that node out of auto-expand's hands for good. Nodes above `AUTO_DEPTH`
+  start open.
+- Selection is a list, in pick order. Shift-clicking a row — or a solid in the
+  viewport — adds it, or removes it if it was already selected; a plain click
+  replaces the whole selection. `odm selection` returns the list.
+- `viewer::tests` drives rows through a headless `egui::Context` (real hit
+  testing, real modifiers — note egui reads `modifiers` off `RawInput`, not
+  off the events). Input injection can't hold shift across processes (see the
+  ui-shot notes below), so this is the only way to test modifier-clicks.
 
 ## Invariants & policies
 
@@ -210,11 +223,14 @@ runs. Three quirks, all worked around inside `ui-shot.sh`:
 - The first *vertical* scroll of a primed session is always swallowed (100% over
   ~20 trials). Sleeps, throwaway moves, keys and `scroll 0 0` don't clear it; one
   horizontal `scroll 1 0` does, and the viewer ignores dx, so that's the warm-up.
-- Button state dies with the process that sent it, so `mousedown` / `mousemove` /
-  `mouseup` in separate calls arrive as a plain click at the press point. **No
-  drags**, so orbit and pan are untestable this way. `wdotool replay` doesn't
-  help: its `RecEvent::Click` carries only `{t_ms, button}`, i.e. press+release
-  are atomic. See `issues/no-drag-injection.md`.
+- Key and button state dies with the process that sent it, so `mousedown` /
+  `mousemove` / `mouseup` in separate calls arrive as a plain click at the press
+  point, and a `keydown Shift_L` is already released by the time the next call's
+  click lands (verified 2026-07-26). **No drags and no modifier-clicks**, so
+  orbit, pan and shift-select are untestable this way — use a headless
+  `egui::Context` instead, as `viewer::tests` does. `wdotool replay` doesn't
+  help: its `RecEvent` set is key-chords, atomic clicks, moves and scrolls, with
+  no down/up of its own. See `issues/no-drag-injection.md`.
 
 `getmouselocation` and `getwindowgeometry` are unavailable on this backend (both
 are send-only on Wayland); `search` / `getactivewindow` / `getwindowname` /

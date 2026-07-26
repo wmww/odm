@@ -13,11 +13,17 @@ process, one device, a whole trace — but its `RecEvent::Click` is
 `{t_ms, button}` with no press/release flag, i.e. press+release are atomic.
 (Its `move_abs` also appears not to reach the app at all, untested further.)
 
+Modifier-clicks are out for the same reason: a `keydown Shift_L` is released
+when its call exits, so the following click arrives unmodified (2026-07-26).
+
 Options, roughly in order of appeal:
 
 - An in-process egui frame dump (`egui_kittest`, or an engine `--ui-shot` mode)
   that feeds synthetic events straight into egui. That is the answer for
   deterministic UI snapshot *tests* anyway, and it sidesteps the compositor.
+  `viewer::tests` already does the non-snapshot half of this by hand — it runs
+  the scene tree in a bare `egui::Context` and clicks real row rects, which is
+  how shift-select is tested.
 - A tiny wlr virtual-pointer helper of our own that holds one device open and
   reads ops from stdin — perhaps 100 lines of `wayland-client`.
 - Upstream: a `--hold`/`press`/`release` pair in wdotool that keeps the device
