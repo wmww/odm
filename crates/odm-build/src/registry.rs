@@ -1,7 +1,7 @@
 //! In-flight build registry: dedups concurrent builds of the same node and
 //! turns would-be wait deadlocks into Cycle errors.
 //!
-//! Per spike-scheduler findings: every wait edge (blocked thread → awaited
+//! Per notes/spike-findings.md: every wait edge (blocked thread → awaited
 //! key → owner thread → its awaited key → ...) is a real dependency edge, so
 //! a wait cycle is always a genuine dependency cycle. We check for cycle
 //! formation atomically under the lock before blocking, which makes deadlock

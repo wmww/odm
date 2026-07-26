@@ -1,5 +1,9 @@
 # Build environment
 
+Machine facts: 24 cores, Radeon GPU (no lavapipe installed — golden PNG
+diffs would be CI-only), cmake 4.4 + ninja, node 26.4, rustc 1.93
+(edition 2024), network available. Clean Manifold (clone + cmake) build ~37s.
+
 ## Every checkout gets its own target dir, seeded from the main one
 
 `scripts/seed-target.sh` gives a linked checkout its own `target/`, copied from

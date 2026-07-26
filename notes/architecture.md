@@ -1,7 +1,7 @@
-# Architecture (as built, MVP complete 2026-07-22)
+# Architecture (as built)
 
-Durable reference distilled from the executed MVP plan. Decision rationale:
-`design-considerations.md`; implementation gotchas: `mvp-progress.md`.
+The system as it exists (MVP completed 2026-07-22). Why it's this way:
+`design-decisions.md`; measured facts behind the design: `spike-findings.md`.
 
 ## Project format
 
@@ -19,18 +19,34 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
 ## Crates
 
 - `odm-ir` — Mesh/Node/Scene/Color/Transform + canonical bit-exact blake3
-  hashing (FORMAT_VERSION in canon.rs), canonical JSON hashing.
+  hashing (FORMAT_VERSION in canon.rs; bump on any encoding change — floats
+  hash as raw IEEE bits, no -0.0/NaN canonicalization, equal hash ⇒
+  byte-equal), canonical JSON hashing (sorted keys, f64 numbers).
 - `odm-store` — content-addressed objects, generations (refcounted),
   mark-sweep GC (roots = generation roots + memo outputs; quiescence-only),
-  memo cache (key = code+args hashes; entry = recorded deps + output).
-- `odm-kernel` — manifold-csg wrapper: primitives, extrude/revolve (around
-  Z), booleans/hull with per-operand transforms, weld with boundary-edge
-  diagnosis, raycast, volume/area/bounds, CancelToken (ExecutionContext),
-  Hash→Manifold cache with rebuild-from-store fallback.
+  memo cache (key = code+args hashes; entry = recorded deps + output;
+  `Dep::Invoke` stores the actual args Value so validation can re-run
+  invokes, `Dep::Context` a value hash — missing keys hash a sentinel, use
+  `odm_js::context_value_hash`; eviction is whole-cache clear only, see
+  issues/memo-cache-policy.md).
+- `odm-kernel` — manifold-csg wrapper: primitives (cylinder along Z),
+  extrude/revolve (around Z), booleans/hull with per-operand transforms,
+  weld with boundary-edge diagnosis (Manifold's own error is bare
+  NotManifold), raycast (Manifold returns distance as a *fraction* of the
+  segment; kernel converts), volume/area/bounds, CancelToken
+  (ExecutionContext), Hash→Manifold cache with rebuild-from-store fallback.
+  Segments are always explicit — kernel rejects <3; framework defaults:
+  cylinder 64, sphere 48, revolve 64.
 - `odm-js` — deno_core =0.408.0; per-build disposable isolates from a
   snapshot embedding `framework/` (odm API + three r185 subset); ops
   extension; dep recording; console capture; `run_build` is the single
-  entry point. Isolates nest strictly LIFO per thread.
+  entry point. Isolates nest strictly LIFO per thread. Module URLs:
+  framework at `file:///odm/framework/*` (bare 'three'/'odm' resolve there);
+  doohickeys at `file:///odm/project/<path>` — single file, no project
+  imports. op2 quirks: `op_invoke` must be `#[op2(reentrant)]` (nested build
+  ops re-enter); no fixed-size-array params (use Vec<f64>);
+  `serde_json::Value` must be written fully qualified. Module loading is
+  driven by futures::executor::block_on (no tokio — nested block_on works).
 - `odm-build` — scan→generation; pass = generation+context (t + params);
   demand-driven `get_or_build` with Salsa-style validation and early cutoff;
   in-flight registry (wait-for-in-flight + wait-graph cycle detection);
@@ -94,53 +110,31 @@ Durable reference distilled from the executed MVP plan. Decision rationale:
 
 ### Viewer fonts
 
-`crates/odm-engine/assets/fonts/` holds two bitmap faces, `include_bytes!`d by
-`theme.rs` and pushed to the front of egui's Proportional/Monospace family
-lists (the built-ins stay on as fallback). They come from the X11 font
-distribution via `scripts/bdf2ttf.py`, which emits one square outline per
-bitmap pixel:
-
-- `odm-sans-14` ← Adobe `helvR10` (100dpi), 14px. MS Sans Serif was itself a
-  Helvetica-clone bitmap, so this is the period-correct UI face. MIT-style
-  Adobe/DEC license.
-- `odm-mono-14` ← misc-fixed `7x14`, 14px. Public domain. Only the build-error
-  panel uses it.
-
-Consequences worth remembering:
-
-- **Sizes are not free.** A pixel font is only crisp at its design size, so
-  `theme::UI_SIZE`/`CODE_SIZE` are both pinned to 14 and *every* text style uses
-  them (Win95 had one UI size anyway). Resizing the UI means regenerating from
-  a different BDF strike, not typing a new number — the README next to the
-  fonts lists which strikes each pack ships.
-- Both faces set `FontTweak { hinting: false, subpixel_binning: false }` —
-  egui's defaults would smear outlines that already sit on the pixel grid.
-- Whole-number `pixels_per_point` scales fine; a fractional one blurs them.
-- Coverage is trimmed (Latin/Greek/Cyrillic, punctuation, arrows, box drawing);
-  anything else falls back to egui's antialiased built-ins.
+`crates/odm-engine/assets/fonts/` holds two bitmap faces converted from X11
+fonts by `scripts/bdf2ttf.py` — `odm-sans-14` (Adobe helvR10, the
+period-correct MS Sans Serif lineage) everywhere, `odm-mono-14` (misc-fixed
+7x14) in the build-error panel. Sources, licenses, available strikes,
+coverage, and regeneration live in the README next to them. `theme.rs`
+`include_bytes!`s both at the front of egui's Proportional/Monospace lists
+(built-ins stay as fallback). Pixel-grid consequences: `theme::UI_SIZE`/
+`CODE_SIZE` are pinned to 14 and every text style uses them — resizing the UI
+means regenerating from a different BDF strike, not typing a new number; both
+faces set `FontTweak { hinting: false, subpixel_binning: false }`;
+whole-number `pixels_per_point` scales fine, fractional blurs.
 
 ### Viewer icons
 
-`crates/odm-engine/assets/icons/` holds one 11×11 RGBA PNG per icon,
-`include_bytes!`d by `icons.rs`, decoded and uploaded once (egui memory owns the
-`TextureHandle`), then drawn as one `NEAREST`-sampled quad — currently left of
-each scene-tree name, via `theme::tree_row`. Color and alpha work; the art is
-drawn untinted, and screen pixels match the file exactly. Colors have to read on
-the window background and on the blue selection fill both.
-`scripts/icon-png.py` converts a PNG to an editable text grid and back — the PNG
-stays the only asset. The README next to the art covers the rest; the things
-that bite:
-
-- **Whole pixels only**, snapped via `theme::snap` — same pixel-grid rule as the
-  fonts, and why `icons::SCALE` is an integer.
-- **Don't paint pixel art as rects.** egui replaces rects thinner than 2px with
-  feathered line segments, which smears 1px rows and drops single pixels
-  entirely. (The first cut of this drew per-pixel rects, and looked it.) Where
-  a texture is overkill — the tree's dotted lines — hand the pixels to
-  `Painter::add` as a `Mesh` of `add_colored_rect`s, which skips tessellation
-  and so skips feathering.
-- One texture per icon = one draw call per tree row. Cheap at this count; atlas
-  them if icons ever number in the dozens.
+`crates/odm-engine/assets/icons/` — one 11×11 RGBA PNG per icon,
+`include_bytes!`d by `icons.rs`, uploaded once, drawn as one NEAREST-sampled
+quad left of each tree name via `theme::tree_row`. Editing workflow
+(`scripts/icon-png.py` converts PNG ↔ text grid), color constraints, and
+adding an icon are in the README next to the art. Rules that bite in viewer
+code: whole pixels only (`icons::SCALE` is an integer; positions go through
+`theme::snap`), and never paint pixel art as individual rects — egui replaces
+rects thinner than 2px with feathered line segments. Where a texture is
+overkill (the tree's dotted lines), hand the pixels to `Painter::add` as a
+`Mesh` of `add_colored_rect`s, which skips tessellation and so skips
+feathering.
 
 ### Scene tree
 
@@ -177,6 +171,8 @@ children. Consequences:
 - Consistency: every published result is byte-equivalent to a from-scratch
   build of its generation (tested: `odm-build/tests/build.rs`).
 - Engine queries on content-addressed handles are pure → never memo deps.
+  Queries on transformed solids bake via op_transform_bake (cached per
+  Solid) — exact, but costs a mesh copy per distinct transform.
 - IR-hash goldens (`odm-build/tests/examples.rs`): regenerate on V8/three/
   Manifold upgrades (run the test, copy printed values).
 - Golden PNGs: only meaningful per-adapter; plan was lavapipe+pinned-Mesa in
@@ -186,9 +182,9 @@ children. Consequences:
 
 ## Testing
 
-`cargo test` runs everything (71 tests, ~1s after compile). Almost all tests
-are integration tests in `crates/*/tests/`; the only unit tests in `src/` are
-in `odm-render/src/grid.rs` and `odm-engine/src/icons.rs`.
+`cargo test` runs everything in ~1s after compile. Almost all tests are
+integration tests in `crates/*/tests/`; the only unit tests in `src/` are in
+`odm-render/src/grid.rs` and `odm-engine/src/icons.rs`.
 
 Manifests suppress empty harness output: `doctest = false` on every lib (we
 write no doctests, and `odm-js` otherwise inherits an ignored one from a
@@ -256,11 +252,9 @@ in-process egui frame dump (`egui_kittest`, or an engine flag) would still be
 the way to get deterministic UI snapshot *tests*; this is for looking, not
 asserting.
 
-## Acceptance status (MVP)
+## Remaining manual checks
 
-Fresh checkout builds (needs network once for the Manifold clone);
-`odm run examples/piston` opens the viewer (launch verified on Wayland;
-in-window interaction visuals not yet human-checked); edits propagate to
-viewer + CLI (verified via CLI); 70 tests green. Manual checklist left:
-viewport interaction feel (orbit/pan/zoom), timeline scrub visuals,
-selection highlight, clean exit on window close.
+In-window interaction has never had a human look: viewport feel
+(orbit/pan/zoom), timeline scrub visuals, selection highlight, clean exit on
+window close. Everything else in the MVP acceptance list was verified
+(fresh-checkout build, viewer launch on Wayland, hot reload via CLI, tests).

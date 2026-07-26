@@ -3,7 +3,7 @@
 `Node.children: Vec<Node>` (`odm-ir/src/types.rs`) — only *meshes* are shared
 by hash. `examples/assembly` invokes the wheel once and places it four times,
 producing four full copies of the wheel subtree in the IR, hashed and
-serialized four times. (design-considerations.md's "one geometry blob + n
+serialized four times. (design-decisions.md's "one geometry blob + n
 tiny IR nodes" holds for mesh buffers but not the tree.)
 
 Invisible at MVP scale; becomes the scaling wall for arrays/patterns (a

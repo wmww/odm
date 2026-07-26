@@ -1,7 +1,7 @@
 //! JS runtime: runs doohickey `build()` functions in disposable V8 isolates
 //! created from a snapshot with the ODM framework + three.js subset preloaded.
 //!
-//! Thread rules (see notes/spike-three-isolate-findings.md): isolates nest
+//! Thread rules (see notes/spike-findings.md): isolates nest
 //! strictly LIFO on a thread — a nested invoke creates its own isolate, uses
 //! it, and drops it before the outer isolate resumes. Never interleave.
 

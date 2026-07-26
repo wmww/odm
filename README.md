@@ -35,7 +35,7 @@ what changed.
 - `examples/` — example projects (double as integration tests)
 - `docs/agent/` — docs for agents *using* ODM on a project
 
-Design notes and decisions live in `notes/`; the MVP plan in `plans/mvp.md`.
+Design notes and decisions live in `notes/`; known issues in `issues/`.
 
 ## Notes
 

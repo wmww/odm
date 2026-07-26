@@ -33,7 +33,7 @@ fn build_example(name: &str, t: f64) -> (Arc<BuildEngine>, odm_ir::Hash) {
     (e, result.root)
 }
 
-/// Golden IR hashes at t=0. Policy (plans/mvp.md): regenerate on V8, three,
+/// Golden IR hashes at t=0. Policy (notes/architecture.md): regenerate on V8, three,
 /// or Manifold upgrades — JS transcendentals and kernel output are
 /// implementation-defined across versions, deterministic within one.
 /// To regenerate: run this test and copy the printed values.
