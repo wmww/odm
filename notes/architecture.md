@@ -85,8 +85,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   every render/publish. `Renderer::with_device` for the shared eframe device.
 - `odm-engine` — library, entered via `odm run` (`run(project, headless)`).
   Headless: socket server only. Default: + eframe
-  viewer (offscreen texture viewport via register_native_texture, orbit/
-  pan/zoom, tree panel, timeline when duration set, error panel with
+  viewer (menu bar, offscreen texture viewport via register_native_texture,
+  orbit/pan/zoom, tree panel, timeline when duration set, error panel with
   last-good scene, click-select via CPU raycast when shaded / nearest-wire
   screen-space pick when wireframe, shift-click to select several),
   background build loop
@@ -95,28 +95,33 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   since the project itself may live under one). The viewer never polls: it
   repaints when `EngineState::wake` fires (set by the viewer, unset when
   headless), i.e. on every `published` change. It also owns its winit event
-  loop so `SlowIdle` can clamp the `ControlFlow::Poll` eframe leaves behind —
-  see viewer/idle.rs; without it an invisible window pegs a core.
+  loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
+  and "Owning the event loop" below.
   Commands: status/sync/build/render/tree/inspect/raycast/
   selection; every command syncs first. Protocol: ndjson over unix socket,
   `{ok: bool, ...}` responses. Files: `state.rs` (published slot, build
-  queue, and `build_at` — the one sync→build→publish path, shared by the
-  background loop and the command handlers), `commands.rs` (the whole JSON
+  queue, `build_at` — the one sync→build→publish path, shared by the
+  background loop and the command handlers — and `stop`, below),
+  `commands.rs` (the whole JSON
   layer: a serde-tagged `Request` enum with `deny_unknown_fields`, so a
   typo'd command *or* option is an error, plus `CmdError`→JSON),
-  `watcher.rs`, `server.rs`, `viewer/` (`mod.rs` app + viewport, `idle.rs`
-  event loop, `tree.rs` scene tree), `scene.rs`, `theme/`, `icons.rs`.
+  `watcher.rs`, `server.rs`, `session.rs`, `viewer/` (`mod.rs` app + viewport,
+  `idle.rs` event loop, `menu.rs` menu bar, `open.rs` Open dialog, `tree.rs`
+  scene tree), `scene.rs`, `theme/`, `icons.rs`.
   `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
-  a `Style`/`Visuals` preset plus widget wrappers (`button`, `checkbox`,
-  `collapsing`, `list_box`, `trackbar`, …) that paint two-tone 3D bevels —
+  a `Style`/`Visuals` preset plus widget wrappers (`button`,
+  `collapsing`, `list_box`, `text_edit`, `trackbar`, `menu_bar`/`menu`,
+  `dialog`, `list_row`, …) that paint two-tone 3D bevels —
   egui's `WidgetVisuals` has one uniform `bg_stroke`, so bevels can't be
   themed and must be drawn over each widget's rect. Prefer these wrappers over
-  bare `ui.button`/`ui.checkbox`/`egui::ScrollArea`/`egui::CollapsingHeader`/
-  `egui::Slider` in viewer code — egui's own are all off-theme (rounded, hover
-  lit, anti-aliased glyphs, twisty arrows). Two standing rules:
+  bare `ui.button`/`egui::ScrollArea`/`egui::CollapsingHeader`/
+  `egui::Slider`/`ui.menu_button` in viewer code — egui's own are all off-theme
+  (rounded, hover lit, anti-aliased glyphs, twisty arrows). Two standing rules:
   no animation (`animation_time = 0`, `ScrollAnimation::none()`, no scroll-edge
-  fade, no busy spinner — state changes snap), and no hover feedback.
+  fade, no busy spinner — state changes snap), and no hover feedback — the one
+  exception being drop-down items, which highlight because that is how a menu
+  is read while dragging through it.
   Text is bundled bitmap fonts and tree icons are bundled pixel art, not system
   ones — see "Viewer fonts" and "Viewer icons" below; small glyphs that are not
   worth a file (the checkmark, scrollbar arrows, the tree's +/-) are painted
@@ -132,6 +137,60 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   skew, one `--help`, and a place to hang engine auto-start if we want it.
   Costs measured before merging: +1.7ms per client invocation (0.66→2.4ms,
   the binary is ~500MB in debug), and a touched-CLI relink goes 0.22s→1.05s.
+
+### Menu bar, and switching projects
+
+`viewer/menu.rs` is the whole bar: an `Action` enum, a `theme::menu` per
+drop-down listing `MenuEntry`s, and one `apply` that turns an action into an
+effect. File has Open Project…/Exit, View has Frame Scene (F) and checkmarked
+Wireframe/Grid. `theme::menu` measures its own entries and pins the popup width
+before drawing, because an auto-sizing egui popup doesn't know its width until
+the frame after — and a highlight that stops at the text looks broken.
+
+File ▸ Open opens **another engine**, it does not reconfigure this one: an
+engine is bound to one project's store, socket, build loop and watcher.
+`session.rs` holds the current `EngineState` and swaps it:
+
+- The V8 snapshot (`Arc<JsEnv>`) is the one thing shared across sessions —
+  `JsEnv::new` is a once-per-process job, and building a second one on the UI
+  thread while a build thread holds isolates is asking for trouble.
+- The new project's socket is claimed *first*. Binding is what fails when the
+  project is already served, so a failed open leaves the running one untouched
+  and the dialog up saying why.
+- The old session is then `stop()`ed: a flag plus wake-up hooks registered by
+  whoever can block (`server.rs` connects to its own socket to break `accept`,
+  `watcher.rs` sends on its channel, the build loop gets a condvar notify).
+  Each thread returns and drops its `EngineState` share; the retired socket
+  file is removed so the CLI fails fast instead of hanging on a dead engine.
+  Verified: two swaps leave the same 45 threads and idle CPU as a fresh start.
+- The viewer then blanks itself — scene, tree, selection, timeline, GPU mesh
+  cache — and reframes on the first build, exactly as at startup.
+
+`viewer/open.rs` is the directory chooser (no portal here, no dialog crate in
+the tree). Directories only, since a project *is* one; `session::is_project`
+(main.js or odm.json, the same rule as `odm_cli::find_project`) picks the icon
+and gates Open. The path field is what Open acts on, so clicking a row and
+typing a path are the same gesture; double-clicking a plain folder browses into
+it, double-clicking a project opens it. `~` expands, nothing else does. Its row
+list is a `theme::list_box`, so it gets the era's scrollbar for free.
+
+### Owning the event loop
+
+`viewer/idle.rs` wraps eframe's winit application (`SlowIdle`) to fix two things
+eframe leaves broken here:
+
+- **Idle spin.** When a repaint falls due eframe parks the loop in
+  `ControlFlow::Poll` expecting `RedrawRequested` straight back; an undisplayed
+  Wayland surface never gets its frame callback, so `Poll` pegs a core. Whenever
+  eframe leaves `Poll` (or its own expired `WaitUntil`) set, we clamp it to a
+  100 ms timer. Events still wake the loop instantly, so a visible window is
+  unaffected.
+- **Never exiting.** On a close request eframe destroys its windows and then
+  waits for *another* window event before deciding to exit — one a destroyed
+  Wayland surface will never send, so the process sat in `epoll` forever with
+  nothing on screen. `SlowIdle` watches for `CloseRequested` itself, and
+  File ▸ Exit sets the same shared `Quit` flag; `about_to_wait` acts on it.
+  Both paths verified to reach `process::exit(0)`.
 
 ### Viewer fonts
 
@@ -151,7 +210,9 @@ whole-number `pixels_per_point` scales fine, fractional blurs.
 
 `crates/odm-engine/assets/icons/` — one 11×11 RGBA PNG per icon,
 `include_bytes!`d by `icons.rs`, uploaded once, drawn as one NEAREST-sampled
-quad left of each tree name via `theme::tree_row`. Editing workflow
+quad: left of each tree name via `theme::tree_row` (`empty`/`mesh`), and left
+of each Open-dialog row via `theme::list_row` (`folder`/`project`). Editing
+workflow
 (`scripts/icon-png.py` converts PNG ↔ text grid), color constraints, and
 adding an icon are in the README next to the art. Rules that bite in viewer
 code: whole pixels only (`icons::SCALE` is an integer; positions go through
@@ -205,7 +266,8 @@ Consequences:
 
 - The bar is always present on an axis it was given, graying its arrows when
   there is nothing to scroll. That means the pane's size is fixed by the
-  caller (`ERROR_HEIGHT` for the error pane), not by its contents.
+  caller (`ERROR_HEIGHT` for the error pane, `LIST_HEIGHT` for the Open
+  dialog's list), not by its contents.
 - The trough is a 2×2 texture with `TextureWrapMode::Repeat`, uv'd from screen
   pixels so it lands on the same checkerboard as the tree's dots. A mesh of
   single pixels would be thousands of rects for one tall bar.
@@ -311,6 +373,7 @@ asserting.
 ## Remaining manual checks
 
 In-window interaction has never had a human look: viewport feel
-(orbit/pan/zoom), timeline scrub visuals, selection highlight, clean exit on
-window close. Everything else in the MVP acceptance list was verified
-(fresh-checkout build, viewer launch on Wayland, hot reload via CLI, tests).
+(orbit/pan/zoom), timeline scrub visuals, selection highlight. Everything else
+in the MVP acceptance list was verified (fresh-checkout build, viewer launch on
+Wayland, hot reload via CLI, tests), and clean exit on window close was fixed
+(see "Owning the event loop") and verified.

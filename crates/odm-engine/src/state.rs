@@ -8,7 +8,7 @@ use odm_kernel::Kernel;
 use odm_render::Renderer;
 use odm_store::{Object, Store};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 /// Last published build: what the viewer shows. Last-good semantics — a
@@ -50,13 +50,18 @@ pub struct EngineState {
     pub(crate) selection: Mutex<Vec<(String, Option<String>)>>,
     /// Wakes the viewer when `published` changes (unset when headless).
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Set by [`EngineState::stop`]; the loops below check it and return.
+    stopping: AtomicBool,
+    /// Run once by `stop`, to unblock loops parked in a syscall.
+    on_stop: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl EngineState {
-    pub fn new(project: PathBuf) -> anyhow::Result<Arc<EngineState>> {
+    /// `env` is shared: the V8 snapshot is built once per process, and outlives
+    /// any one project (see `session.rs`).
+    pub fn new(project: PathBuf, env: Arc<JsEnv>) -> anyhow::Result<Arc<EngineState>> {
         let store = Store::new();
         let kernel = Kernel::new(store.clone());
-        let env = Arc::new(JsEnv::new().map_err(|e| anyhow::anyhow!("js snapshot: {e}"))?);
         let build = BuildEngine::new(store, kernel, env, project);
         Ok(Arc::new(EngineState {
             build,
@@ -67,7 +72,38 @@ impl EngineState {
             queue: BuildQueue::default(),
             selection: Mutex::new(Vec::new()),
             wake: Mutex::new(None),
+            stopping: AtomicBool::new(false),
+            on_stop: Mutex::new(Vec::new()),
         }))
+    }
+
+    /// Retire this session: its server, build loop and watcher threads wind
+    /// down, and the state drops once they (and any open CLI connection) let
+    /// go. Only the viewer calls this, when opening another project.
+    pub fn stop(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        if let Some(pass) = self.queue.active.lock().unwrap().as_ref() {
+            pass.cancel();
+        }
+        self.queue.cv.notify_all();
+        let hooks: Vec<_> = self.on_stop.lock().unwrap().drain(..).collect();
+        for hook in hooks {
+            hook();
+        }
+    }
+
+    pub(crate) fn stopping(&self) -> bool {
+        self.stopping.load(Ordering::SeqCst)
+    }
+
+    /// Register a wake-up for `stop` to call — a loop blocked in `accept` or
+    /// `recv` can't see the flag on its own. Called immediately if already
+    /// stopping, so no thread starting up late can miss it.
+    pub(crate) fn on_stop(&self, hook: impl Fn() + Send + Sync + 'static) {
+        if self.stopping() {
+            return hook();
+        }
+        self.on_stop.lock().unwrap().push(Box::new(hook));
     }
 
     pub fn project(&self) -> &Path {
@@ -115,12 +151,15 @@ impl EngineState {
     }
 
     /// Background build loop: blocks on requests, builds, publishes.
-    /// Run on a dedicated thread; never returns.
-    pub fn run_build_loop(self: &Arc<Self>) -> ! {
+    /// Run on a dedicated thread; returns only once the session is stopped.
+    pub fn run_build_loop(self: &Arc<Self>) {
         loop {
             let t = {
                 let mut latest = self.queue.latest.lock().unwrap();
                 loop {
+                    if self.stopping() {
+                        return;
+                    }
                     match latest.take() {
                         Some(t) => break t,
                         None => latest = self.queue.cv.wait(latest).unwrap(),

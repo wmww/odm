@@ -8,6 +8,13 @@ impl EngineState {
     pub fn run_watcher(self: &Arc<Self>) {
         use notify::Watcher;
         let (tx, rx) = std::sync::mpsc::channel::<()>();
+        // `recv` below blocks forever otherwise; shutdown sends a spurious wake.
+        self.on_stop({
+            let tx = tx.clone();
+            move || {
+                let _ = tx.send(());
+            }
+        });
         let project = self.project().to_path_buf();
         let root = project.clone();
         let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -40,6 +47,9 @@ impl EngineState {
         while rx.recv().is_ok() {
             // Debounce: absorb the burst until 150 ms of quiet.
             while rx.recv_timeout(std::time::Duration::from_millis(150)).is_ok() {}
+            if self.stopping() {
+                return;
+            }
             let t = self.published().t;
             self.request_build(t);
         }

@@ -252,13 +252,13 @@ pub fn button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> Response {
     r
 }
 
-/// Side of the checkbox. Odd, so [`CHECK`] has a true center to sit on.
-const CHECK_BOX: f32 = 13.0;
-/// Gap between a box (checkbox, expander) and the label beside it.
+/// Gap between the expander box and the label beside it.
 const LABEL_GAP: f32 = 5.0;
 
 /// The era's checkmark, pixel for pixel: a short stroke down into a long one
-/// back up, both two pixels thick.
+/// back up, both two pixels thick. Painted rather than left to egui, whose
+/// tick is an anti-aliased polyline — the wrong side of the pixel grid
+/// everything else here sits on.
 const CHECK: [&str; 6] = [
     "      #", //
     "     ##", //
@@ -267,38 +267,6 @@ const CHECK: [&str; 6] = [
     " ###   ", //
     "  #    ", //
 ];
-
-/// Painted rather than left to egui, whose checkmark is an anti-aliased
-/// polyline — the wrong side of the pixel grid everything else here sits on.
-pub fn checkbox(ui: &mut Ui, on: &mut bool, text: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(UI_SIZE), TEXT);
-    let height = galley.size().y.max(CHECK_BOX).max(ui.spacing().interact_size.y);
-    let (rect, mut r) = ui.allocate_exact_size(
-        vec2(CHECK_BOX + LABEL_GAP + galley.size().x, height),
-        egui::Sense::click(),
-    );
-    if r.clicked() {
-        *on = !*on;
-        r.mark_changed();
-    }
-    let enabled = ui.is_enabled();
-    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, *on, text));
-
-    let mid = snap(ui, rect.center()).y;
-    let box_rect = Rect::from_min_size(
-        snap(ui, pos2(rect.left(), mid - CHECK_BOX / 2.0)),
-        Vec2::splat(CHECK_BOX),
-    );
-    let p = ui.painter();
-    p.rect_filled(box_rect, CornerRadius::ZERO, WINDOW);
-    bevel(p, box_rect, Bevel::Sunken);
-    if *on {
-        pixels(p, &CHECK, box_rect.min + vec2(3.0, 3.0), TEXT);
-    }
-    let text_pos = pos2(rect.left() + CHECK_BOX + LABEL_GAP, mid - galley.size().y / 2.0);
-    p.galley(snap(ui, text_pos), galley, TEXT);
-    r
-}
 
 /// A section that folds away under a clickable header, marked with the same
 /// boxed +/- the scene tree uses rather than a twisty.
@@ -515,6 +483,158 @@ pub fn status_field(ui: &mut Ui, text: impl Into<String>) {
     bevel(ui.painter(), res.response.rect, Bevel::ThinSunken);
 }
 
+// ----------------------------------------------------------------------------
+// Menus
+//
+// The one place the no-hover-feedback rule is off: a drop-down highlights the
+// item under the pointer, because that is how you read one while dragging
+// through it. Menu *titles* still don't — like the era's, they only light up
+// once their menu is open.
+
+/// Height of a drop-down row, and of the menu bar's own titles.
+const MENU_ROW: f32 = 18.0;
+/// Checkmark column, left of every item's label.
+const MENU_GUTTER: f32 = 15.0;
+/// Breathing room at the right of a menu.
+const MENU_PAD_X: f32 = 8.0;
+/// Minimum gap between a label and its shortcut.
+const MENU_SHORTCUT_GAP: f32 = 24.0;
+
+/// One line of a drop-down. `T` is whatever the caller wants handed back when
+/// the line is picked — usually a command enum.
+pub enum MenuEntry<'a, T> {
+    Item { id: T, text: &'a str, shortcut: Option<&'a str>, check: Option<bool> },
+    Separator,
+}
+
+impl<'a, T> MenuEntry<'a, T> {
+    /// A plain command.
+    pub fn item(id: T, text: &'a str) -> MenuEntry<'a, T> {
+        MenuEntry::Item { id, text, shortcut: None, check: None }
+    }
+
+    /// A command that shows a checkmark while `on`.
+    pub fn check(id: T, text: &'a str, on: bool) -> MenuEntry<'a, T> {
+        MenuEntry::Item { id, text, shortcut: None, check: Some(on) }
+    }
+
+    /// Right-aligned accelerator text. Purely a label: the key itself is the
+    /// caller's business.
+    pub fn shortcut(mut self, keys: &'a str) -> MenuEntry<'a, T> {
+        if let MenuEntry::Item { shortcut, .. } = &mut self {
+            *shortcut = Some(keys);
+        }
+        self
+    }
+
+    pub fn separator() -> MenuEntry<'a, T> {
+        MenuEntry::Separator
+    }
+}
+
+/// The bar itself. Put it in a top panel and fill it with [`menu`]s.
+pub fn menu_bar(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    egui::MenuBar::new()
+        .style(|style: &mut egui::Style| {
+            style.spacing.button_padding = vec2(7.0, 2.0);
+            style.spacing.item_spacing.x = 0.0;
+            for w in widget_states(&mut style.visuals) {
+                w.weak_bg_fill = Color32::TRANSPARENT;
+                w.bg_stroke = Stroke::NONE;
+            }
+        })
+        .ui(ui, add);
+}
+
+/// One menu on the bar. Returns the id of the entry the user picked.
+pub fn menu<T: Copy>(ui: &mut Ui, title: &str, entries: &[MenuEntry<'_, T>]) -> Option<T> {
+    let mut picked = None;
+    let (title_res, popup) = egui::containers::menu::MenuButton::new(title)
+        .ui(ui, |ui| picked = drop_down(ui, entries));
+    if let Some(popup) = popup {
+        // The popup's own frame is a flat 1px stroke; the era's menus have the
+        // same raised edge as a button, so paint one over it.
+        let painter = ui.ctx().layer_painter(popup.response.layer_id);
+        bevel(&painter, popup.response.rect, Bevel::Raised);
+        // An open menu's title reads as pressed in.
+        bevel(ui.painter(), title_res.rect, Bevel::Sunken);
+    }
+    picked
+}
+
+/// UI text laid out on one line, ready to paint or measure.
+fn label(ui: &Ui, text: &str) -> Arc<egui::Galley> {
+    ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(UI_SIZE), TEXT)
+}
+
+fn drop_down<T: Copy>(ui: &mut Ui, entries: &[MenuEntry<'_, T>]) -> Option<T> {
+    // Menus are as wide as their widest line: fix that up front so every row
+    // can fill the width (a highlight that stops at the text looks broken).
+    let mut width: f32 = 0.0;
+    for entry in entries {
+        if let MenuEntry::Item { text, shortcut, .. } = entry {
+            let mut w = MENU_GUTTER + label(ui, text).size().x + MENU_PAD_X;
+            if let Some(keys) = shortcut {
+                w += MENU_SHORTCUT_GAP + label(ui, keys).size().x;
+            }
+            width = width.max(w);
+        }
+    }
+    ui.set_min_width(width);
+    // Rows abut, as a menu's do.
+    ui.spacing_mut().item_spacing.y = 0.0;
+
+    let mut picked = None;
+    for entry in entries {
+        let (id, text, shortcut, check) = match entry {
+            MenuEntry::Separator => {
+                menu_separator(ui, width);
+                continue;
+            }
+            MenuEntry::Item { id, text, shortcut, check } => (id, text, shortcut, check),
+        };
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(width, MENU_ROW), egui::Sense::click());
+        let p = ui.painter();
+        if response.hovered() {
+            p.rect_filled(rect, CornerRadius::ZERO, ACCENT);
+        }
+        if *check == Some(true) {
+            pixels(p, &CHECK, snap(ui, pos2(rect.left() + 4.0, rect.center().y - 3.0)), TEXT);
+        }
+        let galley = label(ui, text);
+        let baseline =
+            snap(ui, pos2(rect.left() + MENU_GUTTER, rect.center().y - galley.size().y / 2.0));
+        ui.painter().galley(baseline, galley, TEXT);
+        if let Some(keys) = shortcut {
+            let galley = label(ui, keys);
+            let pos = snap(
+                ui,
+                pos2(rect.right() - MENU_PAD_X - galley.size().x, baseline.y),
+            );
+            ui.painter().galley(pos, galley, if response.hovered() { TEXT } else { WEAK_TEXT });
+        }
+        if response.clicked() {
+            picked = Some(*id);
+        }
+    }
+    picked
+}
+
+/// The etched rule between groups of menu items.
+fn menu_separator(ui: &mut Ui, width: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 7.0), egui::Sense::hover());
+    let y = snap(ui, rect.center()).y;
+    let (x0, x1) = (rect.left() + 2.0, rect.right() - 2.0);
+    let p = ui.painter();
+    p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + 1.0)), CornerRadius::ZERO, SHADOW);
+    p.rect_filled(
+        Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + 2.0)),
+        CornerRadius::ZERO,
+        HILIGHT,
+    );
+}
+
 /// Trackbar: egui's slider drives interaction, but paints nothing — the
 /// groove and handle are drawn here so they can carry real bevels.
 pub fn trackbar(ui: &mut Ui, value: &mut f64, range: RangeInclusive<f64>) -> Response {
@@ -549,5 +669,125 @@ pub fn trackbar(ui: &mut Ui, value: &mut f64, range: RangeInclusive<f64>) -> Res
     p.rect_filled(handle, CornerRadius::ZERO, FACE);
     bevel(p, handle, Bevel::Raised);
     r
+}
+
+// ----------------------------------------------------------------------------
+// Dialogs
+
+/// Title-bar height, and the side of the close box that sits in it.
+const TITLE_BAR: f32 = 18.0;
+
+pub struct DialogResponse<R> {
+    pub inner: R,
+    /// The close box, the backdrop, or Escape. Dismissal only — the dialog's
+    /// own buttons are up to `add`.
+    pub dismissed: bool,
+}
+
+/// A modal dialog, drawn as the era did: raised frame, filled title bar with a
+/// close box, contents below. Fixed width, because an auto-sizing modal can't
+/// tell its contents how wide to be until the frame after.
+pub fn dialog<R>(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    width: f32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> DialogResponse<R> {
+    let frame = egui::Frame::new().fill(FACE).inner_margin(Margin::same(4));
+    let res = egui::Modal::new(egui::Id::new(id))
+        .backdrop_color(Color32::from_black_alpha(64))
+        .frame(frame)
+        .show(ctx, |ui| {
+            ui.set_width(width);
+            let closed = title_bar(ui, title);
+            ui.add_space(4.0);
+            (closed, add(ui))
+        });
+    // Edges only, so painting after the contents can't cover them.
+    bevel(&ctx.layer_painter(res.response.layer_id), res.response.rect, Bevel::Raised);
+    let outside = res.should_close();
+    let (closed, inner) = res.inner;
+    DialogResponse { inner, dismissed: closed || outside }
+}
+
+/// Returns whether the close box was clicked.
+fn title_bar(ui: &mut Ui, title: &str) -> bool {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), TITLE_BAR), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::ZERO, ACCENT);
+    let galley = label(ui, title);
+    let pos = snap(ui, pos2(rect.left() + 4.0, rect.center().y - galley.size().y / 2.0));
+    ui.painter().galley(pos, galley, TEXT);
+
+    let side = TITLE_BAR - 4.0;
+    let box_rect = Rect::from_min_size(pos2(rect.right() - side - 2.0, rect.top() + 2.0), Vec2::splat(side));
+    let p = ui.painter();
+    p.rect_filled(box_rect, CornerRadius::ZERO, FACE);
+    bevel(p, box_rect, Bevel::Raised);
+    cross(p, box_rect.center(), TEXT);
+    ui.interact(box_rect, ui.id().with("close"), egui::Sense::click()).clicked()
+}
+
+/// The close box's ×: a 7×7 pixel cross centered on `at`.
+fn cross(p: &egui::Painter, at: Pos2, color: Color32) {
+    let origin = pos2((at.x - 3.0).round(), (at.y - 3.0).round());
+    let mut mesh = egui::Mesh::default();
+    for i in 0..7 {
+        let i = i as f32;
+        mesh.add_colored_rect(
+            Rect::from_min_size(pos2(origin.x + i, origin.y + i), Vec2::splat(1.0)),
+            color,
+        );
+        mesh.add_colored_rect(
+            Rect::from_min_size(pos2(origin.x + 6.0 - i, origin.y + i), Vec2::splat(1.0)),
+            color,
+        );
+    }
+    p.add(mesh);
+}
+
+/// Single-line text box: sunken client area, fixed width.
+///
+/// Deliberately no `TextEdit::frame`: setting one makes egui skip its own
+/// background and margins, which is how you get white-on-face text in a box
+/// too short for its descenders.
+pub fn text_edit(ui: &mut Ui, text: &mut String, width: f32) -> Response {
+    let r = ui
+        .scope(|ui| {
+            ui.visuals_mut().selection.stroke = Stroke::NONE;
+            ui.add(
+                egui::TextEdit::singleline(text)
+                    .desired_width(width)
+                    .margin(Margin::symmetric(3, 3))
+                    .background_color(WINDOW),
+            )
+        })
+        .inner;
+    bevel(ui.painter(), r.rect, Bevel::Sunken);
+    r
+}
+
+/// One line of a list box: icon, name, selection fill across the full width.
+pub fn list_row(ui: &mut Ui, icon: Icon, text: &str, selected: bool) -> Response {
+    const GAP: f32 = 4.0;
+    const PAD: Vec2 = Vec2 { x: 2.0, y: 2.0 };
+
+    let icon_size = icons::size(ui, icon);
+    let galley = label(ui, text);
+    let height = PAD.y * 2.0 + galley.size().y.max(icon_size.y);
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    if selected {
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, ACCENT);
+    }
+    let left = rect.left() + PAD.x;
+    let mid = snap(ui, rect.center()).y;
+    icons::paint(ui, icon, pos2(left, mid - icon_size.y / 2.0), Color32::WHITE);
+    let pos = snap(ui, pos2(left + icon_size.x + GAP, mid - galley.size().y / 2.0));
+    ui.painter().galley(pos, galley, TEXT);
+    response
 }
 

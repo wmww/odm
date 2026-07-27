@@ -17,13 +17,23 @@ pub enum Icon {
     Empty,
     /// A node that carries a mesh.
     Mesh,
+    /// A plain directory, in the Open dialog.
+    Folder,
+    /// A directory that is an ODM project.
+    Project,
 }
+
+/// Every icon, for the tests and nothing else.
+#[cfg(test)]
+const ALL: [Icon; 4] = [Icon::Empty, Icon::Mesh, Icon::Folder, Icon::Project];
 
 impl Icon {
     fn name(self) -> &'static str {
         match self {
             Icon::Empty => "empty",
             Icon::Mesh => "mesh",
+            Icon::Folder => "folder",
+            Icon::Project => "project",
         }
     }
 
@@ -31,6 +41,8 @@ impl Icon {
         match self {
             Icon::Empty => include_bytes!("../assets/icons/empty.png"),
             Icon::Mesh => include_bytes!("../assets/icons/mesh.png"),
+            Icon::Folder => include_bytes!("../assets/icons/folder.png"),
+            Icon::Project => include_bytes!("../assets/icons/project.png"),
         }
     }
 }
@@ -102,7 +114,7 @@ mod tests {
     /// text without being a lone stray pixel.
     #[test]
     fn art_is_well_formed() {
-        for icon in [Icon::Empty, Icon::Mesh] {
+        for icon in ALL {
             let image = decode(icon.png());
             let [w, h] = [image.width(), image.height()];
             assert!((4..=16).contains(&w) && (4..=16).contains(&h), "{}: {w}x{h}", icon.name());

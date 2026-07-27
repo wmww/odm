@@ -3,9 +3,12 @@
 //! last published scene with a building indicator.
 
 mod idle;
+mod menu;
+mod open;
 mod tree;
 
 use crate::scene;
+use crate::session::Sessions;
 use crate::state::{EngineState, Published};
 use crate::theme;
 use eframe::egui;
@@ -16,6 +19,8 @@ use odm_render::{
 };
 use odm_store::Object;
 use std::sync::Arc;
+
+use idle::Quit;
 use tree::{TreeNode, TreeState, TreeUi, click_selection, selection_covers, tree_node_ui};
 
 pub use idle::run_viewer;
@@ -107,6 +112,8 @@ struct SceneCache {
 }
 
 pub struct ViewerApp {
+    sessions: Arc<Sessions>,
+    /// The project being viewed. Swapped wholesale by File ▸ Open.
     state: Arc<EngineState>,
     renderer: Renderer,
     published: Published,
@@ -123,18 +130,22 @@ pub struct ViewerApp {
     tree: TreeState,
     needs_render: bool,
     error_open: bool,
+    open_dialog: Option<open::OpenDialog>,
+    /// File ▸ Exit; acted on by the event loop (see `idle.rs`).
+    quit: Quit,
 }
 
 impl ViewerApp {
-    fn new(cc: &eframe::CreationContext<'_>, state: Arc<EngineState>) -> ViewerApp {
+    fn new(cc: &eframe::CreationContext<'_>, sessions: Arc<Sessions>, quit: Quit) -> ViewerApp {
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu render state (eframe wgpu backend)");
         let renderer = Renderer::with_device(rs.device.clone(), rs.queue.clone());
         theme::install(&cc.egui_ctx);
         // Repaint on publish instead of polling: an idle viewer must not wake up.
         let ctx = cc.egui_ctx.clone();
-        state.set_wake(Arc::new(move || ctx.request_repaint()));
+        sessions.set_wake(Arc::new(move || ctx.request_repaint()));
         ViewerApp {
-            state,
+            state: sessions.current(),
+            sessions,
             renderer,
             published: Published::default(),
             scene: None,
@@ -149,6 +160,33 @@ impl ViewerApp {
             tree: TreeState::default(),
             needs_render: true,
             error_open: true,
+            open_dialog: None,
+            quit,
+        }
+    }
+
+    /// Point the whole viewer at another project: new engine, blank slate. The
+    /// camera reframes on the first build, as it does at startup.
+    fn open_project(&mut self, project: &std::path::Path, ctx: &egui::Context) -> Result<(), String> {
+        self.state = self.sessions.open(project)?;
+        self.published = Published::default();
+        self.scene = None;
+        self.framed = false;
+        self.t = 0.0;
+        self.scrubbing_t = 0.0;
+        self.tree = TreeState::default();
+        self.error_open = true;
+        self.set_selection(Vec::new());
+        // Nothing of the old project should still be resident, or on screen.
+        self.renderer.prune_cache(&|_| false);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.state.project())));
+        Ok(())
+    }
+
+    fn frame_scene(&mut self) {
+        if let Some(scene) = &self.scene {
+            self.orbit = Orbit::framed(scene.scene.bounds);
+            self.needs_render = true;
         }
     }
 
@@ -280,8 +318,25 @@ impl ViewerApp {
     }
 
     fn render_viewport(&mut self) {
-        let (Some(tex), Some(scene)) = (&self.tex, &self.scene) else { return };
+        let Some(tex) = &self.tex else { return };
         let opts = self.view_opts(tex.size);
+        // No build yet (startup, or a project just opened): draw the empty
+        // scene, so the previous project isn't left on screen.
+        let empty;
+        let Some(scene) = &self.scene else {
+            empty = RenderScene { instances: Vec::new(), meshes: Default::default(), bounds: None };
+            if let Err(e) = self.renderer.render_to_views(
+                &empty,
+                &opts,
+                &tex.msaa_view,
+                &tex.resolve_view,
+                &tex.depth_view,
+            ) {
+                eprintln!("viewport render failed: {e}");
+            }
+            self.needs_render = false;
+            return;
+        };
 
         // Highlight the selected instances by brightening their color.
         let highlighted;
@@ -389,11 +444,13 @@ impl ViewerApp {
                 self.needs_render = true;
             }
         }
-        if ui.input(|i| i.key_pressed(egui::Key::F))
-            && let Some(scene) = &self.scene
+        // Not while a dialog is up or a field has the caret — "F" is a letter
+        // in a path before it is a shortcut.
+        if self.open_dialog.is_none()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input(|i| i.key_pressed(egui::Key::F))
         {
-            self.orbit = Orbit::framed(scene.scene.bounds);
-            self.needs_render = true;
+            self.frame_scene();
         }
         if response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
@@ -488,19 +545,6 @@ impl ViewerApp {
 
     fn bottom_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if theme::button(ui, "Frame (F)").clicked()
-                && let Some(scene) = &self.scene
-            {
-                self.orbit = Orbit::framed(scene.scene.bounds);
-                self.needs_render = true;
-            }
-            if theme::checkbox(ui, &mut self.wireframe, "Wireframe").changed() {
-                self.needs_render = true;
-            }
-            if theme::checkbox(ui, &mut self.grid, "Grid").changed() {
-                self.needs_render = true;
-            }
-            ui.add_space(4.0);
             theme::status_field(ui, format!("gen {}", self.published.generation));
             if self.published.building {
                 theme::status_field(ui, "Building…");
@@ -544,6 +588,10 @@ impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.poll_published(ui.ctx());
 
+        let menu = egui::Panel::top("menubar")
+            .frame(egui::Frame::new().fill(theme::FACE).inner_margin(egui::Margin::symmetric(2, 1)))
+            .show(ui, |ui| menu::bar(self, ui));
+        theme::band(ui, menu.response.rect);
         let left = egui::Panel::left("tree")
             .resizable(true)
             .default_size(240.0)
@@ -560,6 +608,23 @@ impl eframe::App for ViewerApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| self.viewport_ui(ui, frame));
+
+        // Last, so the modal's backdrop covers everything above. Taken out of
+        // `self` for the call, since opening a project touches all of it.
+        if let Some(mut dialog) = self.open_dialog.take() {
+            match dialog.ui(ui.ctx()) {
+                open::Outcome::Idle => self.open_dialog = Some(dialog),
+                open::Outcome::Cancelled => {}
+                open::Outcome::Open(project) => {
+                    // A project the engine won't take leaves the dialog up,
+                    // saying why, rather than closing over the failure.
+                    if let Err(e) = self.open_project(&project, ui.ctx()) {
+                        dialog.report(e);
+                        self.open_dialog = Some(dialog);
+                    }
+                }
+            }
+        }
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -569,4 +634,10 @@ impl eframe::App for ViewerApp {
 
 fn scrub_eq(a: f64, b: f64) -> bool {
     (a - b).abs() < 1e-9
+}
+
+/// Window title for a project. Re-applied whenever File ▸ Open swaps one in.
+fn window_title(project: &std::path::Path) -> String {
+    let name = project.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    format!("ODM — {name}")
 }

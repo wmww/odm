@@ -7,45 +7,33 @@ mod commands;
 mod icons;
 mod scene;
 mod server;
+mod session;
 mod state;
 mod theme;
 mod viewer;
 mod watcher;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Serve `project` until the socket server dies (headless) or the viewer window
 /// closes. `project` must already be canonical.
 pub fn run(project: PathBuf, headless: bool) -> anyhow::Result<()> {
-    let state = state::EngineState::new(project.clone())
-        .map_err(|e| anyhow::anyhow!("engine startup failed: {e}"))?;
-
-    let sock = project.join(".odm/engine.sock");
     if headless {
-        return server::serve(state, &sock);
+        // One project, no viewer to switch it: no session machinery needed.
+        let env = Arc::new(
+            odm_js::JsEnv::new().map_err(|e| anyhow::anyhow!("js snapshot: {e}"))?,
+        );
+        let state = state::EngineState::new(project.clone(), env)
+            .map_err(|e| anyhow::anyhow!("engine startup failed: {e}"))?;
+        return server::serve(state, &project.join(".odm/engine.sock"));
     }
 
-    // Viewer mode: socket server + build loop + file watcher on background
-    // threads, eframe on the main thread.
-    {
-        let state = state.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = server::serve(state, &sock) {
-                eprintln!("server error: {e}");
-            }
-        });
-    }
-    {
-        let state = state.clone();
-        std::thread::spawn(move || state.run_build_loop());
-    }
-    {
-        let state = state.clone();
-        std::thread::spawn(move || state.run_watcher());
-    }
-    state.request_build(0.0);
-
-    viewer::run_viewer(state).map_err(|e| anyhow::anyhow!("viewer error: {e}"))?;
+    // Viewer mode: each project's server, build loop and watcher live on
+    // background threads (see session.rs), eframe on the main thread.
+    let sessions = session::Sessions::start(project)
+        .map_err(|e| anyhow::anyhow!("engine startup failed: {e}"))?;
+    viewer::run_viewer(sessions).map_err(|e| anyhow::anyhow!("viewer error: {e}"))?;
     // eframe returned (window closed): exit, taking server threads with us.
     std::process::exit(0);
 }

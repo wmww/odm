@@ -8,7 +8,9 @@ background to within 1/255). Full color and alpha work; art is drawn untinted.
 
 Currently `empty` (a node with no geometry of its own — gray axes gizmo) and
 `mesh` (a node carrying one — solid isometric cube in cyan), drawn left of each
-scene-tree name.
+scene-tree name; plus `folder` (a plain directory) and `project` (the same
+folder with `mesh`'s cyan cube on it), drawn left of each row of the File ▸ Open
+dialog.
 
 ## Editing
 
@@ -44,9 +46,11 @@ one.
 ## Adding an icon
 
 1. Put `<name>.png` here.
-2. Add an `Icon` variant in `icons.rs` plus arms in `name()` and `png()`.
-3. Draw it with `theme::tree_row` (icon + label + click target), or
-   `icons::paint` for a bare icon at a position.
+2. Add an `Icon` variant in `icons.rs` plus arms in `name()` and `png()`, and
+   list it in `ALL` so the unit test covers it.
+3. Draw it with `theme::tree_row` (nesting gutter + icon + label) or
+   `theme::list_row` (icon + label), or `icons::paint` for a bare icon at a
+   position.
 
 Keep to 11×11 (the unit test allows 4–16): a whole number of pixels, about the
 cap height of the 14px UI font, so it sits level with a line of text. Colors must
