@@ -1,44 +1,27 @@
 ## Overview
 ODM is a CAD/3D modeling/animation framework and toolset for LLM agents. The agent writes JavaScript code to construct 3D models, and uses tools to inspect them. A long-running engine/viewer program allows the user to interact with the project and give the agent instructions. This repo contains the *implementation* of ODM, meaning it has the tools, prompts etc needed to make this all work.
 
-## Workflow
-- ODM is itself agent-built. You own the code.
-- Refactor freely as needed. don't trust that existing code/comments/notes are necessarily correct, or existing design decisions are optimal.
-- Only commit or push when explicitly asked. Git push may hang without user approval.
-- Do not run formatting tools like `cargo fmt` unless explicitly asked.
-- Keep prose, comments, errors, and commit messages short unless extra detail is genuinely useful.
-
-## Running the viewer
-Always use `--headless` when running `odm run`, unless explicitly asked or you're
-running inside a headless session (see below). The ODM CLI has enough tools to
-check most things to do with rendering and the 3D scene; the main thing you can't
-see with it is UI. For that, use the **gui-testing** skill — it starts a private
-headless Wayland session you can screenshot and inject input into:
-
-```sh
-cargo build --bins
-DIR=$(/abs/path/to/gui-testing/guibox start -- ./target/debug/odm run examples/hello-bracket)
-. $DIR/env                              # needed in every later shell
-grim $DIR/1.png                         # screenshot, then read it
-wdotool mousemove 336 705 click 1       # toggle the Wireframe box
-$GUIBOX stop $DIR                       # tears down the session and the pngs
-```
-
-The skill is declared in `.claude/settings.json`; if it isn't installed, install
-it from https://github.com/wmww/agent-skills. Read its SKILL.md for the details.
-ODM-specific quirks are in notes/architecture.md ("Seeing the viewer") — notably
-that anything holding a button or modifier (orbit, pan, shift-select) needs one
-chained `wdotool` call **with real gaps in it**, and that the first scroll of a
-session is swallowed.
-
 ## Notes
-The `notes/` directory contains your persistent notes about the project state. Create/edit/rename/split/delete notes as needed (without being asked) to keep them correct and maximally useful to you. Keep `notes/README.md` up to date with an index of what is where.
+The `notes/` directory contains your persistent notes about the project state. Create/edit/rename/split/delete notes as needed (without being asked) to keep them correct and maximally useful to you. Keep notes concise, remove parts or whole notes that are unimportant or obvious. Keep `notes/README.md` up to date with an index of what is where.
 
 ## Issues
 Issues live in `issues/`. Do not solve them unless asked or the fix falls out of current work. Create/update issues for nontrivial problems discovered during other work. Delete confirmed-solved issues (move still-useful context into notes first).
 
 ## Plans
 Future plans live in `plans/`. Do not execute them unless asked, or write new plans unless asked. Like issues, delete them and integrate their contents into your notes when they are complete.
+
+## Workflow
+- This project is agent-built, you own the code.
+- Refactor freely as needed. don't trust that existing code/comments/notes are necessarily correct, or existing design decisions are optimal.
+- Only git commit when asked.
+- Only pull/push when explicitly asked. Git push may hang without user approval.
+- Commit to the current branch unless asked, don't make feature branches.
+- Do not run code formatting tools unless explicitly asked.
+- Keep prose, comments, errors, and commit messages short unless extra detail is genuinely useful.
+- Avoid opening windows in the user's desktop, to test, interact with and screenshot GUI apps use the gui-testing skill from https://github.com/wmww/agent-skills.
+
+## Running the engine
+Use `odm run --headless` by default. This will allow you to interact with the engine and take 3D renders with the CLI. Only run the viewer if you need to screenshot/test the UI, and use the gui-testing skill when you do.
 
 ## High-level Architecture
 The core code is implemented in simple, safe Rust. Examples and projects using ODM are written in JavaScript.
