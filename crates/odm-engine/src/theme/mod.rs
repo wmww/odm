@@ -12,6 +12,10 @@
 //! edge) but inverted in luminance: the face is dark and text is white, so
 //! the light edge is a mid gray rather than white.
 
+mod scroll;
+
+pub use scroll::list_box;
+
 use crate::icons::{self, Icon};
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontFamily, FontId, FontTweak, Margin, Pos2, Rect,
@@ -110,12 +114,12 @@ fn fonts() -> egui::FontDefinitions {
     let faces = [
         (
             "odm-sans-14",
-            include_bytes!("../assets/fonts/odm-sans-14.ttf") as &[u8],
+            include_bytes!("../../assets/fonts/odm-sans-14.ttf") as &[u8],
             FontFamily::Proportional,
         ),
         (
             "odm-mono-14",
-            include_bytes!("../assets/fonts/odm-mono-14.ttf") as &[u8],
+            include_bytes!("../../assets/fonts/odm-mono-14.ttf") as &[u8],
             FontFamily::Monospace,
         ),
     ];
@@ -156,24 +160,12 @@ fn apply(style: &mut egui::Style) {
     s.slider_width = 180.0;
     s.window_margin = Margin::same(4);
     s.menu_margin = Margin::same(2);
+    // How egui's own bars look is moot — `scroll::list_box` hides them and
+    // paints the era's instead. What is left: no soft gradient at the edges.
     s.scroll = ScrollStyle {
-        floating: false,
         content_margin: Margin::ZERO,
-        bar_width: 15.0,
-        handle_min_length: 12.0,
-        bar_inner_margin: 0.0,
-        bar_outer_margin: 0.0,
-        floating_width: 2.0,
-        floating_allocated_width: 0.0,
-        foreground_color: false,
-        dormant_background_opacity: 1.0,
-        active_background_opacity: 1.0,
-        interact_background_opacity: 1.0,
-        dormant_handle_opacity: 1.0,
-        active_handle_opacity: 1.0,
-        interact_handle_opacity: 1.0,
-        // No soft gradient at the scroll edges.
         fade: ScrollFadeStyle { strength: 0.0, size: 0.0 },
+        ..Default::default()
     };
 
     let v = &mut style.visuals;
@@ -260,28 +252,98 @@ pub fn button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> Response {
     r
 }
 
+/// Side of the checkbox. Odd, so [`CHECK`] has a true center to sit on.
+const CHECK_BOX: f32 = 13.0;
+/// Gap between a box (checkbox, expander) and the label beside it.
+const LABEL_GAP: f32 = 5.0;
+
+/// The era's checkmark, pixel for pixel: a short stroke down into a long one
+/// back up, both two pixels thick.
+const CHECK: [&str; 6] = [
+    "      #", //
+    "     ##", //
+    "#   ## ", //
+    "## ##  ", //
+    " ###   ", //
+    "  #    ", //
+];
+
+/// Painted rather than left to egui, whose checkmark is an anti-aliased
+/// polyline — the wrong side of the pixel grid everything else here sits on.
 pub fn checkbox(ui: &mut Ui, on: &mut bool, text: &str) -> Response {
-    let r = ui
-        .scope(|ui| {
-            for w in widget_states(ui.visuals_mut()) {
-                w.bg_fill = WINDOW;
-            }
-            ui.checkbox(on, text)
-        })
-        .inner;
-    // egui centers the box vertically at the left edge of the response rect.
-    let w = ui.spacing().icon_width;
-    let box_rect =
-        Rect::from_center_size(pos2(r.rect.left() + w / 2.0, r.rect.center().y), Vec2::splat(w));
-    bevel(ui.painter(), box_rect, Bevel::Sunken);
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(UI_SIZE), TEXT);
+    let height = galley.size().y.max(CHECK_BOX).max(ui.spacing().interact_size.y);
+    let (rect, mut r) = ui.allocate_exact_size(
+        vec2(CHECK_BOX + LABEL_GAP + galley.size().x, height),
+        egui::Sense::click(),
+    );
+    if r.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+    let enabled = ui.is_enabled();
+    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, *on, text));
+
+    let mid = snap(ui, rect.center()).y;
+    let box_rect = Rect::from_min_size(
+        snap(ui, pos2(rect.left(), mid - CHECK_BOX / 2.0)),
+        Vec2::splat(CHECK_BOX),
+    );
+    let p = ui.painter();
+    p.rect_filled(box_rect, CornerRadius::ZERO, WINDOW);
+    bevel(p, box_rect, Bevel::Sunken);
+    if *on {
+        pixels(p, &CHECK, box_rect.min + vec2(3.0, 3.0), TEXT);
+    }
+    let text_pos = pos2(rect.left() + CHECK_BOX + LABEL_GAP, mid - galley.size().y / 2.0);
+    p.galley(snap(ui, text_pos), galley, TEXT);
     r
 }
 
-/// A sunken client area — list boxes, text panes.
-pub fn field<R>(ui: &mut Ui, fill: Color32, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let res = egui::Frame::new().fill(fill).inner_margin(Margin::same(3)).show(ui, add);
-    bevel(ui.painter(), res.response.rect, Bevel::Sunken);
-    res.inner
+/// A section that folds away under a clickable header, marked with the same
+/// boxed +/- the scene tree uses rather than a twisty.
+pub fn collapsing<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    open: &mut bool,
+    header: &str,
+    color: Color32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let galley = ui.painter().layout_no_wrap(header.to_owned(), FontId::proportional(UI_SIZE), color);
+    let height = galley.size().y.max(EXPANDER).max(ui.spacing().interact_size.y);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
+
+    let mid = snap(ui, rect.center()).y;
+    let center = pos2(snap(ui, pos2(rect.left() + EXPANDER / 2.0, 0.0)).x, mid);
+    let box_rect = expander_box(ui.painter(), center, *open);
+    let text_pos = pos2(box_rect.right() + LABEL_GAP, mid - galley.size().y / 2.0);
+    let width = galley.size().x;
+    ui.painter().galley(snap(ui, text_pos), galley, color);
+
+    // The header is one click target, but no wider than what it draws.
+    let hit = Rect::from_min_max(rect.min, pos2(text_pos.x + width, rect.max.y));
+    if ui.interact(hit, ui.id().with(id_salt), egui::Sense::click()).clicked() {
+        *open = !*open;
+    }
+    (*open).then(|| add(ui))
+}
+
+/// Paint a pixel-art glyph — rows of `#` — with its top-left at `pos`.
+///
+/// A `Mesh`, not rects: egui replaces a rect thinner than 2px with a feathered
+/// line segment, which is not what a one-pixel row of art should look like.
+fn pixels(p: &egui::Painter, rows: &[&str], pos: Pos2, color: Color32) {
+    let mut mesh = egui::Mesh::default();
+    for (y, row) in rows.iter().enumerate() {
+        for (x, c) in row.bytes().enumerate() {
+            if c == b'#' {
+                let min = pos2(pos.x + x as f32, pos.y + y as f32);
+                mesh.add_colored_rect(Rect::from_min_size(min, Vec2::splat(1.0)), color);
+            }
+        }
+    }
+    p.add(mesh);
 }
 
 /// Snap a position to whole physical pixels. Bitmap art (icons, text) placed
@@ -376,27 +438,32 @@ pub fn tree_row(ui: &mut Ui, id: egui::Id, row: TreeRow<'_>, text: &str) -> Tree
 
     // Painted last: the box is opaque, and covers the lines it sits on.
     let expander = row.expander.map(|open| {
-        let half = (EXPANDER / 2.0).floor();
-        let box_rect =
-            Rect::from_min_size(pos2(col(row.depth) - half, mid - half), Vec2::splat(EXPANDER));
-        let p = ui.painter();
-        p.rect_filled(box_rect, CornerRadius::ZERO, WINDOW);
-        edges(p, box_rect, TREE_LINE, TREE_LINE);
-        let bar = |w: f32, h: f32| {
-            p.rect_filled(
-                Rect::from_min_size(pos2(col(row.depth) - w, mid - h), vec2(w * 2.0 + 1.0, h * 2.0 + 1.0)),
-                CornerRadius::ZERO,
-                TEXT,
-            )
-        };
-        bar(2.0, 0.0);
-        if !open {
-            bar(0.0, 2.0);
-        }
+        let box_rect = expander_box(ui.painter(), pos2(col(row.depth), mid), open);
         ui.interact(box_rect, id.with("expander"), egui::Sense::click())
     });
 
     TreeRowResponse { row: ui.interact(label_rect, id.with("row"), egui::Sense::click()), expander }
+}
+
+/// The boxed `+`/`-` of the era's tree controls, centered on `center` (which
+/// must be a whole pixel). Returns the box it drew, for hit-testing.
+fn expander_box(p: &egui::Painter, center: Pos2, open: bool) -> Rect {
+    let half = (EXPANDER / 2.0).floor();
+    let rect = Rect::from_min_size(center - Vec2::splat(half), Vec2::splat(EXPANDER));
+    p.rect_filled(rect, CornerRadius::ZERO, WINDOW);
+    edges(p, rect, TREE_LINE, TREE_LINE);
+    // A `Mesh`, as in `pixels`: the bars are one pixel thick.
+    let mut mesh = egui::Mesh::default();
+    let bar = |mesh: &mut egui::Mesh, w: f32, h: f32| {
+        let size = vec2(w * 2.0 + 1.0, h * 2.0 + 1.0);
+        mesh.add_colored_rect(Rect::from_min_size(center - vec2(w, h), size), TEXT);
+    };
+    bar(&mut mesh, 2.0, 0.0);
+    if !open {
+        bar(&mut mesh, 0.0, 2.0);
+    }
+    p.add(mesh);
+    rect
 }
 
 /// Dotted 1px rules, as the era's tree controls drew them. Dots land on a
@@ -467,7 +534,9 @@ pub fn trackbar(ui: &mut Ui, value: &mut f64, range: RangeInclusive<f64>) -> Res
     let groove =
         Rect::from_center_size(pos2(rect.center().x, rect.center().y), vec2(rect.width(), 4.0));
     let p = ui.painter();
-    p.rect_filled(groove, CornerRadius::ZERO, FACE);
+    // The groove is a channel cut into the panel, so it is filled dark rather
+    // than in the face color.
+    p.rect_filled(groove, CornerRadius::ZERO, TROUGH);
     bevel(p, groove, Bevel::ThinSunken);
 
     let span = rect.x_range().shrink(handle_radius * HANDLE_ASPECT);

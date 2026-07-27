@@ -33,6 +33,10 @@ const FOV_Y_DEG: f64 = 45.0;
 /// How far from a wire a click still counts, in UI points.
 const PICK_RADIUS_PT: f64 = 6.0;
 
+/// Height of the build-error pane. Fixed, so opening one does not resize the
+/// panel as the message grows.
+const ERROR_HEIGHT: f32 = 140.0;
+
 impl Orbit {
     fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
         let (center, radius) = match bounds {
@@ -526,15 +530,10 @@ impl ViewerApp {
 
         if let Some(err) = &self.published.error {
             let err = err.clone();
-            egui::CollapsingHeader::new(
-                egui::RichText::new("Build error").color(theme::ERROR),
-            )
-            .default_open(self.error_open)
-            .show(ui, |ui| {
-                theme::field(ui, theme::WINDOW, |ui| {
-                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                        ui.label(egui::RichText::new(err).monospace());
-                    });
+            theme::collapsing(ui, "build-error", &mut self.error_open, "Build error", theme::ERROR, |ui| {
+                let size = egui::vec2(ui.available_width(), ERROR_HEIGHT);
+                theme::list_box(ui, "error", size, egui::Vec2b::new(false, true), |ui| {
+                    ui.label(egui::RichText::new(err).monospace());
                 });
             });
         }
@@ -550,11 +549,8 @@ impl eframe::App for ViewerApp {
             .default_size(240.0)
             .frame(theme::panel_frame())
             .show(ui, |ui| {
-                theme::field(ui, theme::WINDOW, |ui| {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| self.tree_ui(ui));
-                });
+                let size = ui.available_size();
+                theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| self.tree_ui(ui));
             });
         theme::band(ui, left.response.rect);
         let bottom = egui::Panel::bottom("timeline")

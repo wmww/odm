@@ -105,18 +105,22 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   layer: a serde-tagged `Request` enum with `deny_unknown_fields`, so a
   typo'd command *or* option is an error, plus `CmdError`→JSON),
   `watcher.rs`, `server.rs`, `viewer/` (`mod.rs` app + viewport, `idle.rs`
-  event loop, `tree.rs` scene tree), `scene.rs`, `theme.rs`, `icons.rs`.
-  `theme.rs` holds the viewer's dark Windows 95
+  event loop, `tree.rs` scene tree), `scene.rs`, `theme/`, `icons.rs`.
+  `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`, `checkbox`,
-  `field`, `trackbar`, …) that paint two-tone 3D bevels — egui's
-  `WidgetVisuals` has one uniform `bg_stroke`, so bevels can't be themed and
-  must be drawn over each widget's rect. Prefer these wrappers over bare
-  `ui.button`/`ui.checkbox`/`egui::Slider` in viewer code. Two standing rules:
+  `collapsing`, `list_box`, `trackbar`, …) that paint two-tone 3D bevels —
+  egui's `WidgetVisuals` has one uniform `bg_stroke`, so bevels can't be
+  themed and must be drawn over each widget's rect. Prefer these wrappers over
+  bare `ui.button`/`ui.checkbox`/`egui::ScrollArea`/`egui::CollapsingHeader`/
+  `egui::Slider` in viewer code — egui's own are all off-theme (rounded, hover
+  lit, anti-aliased glyphs, twisty arrows). Two standing rules:
   no animation (`animation_time = 0`, `ScrollAnimation::none()`, no scroll-edge
   fade, no busy spinner — state changes snap), and no hover feedback.
   Text is bundled bitmap fonts and tree icons are bundled pixel art, not system
-  ones — see "Viewer fonts" and "Viewer icons" below.
+  ones — see "Viewer fonts" and "Viewer icons" below; small glyphs that are not
+  worth a file (the checkmark, scrollbar arrows, the tree's +/-) are painted
+  from `theme::pixels`/`theme::arrow` as a `Mesh`. See "Scrollbars" below.
 - `odm-cli` — client commands: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
   from `ok`. Also owns `find_project` (the walk-up), which `run` reuses.
@@ -190,6 +194,33 @@ children. Consequences:
   a live viewer also works, but only as a chained call (see "Seeing the
   viewer").
 
+### Scrollbars
+
+`theme/scroll.rs`. egui's scrollbar can't be themed (one uniform `bg_stroke`,
+so no bevel) and has no arrow buttons, so `theme::list_box` — the sunken well
+every scrolling pane lives in — hides egui's bar and paints the era's:
+square arrow buttons, a 50% dithered trough, a raised handle. egui still owns
+the scrolling; we read `ScrollAreaOutput` and write `State::offset` back.
+Consequences:
+
+- The bar is always present on an axis it was given, graying its arrows when
+  there is nothing to scroll. That means the pane's size is fixed by the
+  caller (`ERROR_HEIGHT` for the error pane), not by its contents.
+- The trough is a 2×2 texture with `TextureWrapMode::Repeat`, uv'd from screen
+  pixels so it lands on the same checkerboard as the tree's dots. A mesh of
+  single pixels would be thousands of rects for one tall bar.
+- The handle is registered *after* the trough so that egui's hit test gives a
+  press on both to the handle. Dragging maps pointer→offset absolutely
+  (`handle_span`/`offset_at`), so the handle stays under the grabbed point
+  after the offset clamps at an end.
+- Arrows and trough auto-repeat while held (`pressed`), and fire once on a
+  click whose press and release land in the same frame — with repaint-on-demand
+  a quick click really is one frame.
+- `theme::scroll::tests` drives all of this through a headless
+  `egui::Context`, like the tree tests. The GUI harness *cannot*: wdotool
+  delivers a whole press-move-release chain inside one frame, so an injected
+  drag never registers. Screenshot the look there, test behavior in unit tests.
+
 ## Invariants & policies
 
 - Consistency: every published result is byte-equivalent to a from-scratch
@@ -207,8 +238,9 @@ children. Consequences:
 ## Testing
 
 `cargo test` runs everything in ~1s after compile. Almost all tests are
-integration tests in `crates/*/tests/`; the only unit tests in `src/` are in
-`odm-render/src/grid.rs` and `odm-engine/src/icons.rs`.
+integration tests in `crates/*/tests/`; the unit tests in `src/` are
+`odm-render/src/grid.rs` and, in odm-engine, `icons.rs`, `commands.rs`,
+`viewer/tree.rs` and `theme/scroll.rs`.
 
 Manifests suppress empty harness output: `doctest = false` on every lib (we
 write no doctests, and `odm-js` otherwise inherits an ignored one from a
