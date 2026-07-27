@@ -29,15 +29,20 @@ fn stacked_scene() -> (std::sync::Arc<Store>, odm_ir::Hash) {
     let kernel = odm_kernel::Kernel::new(store.clone());
     let big = kernel.cube(4.0, 4.0, 4.0, true).unwrap();
     let small = kernel.cube(0.6, 0.6, 0.6, true).unwrap();
+    let child = |n: Node| store.put(Object::Node(n));
     let root = Node {
         children: vec![
-            Node { mesh: Some(big), ..Default::default() },
-            Node {
+            child(Node { mesh: Some(big), ..Default::default() }),
+            child(Node {
                 mesh: Some(small),
                 transform: translated(1.0, -0.3, -5.0),
                 ..Default::default()
-            },
-            Node { mesh: Some(big), transform: translated(0.0, 0.0, -10.0), ..Default::default() },
+            }),
+            child(Node {
+                mesh: Some(big),
+                transform: translated(0.0, 0.0, -10.0),
+                ..Default::default()
+            }),
         ],
         ..Default::default()
     };

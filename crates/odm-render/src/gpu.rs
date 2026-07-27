@@ -238,7 +238,7 @@ impl Renderer {
             data[base + 64..base + 80].copy_from_slice(bytemuck::cast_slice(color));
         }
         for (i, inst) in scene.instances.iter().enumerate() {
-            write_slot(&mut inst_data, stride, i, &inst.transform, &inst.color);
+            write_slot(&mut inst_data, stride, i, &math::to_f32_cols(&inst.world), &inst.color);
         }
         let identity = math::to_f32_cols(&math::IDENTITY);
         let grid_minor_slot = n_inst;

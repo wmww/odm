@@ -1,12 +1,28 @@
 //! Converts the IR JSON tree produced by the framework's `toIRNode` into
-//! `odm_ir::Node`, validating geometry handles against the store.
+//! stored `odm_ir::Node`s, validating geometry/subtree handles against the
+//! store. Every node is interned; the caller gets the root's hash.
 
 use odm_ir::{Color, Hash, Node, Transform};
 use odm_store::{Object, Store};
 use serde_json::Value;
 
-pub fn node_from_json(store: &Store, v: &Value) -> Result<Node, String> {
+/// Intern a JSON node (and its subtree) and return its hash. `{"ref": hex}`
+/// with no other keys is an already-stored subtree (from `ctx.invoke`).
+pub fn node_from_json(store: &Store, v: &Value) -> Result<Hash, String> {
     let obj = v.as_object().ok_or_else(|| format!("scene node must be an object, got {v}"))?;
+
+    if let Some(r) = obj.get("ref") {
+        if obj.len() != 1 {
+            return Err(format!("a subtree ref node must have no other keys, got {v}"));
+        }
+        let hex = r.as_str().ok_or_else(|| format!("ref must be a hash string, got {r}"))?;
+        let h = Hash::from_hex(hex).ok_or_else(|| format!("invalid subtree ref {hex:?}"))?;
+        return match store.get(h).as_deref() {
+            Some(Object::Node(_)) => Ok(h),
+            Some(_) => Err(format!("ref {hex} is geometry, not a scene node")),
+            None => Err(format!("unknown subtree ref {hex}")),
+        };
+    }
 
     let name = match obj.get("name") {
         None => None,
@@ -65,33 +81,5 @@ pub fn node_from_json(store: &Store, v: &Value) -> Result<Node, String> {
         Some(other) => return Err(format!("children must be an array, got {other}")),
     };
 
-    Ok(Node { name, transform, color, mesh, children })
-}
-
-/// The reverse direction: IR node → JSON, used when a nested invoke's output
-/// is embedded into the calling build's tree.
-pub fn node_to_json(node: &Node) -> Value {
-    let mut obj = serde_json::Map::new();
-    if let Some(n) = &node.name {
-        obj.insert("name".into(), Value::String(n.clone()));
-    }
-    if !node.transform.is_identity() {
-        obj.insert(
-            "matrix".into(),
-            Value::Array(node.transform.0.iter().map(|&x| x.into()).collect()),
-        );
-    }
-    if let Some(c) = node.color {
-        obj.insert(
-            "color".into(),
-            Value::Array([c.r, c.g, c.b, c.a].iter().map(|&x| (x as f64).into()).collect()),
-        );
-    }
-    if let Some(m) = node.mesh {
-        obj.insert("geom".into(), Value::String(m.to_hex()));
-    }
-    if !node.children.is_empty() {
-        obj.insert("children".into(), Value::Array(node.children.iter().map(node_to_json).collect()));
-    }
-    Value::Object(obj)
+    Ok(store.put(Object::Node(Node { name, transform, color, mesh, children })))
 }

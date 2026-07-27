@@ -1,12 +1,12 @@
 use crate::registry::{Acquire, RKey, Registry};
 use crate::sources::{ProjectSnapshot, ScanError, scan_project};
 use odm_ir::{Hash, Hasher, hash_json};
-use odm_js::{BuildError, BuildInput, InvokeResult, Invoker, JsEnv, LogLine, run_build};
+use odm_js::{BuildError, BuildInput, Invoker, JsEnv, LogLine, run_build};
 use odm_kernel::{CancelToken, Kernel};
-use odm_store::{Dep, GenerationId, MemoEntry, MemoKey, Object, Store};
+use odm_store::{Dep, GenerationId, MemoEntry, MemoKey, Store};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -91,31 +91,58 @@ pub struct PassResult {
     pub logs: Vec<(String, LogLine)>,
 }
 
+/// One engine per project: owns the store, the JS environment, and the
+/// project's current generation.
 pub struct BuildEngine {
     pub store: Arc<Store>,
     pub kernel: Arc<Kernel>,
     env: Arc<JsEnv>,
     registry: Registry,
     pub stats: Stats,
+    project: PathBuf,
+    /// Latest sync; reused as long as the sources hash the same.
+    current: Mutex<Option<SyncResult>>,
 }
 
 impl BuildEngine {
-    pub fn new(store: Arc<Store>, kernel: Arc<Kernel>, env: Arc<JsEnv>) -> Arc<BuildEngine> {
+    pub fn new(
+        store: Arc<Store>,
+        kernel: Arc<Kernel>,
+        env: Arc<JsEnv>,
+        project: PathBuf,
+    ) -> Arc<BuildEngine> {
         Arc::new(BuildEngine {
             store,
             kernel,
             env,
             registry: Registry::default(),
             stats: Stats::default(),
+            project,
+            current: Mutex::new(None),
         })
     }
 
-    /// Scan the project directory and register a new generation
-    /// (refcount 1 — caller releases it when done).
-    pub fn sync(&self, project_dir: &Path) -> Result<SyncResult, ScanError> {
-        let snapshot = Arc::new(scan_project(project_dir)?);
+    pub fn project(&self) -> &Path {
+        &self.project
+    }
+
+    /// Rescan the project; reuse the current generation if nothing changed,
+    /// otherwise register a new one and retire the old.
+    pub fn sync(&self) -> Result<SyncResult, ScanError> {
+        let snapshot = scan_project(&self.project)?;
+        let mut current = self.current.lock().unwrap();
+        if let Some(cur) = &*current
+            && cur.snapshot.generation_sources == snapshot.generation_sources
+        {
+            return Ok(cur.clone());
+        }
         let generation = self.store.new_generation(snapshot.generation_sources.clone());
-        Ok(SyncResult { generation, snapshot })
+        if let Some(old) = current.take() {
+            self.store.release_generation(old.generation);
+        }
+        let sync = SyncResult { generation, snapshot: Arc::new(snapshot) };
+        *current = Some(sync.clone());
+        Ok(sync)
     }
 
     /// Start a pass at time `t` with the manifest's params as context.
@@ -150,16 +177,6 @@ impl BuildEngine {
         let root =
             self.get_or_build(pass, &[], ROOT_DOOHICKEY, &Value::Object(Default::default()))?;
         Ok(PassResult { root, logs: pass.take_logs() })
-    }
-
-    /// Build an arbitrary doohickey with args (CLI inspection path).
-    pub fn build_path(
-        self: &Arc<Self>,
-        pass: &Arc<Pass>,
-        path: &str,
-        args: &Value,
-    ) -> Result<Hash, BuildFailure> {
-        self.get_or_build(pass, &[], path, args)
     }
 
     /// Publish a built root: pin it as the generation's GC root and collect
@@ -350,16 +367,8 @@ struct EngineInvoker {
 }
 
 impl Invoker for EngineInvoker {
-    fn invoke(&mut self, path: &str, args: &Value) -> Result<InvokeResult, String> {
-        let output = self
-            .engine
-            .get_or_build(&self.pass, &self.chain, path, args)
-            .map_err(|f| f.message)?;
-        let node = match self.engine.store.get(output).as_deref() {
-            Some(Object::Node(n)) => n.clone(),
-            _ => return Err(format!("internal: output of {path} missing from store")),
-        };
-        Ok(InvokeResult { output, tree: odm_js::node_to_json(&node) })
+    fn invoke(&mut self, path: &str, args: &Value) -> Result<Hash, String> {
+        self.engine.get_or_build(&self.pass, &self.chain, path, args).map_err(|f| f.message)
     }
 }
 

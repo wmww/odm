@@ -5,19 +5,27 @@
 use odm_ir::{Hash, Node};
 use odm_kernel::Kernel;
 use odm_render::math::{Mat4, mul as mat_mul, transform_dir, transform_point};
-use odm_render::{FlatInstance, mesh_aabb, node_id};
+use odm_render::{Instance, mesh_aabb, node_id};
 use odm_store::{Object, Store};
 use serde_json::{Value, json};
 
+/// Read a child node out of the store (children are content hashes).
+fn child_node(store: &Store, h: Hash) -> Option<Node> {
+    match store.get(h).as_deref() {
+        Some(Object::Node(n)) => Some(n.clone()),
+        _ => None,
+    }
+}
+
 /// Locate a node by id ("" = root, "0/2" = child paths) and accumulate its
 /// world transform along the way.
-pub fn find_node_world<'a>(root: &'a Node, id: &str) -> Option<(&'a Node, Mat4)> {
-    let mut cur = root;
+pub fn find_node_world(store: &Store, root: &Node, id: &str) -> Option<(Node, Mat4)> {
+    let mut cur = root.clone();
     let mut world = cur.transform.0;
     if !id.is_empty() {
         for part in id.split('/') {
             let idx: usize = part.parse().ok()?;
-            cur = cur.children.get(idx)?;
+            cur = child_node(store, *cur.children.get(idx)?)?;
             if !cur.transform.is_identity() {
                 world = mat_mul(&world, &cur.transform.0);
             }
@@ -95,8 +103,15 @@ pub fn world_aabb(b: &odm_kernel::Bounds, m: &Mat4) -> ([f64; 3], [f64; 3]) {
     (min, max)
 }
 
-/// Tree walk producing the CLI `tree` response.
-pub fn tree_json(store: &Store, node: &Node, id: &str, world_parent: &Mat4, depth: usize) -> Value {
+/// Tree walk producing the CLI `tree` response. None if a child hash is not
+/// in the store (only possible from a bad hash: handlers run at quiescence).
+pub fn tree_json(
+    store: &Store,
+    node: &Node,
+    id: &str,
+    world_parent: &Mat4,
+    depth: usize,
+) -> Option<Value> {
     let world = if node.transform.is_identity() {
         *world_parent
     } else {
@@ -120,22 +135,25 @@ pub fn tree_json(store: &Store, node: &Node, id: &str, world_parent: &Mat4, dept
         if depth == 0 {
             obj.insert("children_elided".into(), json!(node.children.len()));
         } else {
-            let children: Vec<Value> = node
+            let children: Option<Vec<Value>> = node
                 .children
                 .iter()
                 .enumerate()
-                .map(|(i, c)| tree_json(store, c, &node_id(id, i), &world, depth - 1))
+                .map(|(i, &c)| {
+                    let child = child_node(store, c)?;
+                    tree_json(store, &child, &node_id(id, i), &world, depth - 1)
+                })
                 .collect();
-            obj.insert("children".into(), Value::Array(children));
+            obj.insert("children".into(), Value::Array(children?));
         }
     }
-    Value::Object(obj)
+    Some(Value::Object(obj))
 }
 
 /// Nearest world-space raycast hit across all instances.
 pub fn raycast(
     kernel: &Kernel,
-    instances: &[FlatInstance],
+    instances: &[Instance],
     origin: [f64; 3],
     dir: [f64; 3],
 ) -> Option<Value> {

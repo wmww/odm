@@ -22,8 +22,16 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   hashing (FORMAT_VERSION in canon.rs; bump on any encoding change — floats
   hash as raw IEEE bits, no -0.0/NaN canonicalization, equal hash ⇒
   byte-equal), canonical JSON hashing (sorted keys, f64 numbers).
-- `odm-store` — content-addressed objects, generations (refcounted),
-  mark-sweep GC (roots = generation roots + memo outputs; quiescence-only),
+  `Node.children` are content hashes, not inline nodes: every node is
+  interned in the store, so a repeated subtree (4 wheel placements, a 20×20
+  grid) is stored and hashed once and a root hash costs O(root's own fields),
+  not O(whole tree). `Node::refs` = mesh + children; walking a tree means
+  `store.get` per child.
+- `odm-store` — content-addressed objects, generations (live until
+  `release_generation`; one is live at a time — the build engine's current),
+  mark-sweep GC (roots = generation roots + memo outputs; quiescence-only;
+  `Object::refs` walks the node graph as well as meshes, so a live root pins
+  its whole subtree),
   memo cache (key = code+args hashes; entry = recorded deps + output;
   `Dep::Invoke` stores the actual args Value so validation can re-run
   invokes, `Dep::Context` a value hash — missing keys hash a sentinel, use
@@ -40,14 +48,20 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - `odm-js` — deno_core =0.408.0; per-build disposable isolates from a
   snapshot embedding `framework/` (odm API + three r185 subset); ops
   extension; dep recording; console capture; `run_build` is the single
-  entry point. Isolates nest strictly LIFO per thread. Module URLs:
+  entry point. `ir_json::node_from_json` interns the framework's IR JSON into
+  the store and returns the root hash; `ctx.invoke` crosses the boundary as a
+  hash string, and a JSON node `{"ref": "<hex>"}` (no other keys) *is* that
+  stored subtree — so an Instance with no transform/color/name reuses the
+  invoked subtree's hash outright. Isolates nest strictly LIFO per thread. Module URLs:
   framework at `file:///odm/framework/*` (bare 'three'/'odm' resolve there);
   doohickeys at `file:///odm/project/<path>` — single file, no project
   imports. op2 quirks: `op_invoke` must be `#[op2(reentrant)]` (nested build
   ops re-enter); no fixed-size-array params (use Vec<f64>);
   `serde_json::Value` must be written fully qualified. Module loading is
   driven by futures::executor::block_on (no tokio — nested block_on works).
-- `odm-build` — scan→generation; pass = generation+context (t + params);
+- `odm-build` — one `BuildEngine` per project; `sync()` rescans it and
+  reuses the current generation while the source hashes match (retiring the
+  old one otherwise); pass = generation+context (t + params);
   demand-driven `get_or_build` with Salsa-style validation and early cutoff;
   in-flight registry (wait-for-in-flight + wait-graph cycle detection);
   cancellation (token + TerminateExecution post-module-eval). Cycle check is
@@ -82,10 +96,17 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   repaints when `EngineState::wake` fires (set by the viewer, unset when
   headless), i.e. on every `published` change. It also owns its winit event
   loop so `SlowIdle` can clamp the `ControlFlow::Poll` eframe leaves behind —
-  see viewer.rs; without it an invisible window pegs a core.
+  see viewer/idle.rs; without it an invisible window pegs a core.
   Commands: status/sync/build/render/tree/inspect/raycast/
   selection; every command syncs first. Protocol: ndjson over unix socket,
-  `{ok: bool, ...}` responses. `theme.rs` holds the viewer's dark Windows 95
+  `{ok: bool, ...}` responses. Files: `state.rs` (published slot, build
+  queue, and `build_at` — the one sync→build→publish path, shared by the
+  background loop and the command handlers), `commands.rs` (the whole JSON
+  layer: a serde-tagged `Request` enum with `deny_unknown_fields`, so a
+  typo'd command *or* option is an error, plus `CmdError`→JSON),
+  `watcher.rs`, `server.rs`, `viewer/` (`mod.rs` app + viewport, `idle.rs`
+  event loop, `tree.rs` scene tree), `scene.rs`, `theme.rs`, `icons.rs`.
+  `theme.rs` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`, `checkbox`,
   `field`, `trackbar`, …) that paint two-tone 3D bevels — egui's
@@ -139,8 +160,11 @@ feathering.
 ### Scene tree
 
 `theme::tree_row` draws a whole row — nesting gutter, icon, name — and
-`viewer.rs` walks the node graph telling it where each row sits (depth, which
+`viewer/tree.rs` walks the tree telling it where each row sits (depth, which
 ancestors still have siblings below, whether this row is the last of its own).
+It walks a viewer-local `TreeNode` snapshot (name/has_mesh/children),
+materialized from the store once per published build, since IR children are
+hashes; a store miss takes the same retry-repaint path as a failed flatten.
 The gutter is the era's registry-tree look: 1px dotted lines on a
 `(x + y) even` checkerboard of the screen, and a boxed `+`/`-` where a node has
 children. Consequences:
@@ -150,7 +174,7 @@ children. Consequences:
 - `TREE_INDENT` is even and the row midline is nudged onto the checkerboard, so
   every column and rule shares a parity and corners get a dot.
 - The +/- hit target is ours, and so is open/closed state: `TreeState` in
-  viewer.rs, not egui's `CollapsingState`. The box toggles, the name selects,
+  viewer/tree.rs, not egui's `CollapsingState`. The box toggles, the name selects,
   a double-click on the name does both.
 - Selecting a node auto-expands its ancestors, and collapsing them again when
   the selection goes away is why the state is ours: `TreeState::auto` remembers
@@ -160,7 +184,7 @@ children. Consequences:
 - Selection is a list, in pick order. Shift-clicking a row — or a solid in the
   viewport — adds it, or removes it if it was already selected; a plain click
   replaces the whole selection. `odm selection` returns the list.
-- `viewer::tests` drives rows through a headless `egui::Context` (real hit
+- `viewer::tree::tests` drives rows through a headless `egui::Context` (real hit
   testing, real modifiers — note egui reads `modifiers` off `RawInput`, not
   off the events). That is how modifier-clicks are *tested*; injecting one into
   a live viewer also works, but only as a chained call (see "Seeing the

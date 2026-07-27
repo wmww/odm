@@ -44,7 +44,9 @@ fn get_returns_equal_object() {
 fn gc_keeps_generation_reachable_sweeps_rest() {
     let store = Store::new();
     let kept_mesh = store.put(mesh_obj(1.0));
-    let root_hash = store.put(Object::Node(node_with(kept_mesh)));
+    let child = store.put(Object::Node(node_with(kept_mesh)));
+    let root_hash =
+        store.put(Object::Node(Node { children: vec![child], ..Default::default() }));
     let orphan = store.put(mesh_obj(2.0));
 
     let generation = store.new_generation(BTreeMap::new());
@@ -52,6 +54,7 @@ fn gc_keeps_generation_reachable_sweeps_rest() {
 
     let dropped = store.gc();
     assert_eq!(dropped, 1);
+    assert!(store.contains(child), "child nodes are reached through the node graph");
     assert!(store.contains(kept_mesh), "mesh referenced via node tree must survive");
     assert!(store.contains(root_hash));
     assert!(!store.contains(orphan));
@@ -65,9 +68,7 @@ fn gc_after_release_sweeps_generation_roots() {
 
     let generation = store.new_generation(BTreeMap::new());
     store.set_roots(generation, vec![root_hash]);
-    store.retain_generation(generation); // e.g. viewer holds it too
-    store.release_generation(generation);
-    assert_eq!(store.gc(), 0, "still retained once");
+    assert_eq!(store.gc(), 0, "roots pin the tree while the generation is live");
 
     store.release_generation(generation);
     assert_eq!(store.live_generations(), vec![]);

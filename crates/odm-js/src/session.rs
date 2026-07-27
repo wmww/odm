@@ -20,15 +20,9 @@ pub struct SessionState {
 /// Console line; defined in odm-store so memo entries can carry logs.
 pub use odm_store::LogLine;
 
-pub struct InvokeResult {
-    /// Hash of the invoked doohickey's output Node in the store.
-    pub output: Hash,
-    /// The output as IR JSON (embedded into the caller's tree).
-    pub tree: Value,
-}
-
 /// Nested-build callback, provided by the scheduler. Runs on the calling
-/// worker thread; may create its own (LIFO-nested) isolate.
+/// worker thread; may create its own (LIFO-nested) isolate. Returns the hash
+/// of the invoked doohickey's output Node in the store.
 pub trait Invoker {
-    fn invoke(&mut self, path: &str, args: &Value) -> Result<InvokeResult, String>;
+    fn invoke(&mut self, path: &str, args: &Value) -> Result<Hash, String>;
 }

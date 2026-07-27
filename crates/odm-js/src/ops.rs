@@ -247,12 +247,12 @@ pub fn op_context_read(state: &mut OpState, #[string] key: String) -> CtxRead {
 
 // Reentrant: the nested build's ops fire while op_invoke is on the stack.
 #[op2(reentrant)]
-#[serde]
+#[string]
 pub fn op_invoke(
     state: &mut OpState,
     #[string] path: String,
     #[serde] args: serde_json::Value,
-) -> Result<serde_json::Value, JsErrorBox> {
+) -> Result<String, JsErrorBox> {
     let s = sess(state);
     let Some(mut invoker) = s.invoker.take() else {
         return Err(JsErrorBox::generic("ctx.invoke is not available in this build"));
@@ -262,9 +262,9 @@ pub fn op_invoke(
     let s = sess(state);
     s.invoker = Some(invoker);
     match result {
-        Ok(res) => {
-            s.deps.push(Dep::Invoke { path, args, output: res.output });
-            Ok(res.tree)
+        Ok(output) => {
+            s.deps.push(Dep::Invoke { path, args, output });
+            Ok(output.to_hex())
         }
         Err(msg) => Err(JsErrorBox::generic(format!("invoke({path:?}) failed: {msg}"))),
     }

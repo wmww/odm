@@ -15,7 +15,8 @@ unless marked otherwise.
 - Animation is build(t), NOT first-class animation tracks. Made cheap by
   (a) dependency-tracked context reads — a doohickey that never reads `t`
   has a memo entry valid for all t; (b) content-addressed outputs — the same
-  object at n transforms is one geometry blob + n tiny IR nodes.
+  object at n transforms is one geometry blob + one stored subtree + n tiny
+  wrapper nodes (IR children are hashes, so nothing is copied per placement).
 - Geometry lives engine-side, content-addressed; JS holds opaque handles;
   vertex data crosses the boundary only on explicit request. Cross-isolate
   invoke forces serializable args — a feature: it enforces the IR discipline.

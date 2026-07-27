@@ -5,6 +5,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 /// A content-addressed IR object. Meshes are behind an `Arc` so consumers
 /// (renderer, viewer) can hold vertex data without deep copies.
+// Node inline (232B) vs Mesh (8B): objects always live behind one Arc, so
+// boxing Node would only add a pointer chase to every store.get match.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Object {
     Mesh(Arc<Mesh>),
@@ -19,18 +22,13 @@ impl Object {
         }
     }
 
-    /// Hashes of store objects this object references.
+    /// Hashes of store objects this object references (mesh + child nodes).
     fn refs(&self, out: &mut Vec<Hash>) {
         match self {
             Object::Mesh(_) => {}
-            Object::Node(n) => n.mesh_refs(out),
+            Object::Node(n) => n.refs(out),
         }
     }
-}
-
-struct GenSlot {
-    refs: usize,
-    generation: Generation,
 }
 
 /// Content-addressed store + generation registry + memo cache.
@@ -42,7 +40,7 @@ pub struct Store {
 
 struct GenState {
     next: u64,
-    live: HashMap<GenerationId, GenSlot>,
+    live: HashMap<GenerationId, Generation>,
 }
 
 impl Store {
@@ -67,10 +65,6 @@ impl Store {
         self.objects.read().unwrap().get(&h).cloned()
     }
 
-    pub fn get_mesh(&self, h: Hash) -> Option<Arc<Object>> {
-        self.get(h).filter(|o| matches!(**o, Object::Mesh(_)))
-    }
-
     pub fn contains(&self, h: Hash) -> bool {
         self.objects.read().unwrap().contains_key(&h)
     }
@@ -81,45 +75,29 @@ impl Store {
 
     // --- generations ---
 
-    /// Register a new generation (initial refcount 1).
+    /// Register a new generation. Live until `release_generation`.
     pub fn new_generation(&self, sources: std::collections::BTreeMap<String, Hash>) -> GenerationId {
         let mut st = self.gens.lock().unwrap();
         let id = GenerationId(st.next);
         st.next += 1;
-        st.live.insert(
-            id,
-            GenSlot { refs: 1, generation: Generation { id, sources, roots: vec![] } },
-        );
+        st.live.insert(id, Generation { id, sources, roots: vec![] });
         id
     }
 
     pub fn generation(&self, id: GenerationId) -> Option<Generation> {
-        self.gens.lock().unwrap().live.get(&id).map(|s| s.generation.clone())
+        self.gens.lock().unwrap().live.get(&id).cloned()
     }
 
     /// Publish GC roots for a generation (e.g. the built scene hash).
     pub fn set_roots(&self, id: GenerationId, roots: Vec<Hash>) {
-        if let Some(slot) = self.gens.lock().unwrap().live.get_mut(&id) {
-            slot.generation.roots = roots;
+        if let Some(g) = self.gens.lock().unwrap().live.get_mut(&id) {
+            g.roots = roots;
         }
     }
 
-    pub fn retain_generation(&self, id: GenerationId) {
-        if let Some(slot) = self.gens.lock().unwrap().live.get_mut(&id) {
-            slot.refs += 1;
-        }
-    }
-
-    /// Drop one reference; the generation dies at zero (its roots stop
-    /// pinning objects at the next `gc`).
+    /// Retire a generation: its roots stop pinning objects at the next `gc`.
     pub fn release_generation(&self, id: GenerationId) {
-        let mut st = self.gens.lock().unwrap();
-        if let Some(slot) = st.live.get_mut(&id) {
-            slot.refs -= 1;
-            if slot.refs == 0 {
-                st.live.remove(&id);
-            }
-        }
+        self.gens.lock().unwrap().live.remove(&id);
     }
 
     pub fn live_generations(&self) -> Vec<GenerationId> {
@@ -160,8 +138,8 @@ impl Store {
         let mut pending: Vec<Hash> = vec![];
         {
             let st = self.gens.lock().unwrap();
-            for slot in st.live.values() {
-                pending.extend(slot.generation.roots.iter().copied());
+            for g in st.live.values() {
+                pending.extend(g.roots.iter().copied());
             }
         }
         {

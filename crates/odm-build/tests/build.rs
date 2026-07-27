@@ -11,10 +11,10 @@ fn env() -> Arc<JsEnv> {
     ENV.get_or_init(|| Arc::new(JsEnv::new().unwrap())).clone()
 }
 
-fn engine() -> Arc<BuildEngine> {
+fn engine(project: &Path) -> Arc<BuildEngine> {
     let store = Store::new();
     let kernel = Kernel::new(store.clone());
-    BuildEngine::new(store, kernel, env())
+    BuildEngine::new(store, kernel, env(), project.to_path_buf())
 }
 
 fn write(dir: &Path, path: &str, content: &str) {
@@ -46,8 +46,8 @@ fn builds_project_and_memoizes() {
     write(dir.path(), "main.js", MAIN_WITH_WHEEL);
     write(dir.path(), "parts/wheel.js", WHEEL);
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let pass = e.start_pass(&sync, 0.0);
     let result = e.build_root(&pass).unwrap();
     assert_eq!(builds(&e), 2, "main + wheel");
@@ -58,8 +58,8 @@ fn builds_project_and_memoizes() {
     assert_eq!(builds(&e), 2, "no rebuilds");
     assert_eq!(result.root, result2.root);
 
-    // Re-sync without edits: new generation, same hashes, still memo hits.
-    let sync2 = e.sync(dir.path()).unwrap();
+    // Re-sync without edits: same generation reused, still memo hits.
+    let sync2 = e.sync().unwrap();
     let pass3 = e.start_pass(&sync2, 0.0);
     e.build_root(&pass3).unwrap();
     assert_eq!(builds(&e), 2);
@@ -71,14 +71,14 @@ fn edits_invalidate_and_early_cutoff_applies() {
     write(dir.path(), "main.js", MAIN_WITH_WHEEL);
     write(dir.path(), "parts/wheel.js", WHEEL);
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let r1 = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
     assert_eq!(builds(&e), 2);
 
     // Behavior change in wheel: both wheel and main rebuild, root changes.
     write(dir.path(), "parts/wheel.js", &WHEEL.replace("h: 1", "h: 2"));
-    let sync = e.sync(dir.path()).unwrap();
+    let sync = e.sync().unwrap();
     let r2 = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
     assert_eq!(builds(&e), 4, "wheel + main rebuilt");
     assert_ne!(r1.root, r2.root);
@@ -90,7 +90,7 @@ fn edits_invalidate_and_early_cutoff_applies() {
         "parts/wheel.js",
         &format!("// cosmetic comment\n{}", WHEEL.replace("h: 1", "h: 2")),
     );
-    let sync = e.sync(dir.path()).unwrap();
+    let sync = e.sync().unwrap();
     let r3 = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
     assert_eq!(builds(&e), 5, "only wheel rebuilt, main got early cutoff");
     assert_eq!(r2.root, r3.root);
@@ -111,8 +111,8 @@ fn t_only_invalidates_readers() {
     );
     write(dir.path(), "parts/wheel.js", WHEEL);
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let r0 = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
     assert_eq!(builds(&e), 2);
 
@@ -141,8 +141,8 @@ fn params_come_from_manifest() {
     );
     write(dir.path(), "odm.json", r#"{ "params": { "width": 4 } }"#);
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let pass = e.start_pass(&sync, 0.0);
     let r = e.build_root(&pass).unwrap();
 
@@ -157,7 +157,7 @@ fn params_come_from_manifest() {
 
     // Changing the param invalidates.
     write(dir.path(), "odm.json", r#"{ "params": { "width": 6 } }"#);
-    let sync = e.sync(dir.path()).unwrap();
+    let sync = e.sync().unwrap();
     let r2 = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
     assert_ne!(r.root, r2.root);
     assert_eq!(builds(&e), 2);
@@ -170,8 +170,8 @@ fn cycles_error_instead_of_hanging() {
     write(dir.path(), "a.js", "export default (ctx) => ctx.invoke('b.js', {})");
     write(dir.path(), "b.js", "export default (ctx) => ctx.invoke('a.js', {})");
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let err = e.build_root(&e.start_pass(&sync, 0.0)).unwrap_err();
     assert!(err.message.contains("cycle"), "{err:?}");
     assert!(err.message.contains("a.js"), "{err:?}");
@@ -183,8 +183,8 @@ fn missing_doohickey_lists_available() {
     write(dir.path(), "main.js", "export default (ctx) => ctx.invoke('nope/missing.js', {})");
     write(dir.path(), "parts/wheel.js", WHEEL);
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let err = e.build_root(&e.start_pass(&sync, 0.0)).unwrap_err();
     assert!(err.message.contains("no doohickey"), "{err:?}");
     assert!(err.message.contains("parts/wheel.js"), "should list files: {err:?}");
@@ -196,8 +196,8 @@ fn js_error_propagates_from_nested_build() {
     write(dir.path(), "main.js", "export default (ctx) => ctx.invoke('bad.js', {})");
     write(dir.path(), "bad.js", "export default () => { throw new Error('nested boom'); }");
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let err = e.build_root(&e.start_pass(&sync, 0.0)).unwrap_err();
     assert_eq!(err.kind, FailureKind::Js);
     assert!(err.message.contains("nested boom"), "{err:?}");
@@ -210,7 +210,7 @@ fn consistency_incremental_equals_scratch() {
     write(dir.path(), "main.js", MAIN_WITH_WHEEL);
     write(dir.path(), "parts/wheel.js", WHEEL);
 
-    let incremental = engine();
+    let incremental = engine(dir.path());
     let edits: Vec<(&str, String)> = vec![
         ("parts/wheel.js", WHEEL.replace("r: ctx.args.r", "r: ctx.args.r * 2")),
         ("main.js", MAIN_WITH_WHEEL.replace("{ r: 2 }", "{ r: 3 }")),
@@ -220,12 +220,12 @@ fn consistency_incremental_equals_scratch() {
 
     for (path, content) in edits {
         write(dir.path(), path, &content);
-        let sync = incremental.sync(dir.path()).unwrap();
+        let sync = incremental.sync().unwrap();
         let inc = incremental.build_root(&incremental.start_pass(&sync, 0.0)).unwrap();
 
         // From-scratch reference build with a fresh engine + store.
-        let fresh = engine();
-        let fsync = fresh.sync(dir.path()).unwrap();
+        let fresh = engine(dir.path());
+        let fsync = fresh.sync().unwrap();
         let scratch = fresh.build_root(&fresh.start_pass(&fsync, 0.0)).unwrap();
 
         assert_eq!(inc.root, scratch.root, "incremental != scratch after editing {path}");
@@ -238,8 +238,8 @@ fn concurrent_same_pass_dedups() {
     write(dir.path(), "main.js", MAIN_WITH_WHEEL);
     write(dir.path(), "parts/wheel.js", WHEEL);
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let pass = e.start_pass(&sync, 0.0);
 
     let threads: Vec<_> = (0..4)
@@ -271,8 +271,8 @@ fn cancellation_stops_expensive_build() {
         "#,
     );
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let pass = e.start_pass(&sync, 0.0);
 
     let t0 = std::time::Instant::now();
@@ -318,8 +318,8 @@ fn logs_are_collected_per_pass() {
         "#,
     );
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let result = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
     let lines: Vec<String> =
         result.logs.iter().map(|(p, l)| format!("{p}: {}", l.message)).collect();
@@ -357,8 +357,8 @@ fn bounded_recursion_is_allowed() {
         "#,
     );
 
-    let e = engine();
-    let sync = e.sync(dir.path()).unwrap();
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
     let result = e.build_root(&e.start_pass(&sync, 0.0));
     assert!(result.is_ok(), "recursion with a base case must build: {result:?}");
     assert_eq!(builds(&e), 5, "main + tree at depths 3,2,1,0");
@@ -366,7 +366,7 @@ fn bounded_recursion_is_allowed() {
     // Self-invoke with identical args is still a cycle, not a hang.
     write(dir.path(), "main.js", "export default (ctx) => ctx.invoke('loop.js', { n: 1 })");
     write(dir.path(), "loop.js", "export default (ctx) => ctx.invoke('loop.js', { n: 1 })");
-    let sync = e.sync(dir.path()).unwrap();
+    let sync = e.sync().unwrap();
     let err = e.build_root(&e.start_pass(&sync, 0.0)).unwrap_err();
     assert!(err.message.contains("cycle"), "{err:?}");
 }

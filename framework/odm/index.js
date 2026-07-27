@@ -207,24 +207,24 @@ export class Group extends transformable(SceneValue) {
 
 /** The output of ctx.invoke(): another doohickey's built subtree. */
 export class Instance extends transformable(SceneValue) {
-  constructor(tree, matrix = null, color = null, label = null) {
+  constructor(ref, matrix = null, color = null, label = null) {
     super(matrix, color, label);
-    this._tree = tree; // plain IR node (JSON)
+    this._ref = ref; // content hash of the built subtree
   }
 
   _with({ matrix = this._matrix, color = this._color, name = this._name }) {
-    return new Instance(this._tree, matrix, color, name);
+    return new Instance(this._ref, matrix, color, name);
   }
 
   _toIR() {
     if (this._name === null && isIdentity(this._matrix) && this._color === null) {
-      return this._tree;
+      return { ref: this._ref };
     }
     return {
       ...(this._name !== null && { name: this._name }),
       ...(!isIdentity(this._matrix) && { matrix: [...matElements(this._matrix)] }),
       ...(this._color !== null && { color: this._color }),
-      children: [this._tree],
+      children: [{ ref: this._ref }],
     };
   }
 }
@@ -482,8 +482,7 @@ function makeCtx(argsJson) {
      * `path` is project-relative, e.g. 'parts/wheel.js'.
      */
     invoke(path, args = {}) {
-      const tree = ops().op_invoke(String(path), serializeValue(args));
-      return new Instance(tree);
+      return new Instance(ops().op_invoke(String(path), serializeValue(args)));
     },
   };
 }

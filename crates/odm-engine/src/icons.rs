@@ -90,7 +90,7 @@ fn decode(png: &'static [u8]) -> ColorImage {
         }
     };
     let rgba: Vec<u8> =
-        buf[..info.buffer_size()].chunks_exact(channels).flat_map(|px| opaque(px)).collect();
+        buf[..info.buffer_size()].chunks_exact(channels).flat_map(opaque).collect();
     ColorImage::from_rgba_unmultiplied([info.width as usize, info.height as usize], &rgba)
 }
 

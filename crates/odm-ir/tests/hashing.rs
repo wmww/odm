@@ -18,11 +18,11 @@ fn hash_is_stable_across_runs() {
         transform: Transform::IDENTITY,
         color: Some(Color::WHITE),
         mesh: Some(test_mesh().hash()),
-        children: vec![Node::default()],
+        children: vec![Node::default().hash()],
     };
     let node_hex = node.hash().to_hex();
-    insta_like(&mesh_hex, "b94a5049f6fbf801f94407d78fb8228890b558b35537cc2aea8234290641206f");
-    insta_like(&node_hex, "5e72af163af3e61a1c4409a4ef3fe5a0710be8b979dd2643b0828b1713139983");
+    insta_like(&mesh_hex, "a5ecc665878e63300bfc685174f8995062109075e4da6d1107e7e841da466717");
+    insta_like(&node_hex, "f281c62273ebf185efd3f044734e3e002c684320326db8aebf0b25d601533501");
 }
 
 fn insta_like(got: &str, want: &str) {
@@ -76,14 +76,24 @@ fn mesh_validate() {
 }
 
 #[test]
-fn mesh_refs_walk() {
-    let h = test_mesh().hash();
-    let tree = Node {
-        mesh: Some(h),
-        children: vec![Node { mesh: Some(h), ..Default::default() }, Node::default()],
-        ..Default::default()
-    };
+fn node_refs_are_mesh_plus_children() {
+    let mesh = test_mesh().hash();
+    let child = Node { mesh: Some(mesh), ..Default::default() }.hash();
+    let root = Node { mesh: Some(mesh), children: vec![child, child], ..Default::default() };
     let mut refs = vec![];
-    tree.mesh_refs(&mut refs);
-    assert_eq!(refs, vec![h, h]);
+    root.refs(&mut refs);
+    assert_eq!(refs, vec![mesh, child, child]);
+}
+
+#[test]
+fn shared_subtrees_hash_once() {
+    // A node holding the same child twice is only as big as one child hash
+    // pair: swapping in a different child changes the hash, repeating it does
+    // not grow the work.
+    let a = Node { name: Some("a".into()), ..Default::default() }.hash();
+    let b = Node { name: Some("b".into()), ..Default::default() }.hash();
+    let two_a = Node { children: vec![a, a], ..Default::default() };
+    let a_and_b = Node { children: vec![a, b], ..Default::default() };
+    assert_ne!(two_a.hash(), a_and_b.hash());
+    assert_eq!(two_a.hash(), Node { children: vec![a, a], ..Default::default() }.hash());
 }

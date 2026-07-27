@@ -1,4 +1,4 @@
-use crate::{RenderError, RenderInstance, RenderScene, math};
+use crate::{Instance, RenderError, RenderScene, math};
 use odm_ir::{Hash, Mesh, Node};
 use odm_store::{Object, Store};
 use std::collections::HashMap;
@@ -14,52 +14,35 @@ pub fn node_id(prefix: &str, index: usize) -> String {
     if prefix.is_empty() { index.to_string() } else { format!("{prefix}/{index}") }
 }
 
-/// A flattened solid instance in f64 world space, for picking/raycasts.
-/// `flatten_node` returns these aligned index-for-index with
-/// `RenderScene::instances`.
-pub struct FlatInstance {
-    pub id: String,
-    pub name: Option<String>,
-    pub mesh: Hash,
-    pub world: math::Mat4,
-}
-
 /// Flatten a stored Node hash into world-space render instances.
 pub fn flatten_scene(store: &Store, root: Hash) -> Result<RenderScene, RenderError> {
     let obj = store.get(root).ok_or(RenderError::MissingObject(root))?;
     let Object::Node(node) = &*obj else {
         return Err(RenderError::BadScene(format!("{root} is a mesh, not a scene node")));
     };
-    Ok(flatten_node(store, node)?.1)
+    flatten_node(store, node)
 }
 
-/// The single scene flattener: transforms accumulate in f64 and convert to
-/// f32 at the leaves; a node's own color wins over inherited ancestor color;
-/// empty meshes are skipped. Used by headless renders, the viewer, and CLI
-/// raycasts so they can never drift apart.
-pub fn flatten_node(
-    store: &Store,
-    root: &Node,
-) -> Result<(Vec<FlatInstance>, RenderScene), RenderError> {
+/// The single scene flattener: transforms accumulate in f64; a node's own
+/// color wins over inherited ancestor color; empty meshes are skipped. Used by
+/// headless renders, the viewer, and CLI raycasts so they can never drift apart.
+pub fn flatten_node(store: &Store, root: &Node) -> Result<RenderScene, RenderError> {
     let mut scene = RenderScene {
         instances: Vec::new(),
         meshes: HashMap::new(),
         bounds: None,
     };
-    let mut flat = Vec::new();
     let mut local_bounds: LocalBoundsCache = HashMap::new();
-    walk(store, root, "", &math::IDENTITY, None, &mut flat, &mut scene, &mut local_bounds)?;
-    Ok((flat, scene))
+    walk(store, root, "", &math::IDENTITY, None, &mut scene, &mut local_bounds)?;
+    Ok(scene)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn walk(
     store: &Store,
     node: &Node,
     id: &str,
     parent: &math::Mat4,
     inherited: Option<[f32; 4]>,
-    flat: &mut Vec<FlatInstance>,
     scene: &mut RenderScene,
     local_bounds: &mut LocalBoundsCache,
 ) -> Result<(), RenderError> {
@@ -87,22 +70,22 @@ fn walk(
                 grow_bounds(&mut scene.bounds, &world, min, max);
             }
             scene.meshes.entry(mesh_hash).or_insert(mesh);
-            scene.instances.push(RenderInstance {
-                mesh: mesh_hash,
-                transform: math::to_f32_cols(&world),
-                color: color.unwrap_or(DEFAULT_COLOR),
-            });
-            flat.push(FlatInstance {
+            scene.instances.push(Instance {
                 id: id.to_string(),
                 name: node.name.clone(),
                 mesh: mesh_hash,
                 world,
+                color: color.unwrap_or(DEFAULT_COLOR),
             });
         }
     }
 
-    for (i, child) in node.children.iter().enumerate() {
-        walk(store, child, &node_id(id, i), &world, color, flat, scene, local_bounds)?;
+    for (i, &child) in node.children.iter().enumerate() {
+        let obj = store.get(child).ok_or(RenderError::MissingObject(child))?;
+        let Object::Node(child_node) = &*obj else {
+            return Err(RenderError::BadScene(format!("{child} is a mesh, not a scene node")));
+        };
+        walk(store, child_node, &node_id(id, i), &world, color, scene, local_bounds)?;
     }
     Ok(())
 }

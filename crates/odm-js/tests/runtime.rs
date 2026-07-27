@@ -1,5 +1,5 @@
 use odm_ir::{Canonical, Hash, Node};
-use odm_js::{BuildError, BuildInput, BuildOutput, InvokeResult, Invoker, JsEnv, run_build};
+use odm_js::{BuildError, BuildInput, BuildOutput, Invoker, JsEnv, run_build};
 use odm_kernel::Kernel;
 use odm_store::{Dep, Object, Store};
 use serde_json::{Value, json};
@@ -49,11 +49,30 @@ fn build_full(
     )
 }
 
-fn output_node(w: &World, out: &BuildOutput) -> Node {
-    match &*w.store.get(out.output).unwrap() {
+fn node_at(w: &World, h: Hash) -> Node {
+    match &*w.store.get(h).unwrap_or_else(|| panic!("{h} not in store")) {
         Object::Node(n) => n.clone(),
         other => panic!("expected node, got {other:?}"),
     }
+}
+
+fn output_node(w: &World, out: &BuildOutput) -> Node {
+    node_at(w, out.output)
+}
+
+/// Child `i` of `node`, read back from the store.
+fn child(w: &World, node: &Node, i: usize) -> Node {
+    node_at(w, node.children[i])
+}
+
+/// Mesh hashes in a stored subtree, in walk order.
+fn mesh_refs(w: &World, root: Hash) -> Vec<Hash> {
+    let node = node_at(w, root);
+    let mut out: Vec<Hash> = node.mesh.into_iter().collect();
+    for c in &node.children {
+        out.extend(mesh_refs(w, *c));
+    }
+    out
 }
 
 #[test]
@@ -223,12 +242,28 @@ fn groups_and_arrays_nest() {
     .unwrap();
     let node = output_node(&w, &out);
     assert_eq!(node.children.len(), 2);
-    assert_eq!(node.children[0].name.as_deref(), Some("left"));
+    assert_eq!(child(&w, &node, 0).name.as_deref(), Some("left"));
     // Both wheels reference the SAME geometry blob (content addressing).
-    let mut refs = vec![];
-    node.mesh_refs(&mut refs);
+    let refs = mesh_refs(&w, out.output);
     assert_eq!(refs.len(), 2);
     assert_eq!(refs[0], refs[1]);
+}
+
+/// `{ref}` nodes (what an untransformed Instance emits) name a stored
+/// subtree, and nothing else.
+#[test]
+fn subtree_refs_are_validated() {
+    let w = world();
+    let leaf = w.store.put(Object::Node(Node { name: Some("leaf".into()), ..Default::default() }));
+    let out = odm_js::node_from_json(&w.store, &json!({ "ref": leaf.to_hex() })).unwrap();
+    assert_eq!(out, leaf, "a bare ref reuses the referenced subtree's hash");
+
+    let err = |v: Value| odm_js::node_from_json(&w.store, &v).unwrap_err();
+    assert!(err(json!({ "ref": leaf.to_hex(), "name": "x" })).contains("no other keys"));
+    assert!(err(json!({ "ref": "zz" })).contains("invalid"));
+    assert!(err(json!({ "ref": Hash::of_bytes(b"nope").to_hex() })).contains("unknown"));
+    let mesh = w.kernel.cube(1.0, 1.0, 1.0, true).unwrap();
+    assert!(err(json!({ "ref": mesh.to_hex() })).contains("geometry"));
 }
 
 // --- invoke ---
@@ -242,7 +277,7 @@ struct NestedInvoker {
 }
 
 impl Invoker for NestedInvoker {
-    fn invoke(&mut self, path: &str, args: &Value) -> Result<InvokeResult, String> {
+    fn invoke(&mut self, path: &str, args: &Value) -> Result<Hash, String> {
         self.calls.push((path.to_string(), args.clone()));
         let code =
             self.codes.get(path).ok_or_else(|| format!("no doohickey at {path}"))?.clone();
@@ -261,11 +296,7 @@ impl Invoker for NestedInvoker {
             },
         )
         .map_err(|e| e.to_string())?;
-        let node = match &*self.world.store.get(out.output).unwrap() {
-            Object::Node(n) => n.clone(),
-            _ => unreachable!(),
-        };
-        Ok(InvokeResult { output: out.output, tree: odm_js::node_to_json(&node) })
+        Ok(out.output)
     }
 }
 
@@ -313,11 +344,61 @@ fn invoke_runs_nested_isolate_and_records_dep() {
 
     let node = output_node(&w, &out);
     assert_eq!(node.children.len(), 2);
-    // The embedded subtree carries the wheel's name and geometry.
-    let first = &node.children[0];
+    // The referenced subtree carries the wheel's name and geometry...
+    let first = child(&w, &node, 0);
     assert_eq!(first.children.len(), 1);
-    assert_eq!(first.children[0].name.as_deref(), Some("wheel"));
-    assert!(first.children[0].mesh.is_some());
+    let wheel = child(&w, &first, 0);
+    assert_eq!(wheel.name.as_deref(), Some("wheel"));
+    assert!(wheel.mesh.is_some());
+    // ...and both placements point at that one stored subtree.
+    let second = child(&w, &node, 1);
+    assert_eq!(first.children[0], second.children[0], "one wheel subtree, two refs");
+}
+
+/// Repeated invokes with the same args produce one stored subtree: the store
+/// grows only by the per-placement wrapper node.
+#[test]
+fn repeated_invokes_share_one_stored_subtree() {
+    let objects = |placements: usize| {
+        let w = world();
+        let mut codes = HashMap::new();
+        codes.insert(
+            "parts/wheel.js".to_string(),
+            "export default (ctx) => odm.cylinder({ r: ctx.args.radius, h: 1 }).name('wheel')"
+                .to_string(),
+        );
+        let invoker = NestedInvoker {
+            world: World { store: w.store.clone(), kernel: w.kernel.clone() },
+            codes,
+            calls: vec![],
+        };
+        let out = build_full(
+            &w,
+            &format!(
+                r#"
+                export default function build(ctx) {{
+                    const parts = [];
+                    for (let i = 0; i < {placements}; i++) {{
+                        parts.push(ctx.invoke('parts/wheel.js', {{ radius: 2 }}).translate((i + 1) * 3, 0, 0));
+                    }}
+                    return odm.group(...parts);
+                }}
+                "#
+            ),
+            &json!({}),
+            &HashMap::new(),
+            Some(Box::new(invoker)),
+        )
+        .unwrap();
+
+        let root = output_node(&w, &out);
+        assert_eq!(root.children.len(), placements);
+        let subtrees: std::collections::HashSet<Hash> =
+            root.children.iter().map(|&c| node_at(&w, c).children[0]).collect();
+        assert_eq!(subtrees.len(), 1, "every placement refers to the same subtree");
+        w.store.object_count()
+    };
+    assert_eq!(objects(8) - objects(2), 6, "each extra placement costs one wrapper node");
 }
 
 #[test]

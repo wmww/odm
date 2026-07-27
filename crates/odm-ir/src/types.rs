@@ -110,7 +110,8 @@ impl Canonical for Transform {
     }
 }
 
-/// Scene tree node. Children are stored inline; meshes by content hash.
+/// Scene tree node. Children and meshes are both content hashes into the
+/// store, so a shared subtree is stored (and hashed) once.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,18 +123,14 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<Hash>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<Node>,
+    pub children: Vec<Hash>,
 }
 
 impl Node {
-    /// All mesh hashes referenced by this subtree.
-    pub fn mesh_refs(&self, out: &mut Vec<Hash>) {
-        if let Some(h) = self.mesh {
-            out.push(h);
-        }
-        for c in &self.children {
-            c.mesh_refs(out);
-        }
+    /// Store objects this node references directly: its mesh and its children.
+    pub fn refs(&self, out: &mut Vec<Hash>) {
+        out.extend(self.mesh);
+        out.extend(self.children.iter().copied());
     }
 }
 
@@ -152,7 +149,7 @@ impl Canonical for Node {
         w.opt(&self.mesh);
         w.len(self.children.len());
         for c in &self.children {
-            c.write(w);
+            w.hash(c);
         }
     }
 }

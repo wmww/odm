@@ -13,7 +13,7 @@ pub mod math;
 mod wire;
 
 pub use camera::{Camera, Projection};
-pub use flatten::{DEFAULT_COLOR, FlatInstance, flatten_node, flatten_scene, mesh_aabb, node_id};
+pub use flatten::{DEFAULT_COLOR, flatten_node, flatten_scene, mesh_aabb, node_id};
 pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES, Renderer};
 pub use wire::{WireHit, mesh_edges, pick_wire};
 
@@ -47,16 +47,19 @@ pub enum RenderError {
     Png(String),
 }
 
-pub struct RenderInstance {
+pub struct Instance {
+    /// Node id: child-index path from the root ("", "0", "0/2", ...).
+    pub id: String,
+    pub name: Option<String>,
     pub mesh: Hash,
-    /// Column-major world matrix.
-    pub transform: [[f32; 4]; 4],
+    /// Column-major world matrix (f64; converted to f32 at GPU upload).
+    pub world: math::Mat4,
     /// Linear RGBA, already resolved through inheritance.
     pub color: [f32; 4],
 }
 
 pub struct RenderScene {
-    pub instances: Vec<RenderInstance>,
+    pub instances: Vec<Instance>,
     pub meshes: HashMap<Hash, Arc<odm_ir::Mesh>>,
     /// World AABB of all instances.
     pub bounds: Option<([f64; 3], [f64; 3])>,

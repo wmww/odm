@@ -25,8 +25,8 @@ pub fn mesh_edges(mesh: &Mesh) -> Vec<u32> {
     out
 }
 
-/// A wire hit: index into `RenderScene::instances` (aligned with the flattened
-/// `FlatInstance` list), how far the click was from the wire, and its depth.
+/// A wire hit: index into `RenderScene::instances`, how far the click was from
+/// the wire, and its depth.
 pub struct WireHit {
     pub instance: usize,
     pub distance_px: f64,
@@ -55,7 +55,7 @@ pub fn pick_wire(
     let mut clip: Vec<[f64; 4]> = Vec::new();
     for (index, inst) in scene.instances.iter().enumerate() {
         let Some(mesh) = scene.meshes.get(&inst.mesh) else { continue };
-        let mvp = math::mul(&view_proj, &math::from_f32_cols(&inst.transform));
+        let mvp = math::mul(&view_proj, &inst.world);
 
         // Project every vertex once, then walk the triangles' edges.
         clip.clear();

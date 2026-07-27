@@ -25,16 +25,21 @@ fn flatten_accumulates_transforms_and_colors() {
 
     let red = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
     let blue = Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
+    let child = |n: Node| store.put(Object::Node(n));
     let root = Node {
         transform: translation(10.0, 0.0, 0.0),
         color: Some(red),
         children: vec![
             // Inherits red, nested translation.
-            Node { transform: translation(0.0, 5.0, 0.0), mesh: Some(mesh), ..Default::default() },
+            child(Node {
+                transform: translation(0.0, 5.0, 0.0),
+                mesh: Some(mesh),
+                ..Default::default()
+            }),
             // Own color wins over inherited.
-            Node { color: Some(blue), mesh: Some(mesh), ..Default::default() },
+            child(Node { color: Some(blue), mesh: Some(mesh), ..Default::default() }),
             // Empty mesh: skipped.
-            Node { mesh: Some(empty), ..Default::default() },
+            child(Node { mesh: Some(empty), ..Default::default() }),
         ],
         ..Default::default()
     };
@@ -46,8 +51,8 @@ fn flatten_accumulates_transforms_and_colors() {
 
     let first = &scene.instances[0];
     assert_eq!(first.color, [1.0, 0.0, 0.0, 1.0], "inherited");
-    assert_eq!(first.transform[3][0], 10.0, "x translation accumulated");
-    assert_eq!(first.transform[3][1], 5.0, "y translation accumulated");
+    assert_eq!(first.world[12], 10.0, "x translation accumulated");
+    assert_eq!(first.world[13], 5.0, "y translation accumulated");
 
     let second = &scene.instances[1];
     assert_eq!(second.color, [0.0, 0.0, 1.0, 1.0], "own color wins");
@@ -75,6 +80,10 @@ fn missing_objects_error() {
     assert!(matches!(flatten_scene(&store, bogus), Err(RenderError::MissingObject(_))));
 
     let root = store.put(Object::Node(Node { mesh: Some(bogus), ..Default::default() }));
+    assert!(matches!(flatten_scene(&store, root), Err(RenderError::MissingObject(_))));
+
+    // A child hash that is not in the store is the same kind of error.
+    let root = store.put(Object::Node(Node { children: vec![bogus], ..Default::default() }));
     assert!(matches!(flatten_scene(&store, root), Err(RenderError::MissingObject(_))));
 }
 

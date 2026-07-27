@@ -3,12 +3,14 @@
 //! viewer unless headless. Every command syncs (rescans + hashes sources) first,
 //! so CLI results always reflect the files on disk.
 
+mod commands;
 mod icons;
 mod scene;
 mod server;
 mod state;
 mod theme;
 mod viewer;
+mod watcher;
 
 use std::path::PathBuf;
 

@@ -10,8 +10,8 @@ mod ops;
 mod session;
 mod snapshot;
 
-pub use ir_json::{node_from_json, node_to_json};
-pub use session::{InvokeResult, Invoker, LogLine, SessionState};
+pub use ir_json::node_from_json;
+pub use session::{Invoker, LogLine, SessionState};
 pub use snapshot::JsEnv;
 
 /// Re-export so downstream crates can hold isolate handles without a direct
@@ -31,7 +31,7 @@ pub fn context_value_hash(v: Option<&Value>) -> Hash {
 use deno_core::error::JsError;
 use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions, serde_v8, v8};
 use odm_ir::Hash;
-use odm_store::{Dep, Object};
+use odm_store::Dep;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -185,9 +185,8 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Buil
         Err(e) => return Err(attach_logs(e, &session)),
     };
 
-    let node = ir_json::node_from_json(&store, &ir_value)
+    let output = ir_json::node_from_json(&store, &ir_value)
         .map_err(|m| attach_logs(BuildError::BadOutput(m), &session))?;
-    let output = store.put(Object::Node(node));
     Ok(BuildOutput {
         output,
         deps: std::mem::take(&mut session.deps),

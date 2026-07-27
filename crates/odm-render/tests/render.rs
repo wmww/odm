@@ -10,14 +10,15 @@ fn demo_scene() -> (std::sync::Arc<Store>, odm_ir::Hash) {
     let cyl = kernel.cylinder(3.0, 0.8, 0.8, 48, false).unwrap();
     let mut off = Transform::IDENTITY;
     off.0[12] = 2.5;
+    let child = |n: Node| store.put(Object::Node(n));
     let root = Node {
         children: vec![
-            Node {
+            child(Node {
                 mesh: Some(cube),
                 color: Some(Color { r: 0.2, g: 0.4, b: 0.8, a: 1.0 }),
                 ..Default::default()
-            },
-            Node { mesh: Some(cyl), transform: off, ..Default::default() },
+            }),
+            child(Node { mesh: Some(cyl), transform: off, ..Default::default() }),
         ],
         ..Default::default()
     };

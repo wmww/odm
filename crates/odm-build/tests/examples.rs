@@ -14,10 +14,10 @@ fn env() -> Arc<JsEnv> {
     ENV.get_or_init(|| Arc::new(JsEnv::new().unwrap())).clone()
 }
 
-fn engine() -> Arc<BuildEngine> {
+fn engine(name: &str) -> Arc<BuildEngine> {
     let store = Store::new();
     let kernel = Kernel::new(store.clone());
-    BuildEngine::new(store, kernel, env())
+    BuildEngine::new(store, kernel, env(), example(name))
 }
 
 fn example(name: &str) -> PathBuf {
@@ -25,8 +25,8 @@ fn example(name: &str) -> PathBuf {
 }
 
 fn build_example(name: &str, t: f64) -> (Arc<BuildEngine>, odm_ir::Hash) {
-    let e = engine();
-    let sync = e.sync(&example(name)).unwrap_or_else(|err| panic!("{name}: {err}"));
+    let e = engine(name);
+    let sync = e.sync().unwrap_or_else(|err| panic!("{name}: {err}"));
     let result = e
         .build_root(&e.start_pass(&sync, t))
         .unwrap_or_else(|err| panic!("{name} failed to build: {err:?}"));
@@ -40,10 +40,10 @@ fn build_example(name: &str, t: f64) -> (Arc<BuildEngine>, odm_ir::Hash) {
 #[test]
 fn example_scene_hashes_are_stable() {
     let golden = [
-        ("hello-bracket", "8a29c005cae2243ea003aa9990d7888d408401aac88e66b24af2981cc3b59ab9"),
-        ("parametric-box", "f2702b016dd5ebdc6628af05def2fb4a21a4e2cd637c8d0a409b5ca7b8856bd1"),
-        ("assembly", "4782e8fe401c64cf5e4728715a6a4cc033126cf8e7118840f4fda25a9797cfa5"),
-        ("piston", "a58af4a26bdf6e4185b7df1bd207fbcb7a7523df3d6a979acf7b0ac49151d260"),
+        ("hello-bracket", "08e7aadbec8bfe2f2fb18e556e5e5ff0ebb196b7a360020241667f31c78987d5"),
+        ("parametric-box", "304655eb56a4f56f2166dcb026081b442c5eb3725d11402c3b82a40b07c5b12e"),
+        ("assembly", "25452df87f4352647308d4d4d39a367e772345341cf72be6cf70ddec1a76e5fc"),
+        ("piston", "b9515af0953effb24ecd48b7d5e193b64f89e8b3499a9b82e75e8de9f4cbd9e1"),
     ];
     let mut failures = vec![];
     for (name, want) in golden {
@@ -80,23 +80,55 @@ fn bracket_has_holes() {
     assert!(vol > solid_vol * 0.8, "but not too much: {vol}");
 }
 
+/// Read a stored node (panics if the hash is missing or is a mesh).
+fn node_at(e: &BuildEngine, h: odm_ir::Hash) -> odm_ir::Node {
+    match &*e.store.get(h).unwrap_or_else(|| panic!("{h} not in store")) {
+        Object::Node(n) => n.clone(),
+        _ => panic!("{h} is a mesh, not a node"),
+    }
+}
+
+/// Mesh hashes in a stored subtree, in walk order (repeats included).
+fn mesh_refs(e: &BuildEngine, root: odm_ir::Hash) -> Vec<odm_ir::Hash> {
+    let node = node_at(e, root);
+    let mut out: Vec<odm_ir::Hash> = node.mesh.into_iter().collect();
+    for c in &node.children {
+        out.extend(mesh_refs(e, *c));
+    }
+    out
+}
+
 #[test]
 fn assembly_shares_wheel_geometry() {
     let (e, root) = build_example("assembly", 0.0);
-    let node = match &*e.store.get(root).unwrap() {
-        Object::Node(n) => n.clone(),
-        _ => panic!(),
-    };
-    let mut refs = vec![];
-    node.mesh_refs(&mut refs);
+    let refs = mesh_refs(&e, root);
     let unique: std::collections::HashSet<_> = refs.iter().collect();
-    assert!(refs.len() > unique.len(), "4 wheels must reuse blobs: {} refs, {} unique", refs.len(), unique.len());
+    assert!(
+        refs.len() > unique.len(),
+        "4 wheels must reuse blobs: {} refs, {} unique",
+        refs.len(),
+        unique.len()
+    );
+
+    // And the whole wheel *subtree* is stored once: the four placement
+    // wrappers (chassis is child 0) all point at the same child hash.
+    let cart = node_at(&e, root);
+    let wheels: Vec<odm_ir::Hash> = cart.children[1..]
+        .iter()
+        .map(|&c| {
+            let placement = node_at(&e, c);
+            assert_eq!(placement.children.len(), 1, "each wheel wraps one subtree");
+            placement.children[0]
+        })
+        .collect();
+    assert_eq!(wheels.len(), 4);
+    assert!(wheels.windows(2).all(|w| w[0] == w[1]), "4 placements, 1 stored wheel: {wheels:?}");
 }
 
 #[test]
 fn piston_animates_and_memoizes_static_parts() {
-    let e = engine();
-    let sync = e.sync(&example("piston")).unwrap();
+    let e = engine("piston");
+    let sync = e.sync().unwrap();
     let r0 = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
     let r1 = e.build_root(&e.start_pass(&sync, 0.5)).unwrap();
     assert_ne!(r0.root, r1.root, "piston must move between t=0 and t=0.5");
@@ -110,9 +142,8 @@ fn piston_animates_and_memoizes_static_parts() {
 
 #[test]
 fn parametric_box_partial_rebuild() {
-    let dir = example("parametric-box");
-    let e = engine();
-    let sync = e.sync(&dir).unwrap();
+    let e = engine("parametric-box");
+    let sync = e.sync().unwrap();
     e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
     let builds_before = e.stats.builds.load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(builds_before, 2, "main.js + lip.js");
