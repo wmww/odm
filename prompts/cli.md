@@ -2,9 +2,10 @@
 
 The `odm` CLI talks to the running engine. Run it from anywhere inside
 the project (it walks up to find the engine socket), or pass
-`--project <dir>` first. Every command **syncs first** — rescans files,
-rebuilds what changed, then answers — and prints a single JSON object.
-Exit code 0 = ok, 1 = error.
+`--project <dir>` first. Every command that looks at the scene **syncs
+first** — rescans files, rebuilds what changed, then answers — and prints
+a single JSON object. Exit code 0 = ok, nonzero = error. (`prompt` is the
+one exception: no engine, and markdown rather than JSON.)
 
 ```
 odm status                    # files, generation, animation duration
@@ -53,13 +54,20 @@ you collect them with `odm poll`:
   forever. `--timeout <sec>` additionally bounds the wait, exiting with
   `"messages": []` — use it if your harness limits how long a command
   may run.
+- Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
+  a message is only retired once the poll that took it has printed it,
+  so anything it didn't get to goes back in the queue for the next one.
+  The flip side is that a poll killed at exactly the wrong moment can
+  make one message arrive twice — if the same text turns up again
+  immediately, it is the same instruction, not a second one.
 
 **Keep a poll running in the background at all times**, including while
 you work: launch `odm poll` as a background task, and whenever it exits,
 act on any messages and launch it again. Messages are never lost —
-anything sent while you weren't polling is delivered to the next poll —
-but the viewer tells the user nobody is listening when no poll is
-active, so a standing poll is what makes you reachable.
+anything sent while you weren't polling is delivered to the next poll,
+and the viewer shows the user which of their messages have reached you —
+but it also tells them nobody is listening when no poll is active, so a
+standing poll is what makes you reachable.
 
 `odm say <text>` sends a message back; it appears in the viewer next to
 the user's own messages. Use it to answer questions and report what you

@@ -18,6 +18,16 @@ cd examples/piston
 Edit any `.js` file and re-run a command — every CLI call syncs and rebuilds
 what changed.
 
+To point an agent at a project, give it the instructions ODM ships with:
+
+```sh
+odm prompt > AGENTS.md     # or CLAUDE.md, or paste into a system prompt
+```
+
+Those are `prompts/` — how to write doohickeys, and how to use the CLI
+(including `odm poll` / `odm say`, which carry messages between the user's
+viewer and the agent).
+
 ## Layout
 
 - `crates/odm-ir` — IR types + content hashing (blake3, canonical encoding)
@@ -33,7 +43,8 @@ what changed.
 - `crates/odm` — the one `odm` binary: `run` is the engine, the rest is the client
 - `framework/` — JS framework + vendored three.js subset (r185)
 - `examples/` — example projects (double as integration tests)
-- `docs/agent/` — docs for agents *using* ODM on a project
+- `prompts/` — the instructions for agents *using* ODM on a project;
+  `odm prompt` prints them, compiled into the binary
 
 Design notes and decisions live in `notes/`; known issues in `issues/`.
 

@@ -9,7 +9,7 @@ mod tree;
 
 use crate::scene;
 use crate::session::Sessions;
-use crate::state::{EngineState, Published};
+use crate::state::{Delivery, EngineState, Published, Who};
 use crate::theme;
 use eframe::egui;
 use odm_render::math::{cross, normalize};
@@ -41,6 +41,10 @@ const PICK_RADIUS_PT: f64 = 6.0;
 /// Height of the build-error pane. Fixed, so opening one does not resize the
 /// panel as the message grows.
 const ERROR_HEIGHT: f32 = 140.0;
+
+/// Height of the chat transcript. The viewport is the main event, so the panel
+/// stays modest and fixed.
+const CHAT_HEIGHT: f32 = 92.0;
 
 impl Orbit {
     fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
@@ -130,6 +134,8 @@ pub struct ViewerApp {
     tree: TreeState,
     needs_render: bool,
     error_open: bool,
+    /// The chat input line. The transcript itself lives in `EngineState`.
+    chat_input: String,
     open_dialog: Option<open::OpenDialog>,
     /// File ▸ Exit; acted on by the event loop (see `idle.rs`).
     quit: Quit,
@@ -160,6 +166,7 @@ impl ViewerApp {
             tree: TreeState::default(),
             needs_render: true,
             error_open: true,
+            chat_input: String::new(),
             open_dialog: None,
             quit,
         }
@@ -176,6 +183,9 @@ impl ViewerApp {
         self.scrubbing_t = 0.0;
         self.tree = TreeState::default();
         self.error_open = true;
+        // The new session has its own (empty) transcript; the half-typed line
+        // was meant for the old one.
+        self.chat_input.clear();
         self.set_selection(Vec::new());
         // Nothing of the old project should still be resident, or on screen.
         self.renderer.prune_cache(&|_| false);
@@ -543,12 +553,60 @@ impl ViewerApp {
         }
     }
 
+    /// Messages to and from the agent: transcript above, one input line below.
+    fn chat_ui(&mut self, ui: &mut egui::Ui) {
+        let size = egui::vec2(ui.available_width(), CHAT_HEIGHT);
+        self.state.with_transcript(|transcript| {
+            theme::tail_box(ui, "chat", size, |ui| {
+                if transcript.is_empty() {
+                    ui.label(
+                        egui::RichText::new("Type below to send the agent a message.")
+                            .color(theme::WEAK_TEXT),
+                    );
+                }
+                for entry in transcript {
+                    let undelivered = entry.delivery != Delivery::Done;
+                    let (text, color) = match entry.who {
+                        // Dimmed until the agent has actually acknowledged it,
+                        // so a message that never got through still looks like
+                        // one.
+                        Who::User if undelivered => {
+                            (format!("> {}", entry.text), theme::WEAK_TEXT)
+                        }
+                        Who::User => (format!("> {}", entry.text), theme::TEXT),
+                        Who::Agent => (entry.text.clone(), theme::AGENT_TEXT),
+                    };
+                    ui.label(egui::RichText::new(text).color(color));
+                }
+            })
+        });
+        ui.add_space(3.0);
+        let input = theme::text_edit(ui, &mut self.chat_input, ui.available_width() - 4.0);
+        if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            let text = self.chat_input.trim().to_owned();
+            if !text.is_empty() {
+                self.state.send_message(text);
+            }
+            self.chat_input.clear();
+            // Enter sends *and* keeps the caret, so a reply can follow.
+            input.request_focus();
+        }
+    }
+
     fn bottom_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             theme::status_field(ui, format!("gen {}", self.published.generation));
             if self.published.building {
                 theme::status_field(ui, "Building…");
             }
+            // The user's cue to go prod the agent in its own terminal.
+            theme::status_field(
+                ui,
+                match self.state.listeners() {
+                    0 => "agent is not listening",
+                    _ => "agent is listening",
+                },
+            );
             match self.selected.as_slice() {
                 [] => {}
                 [(id, _)] => theme::status_field(
@@ -605,6 +663,11 @@ impl eframe::App for ViewerApp {
             .frame(theme::panel_frame())
             .show(ui, |ui| self.bottom_ui(ui));
         theme::band(ui, bottom.response.rect);
+        // Above the status band, below the viewport.
+        let chat = egui::Panel::bottom("chat")
+            .frame(theme::panel_frame())
+            .show(ui, |ui| self.chat_ui(ui));
+        theme::band(ui, chat.response.rect);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| self.viewport_ui(ui, frame));

@@ -98,7 +98,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
   Commands: status/sync/build/render/tree/inspect/raycast/
-  selection; every command syncs first. Protocol: ndjson over unix socket,
+  selection, and poll/say/ack (see "Talking to the agent"); every command
+  except those three syncs first. Protocol: ndjson over unix socket,
   `{ok: bool, ...}` responses. Files: `state.rs` (published slot, build
   queue, `build_at` — the one sync→build→publish path, shared by the
   background loop and the command handlers — and `stop`, below),
@@ -128,7 +129,10 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   from `theme::pixels`/`theme::arrow` as a `Mesh`. See "Scrollbars" below.
 - `odm-cli` — client commands: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
-  from `ok`. Also owns `find_project` (the walk-up), which `run` reuses.
+  from `ok`. Also owns `find_project` (the walk-up), which `run` reuses, and
+  `prompt.rs`: `odm prompt` `include_str!`s the repo's `prompts/*.md` (via
+  `CARGO_MANIFEST_DIR`) and prints them concatenated — no socket, no project,
+  and the one command that emits markdown instead of JSON.
 - `odm` — the only binary. `odm run [<dir>] [--headless]` → `odm_engine::run`;
   everything else → `odm_cli::run`. Top-level `--help` splices in
   `odm_cli::USAGE`. Splitting the two halves into libs behind one bin keeps
@@ -173,6 +177,52 @@ and gates Open. The path field is what Open acts on, so clicking a row and
 typing a path are the same gesture; double-clicking a plain folder browses into
 it, double-clicking a project opens it. `~` expands, nothing else does. Its row
 list is a `theme::list_box`, so it gets the era's scrollbar for free.
+
+### Talking to the agent
+
+The user types in the viewer's chat panel; the agent collects messages with
+`odm poll` and answers with `odm say`. No MCP: CLI + `prompts/` is
+agent-agnostic and enough.
+
+- **Poll's contract is set by agent harnesses.** They can't read a running
+  background command's output — they are woken when it *exits*. So poll blocks
+  until ≥1 message is queued, prints them all, and exits; process exit is the
+  delivery mechanism. `--timeout` bounds the wait (empty `messages`), and a
+  retired session (File ▸ Open) answers `{"ok": false, "error": {"kind":
+  "stopped"}}` so a poll never outlives its engine. `prompts/cli.md` tells the
+  agent to keep one poll running at all times.
+- **Delivery is committed, not assumed** (the fix for a 2026-07-27 bug where
+  Ctrl+C on a poll made the next message disappear). Each entry carries a
+  `Delivery`: `Pending` → `InFlight` (a poll took it) → `Done`, and *only* an
+  `ack` from the client moves it to `Done`. The CLI sends that ack after it has
+  printed and flushed the messages, so the engine's copy is never the only one
+  in flight. Every other ending — Ctrl+C, broken pipe, crashed harness, a
+  connection that just closes — drops the `Conn`, whose `Drop` returns anything
+  unacked to `Pending`. Failure therefore duplicates rather than loses, which
+  is the direction to fail in; `prompts/cli.md` warns the agent about repeats.
+  The viewer dims anything not `Done`, so an undelivered message still looks
+  like one.
+- **A blocked poll must notice its client dying.** Reading is on its own
+  thread per connection (`read_requests`), so EOF is seen while the handler
+  blocks; it sets `Peer::gone` and wakes the pollers, which return
+  `Disconnected`. Without this the connection thread parks on the condvar
+  forever: `listeners` stays wrong ("agent is listening" with nobody there) and
+  the zombie wins the next batch. `server::tests` reproduces exactly that over
+  a real socket.
+- `state.rs` holds the queue: a `Chat` of one transcript `Vec` under a mutex —
+  the pending entries *are* the queue, so there is no second list to fall out
+  of step with it — plus a condvar and a `listeners` count (blocked polls). In
+  memory only; the agent's own conversation is the durable record.
+- **`poll`/`say` must not take `cmd_lock`** and never sync or build: a poll
+  blocked for minutes while holding it would freeze the engine (see
+  issues/engine-serializes-commands.md). `dispatch` handles them before the
+  lock; `state::tests::chat_commands_skip_the_command_lock` guards it.
+- Viewer: a fixed-height panel above the status band —
+  `theme::tail_box` transcript (user lines `> …` white, dimmed while
+  undelivered; agent lines in `theme::AGENT_TEXT`) plus one `theme::text_edit`
+  where Enter sends and keeps focus. The status band says whether the agent is
+  listening, which is the user's cue to go prod it in its own terminal. All of
+  it repaints through the existing `EngineState::wake`.
 
 ### Owning the event loop
 
@@ -302,7 +352,10 @@ Consequences:
 `cargo test` runs everything in ~1s after compile. Almost all tests are
 integration tests in `crates/*/tests/`; the unit tests in `src/` are
 `odm-render/src/grid.rs` and, in odm-engine, `icons.rs`, `commands.rs`,
-`viewer/tree.rs` and `theme/scroll.rs`.
+`state.rs` (the chat queue), `server.rs` (delivery over a real socket),
+`viewer/tree.rs` and `theme/scroll.rs`. `state.rs`'s tests build an
+`EngineState` directly and share one `JsEnv` in a `OnceLock` — a second V8
+snapshot in a process is a SIGSEGV — and `server.rs` reuses that helper.
 
 Manifests suppress empty harness output: `doctest = false` on every lib (we
 write no doctests, and `odm-js` otherwise inherits an ignored one from a

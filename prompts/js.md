@@ -13,24 +13,33 @@ preloaded — no imports, no file or network access. Return a `Solid`,
 `Group`, `Instance`, a closed `THREE.BufferGeometry`, an array of these,
 or `null`.
 
-## API
+## Solids
 
 ```js
-odm.box([20, 10, 4]);                  // centered at origin
-odm.cylinder({ r: 3, h: 10 });         // along Z, centered
-odm.sphere({ r: 5, segments: 64 });
-a.subtract(b); a.union(b); a.intersect(b); a.hull();
+odm.box([20, 10, 4]);                   // also odm.box(10), odm.box({ size, center })
+odm.cylinder({ r: 3, h: 10 });          // along Z; odm.cylinder(r, h); r1/r2 for a cone
+odm.sphere({ r: 5, segments: 64 });     // segment defaults: cylinder 64, sphere 48
+odm.extrude([outerPts, holePts], { height: 4, twist: rad, scale: 0.5 });  // along +Z
+odm.revolve(profilePts, { angle: Math.PI, segments: 96 });  // around Z; (x,y) → (radius, z)
+odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48));  // closed geometry only
+```
+
+Primitives are centered on the origin unless `center: false`, which puts a
+box's corner (or a cylinder's base) there instead. 2D profiles are
+`[[x, y], ...]`, a list of those (even-odd holes), or a `THREE.Shape`
+(curves flatten; `curveSegments` sets how finely). A revolve profile's x
+is a radius, so it must be ≥ 0.
+
+```js
+a.subtract(b); a.union(b); a.intersect(b); a.hull();  // odm.difference(a, b) etc. also work
 s.translate(x, y, z).rotateZ(odm.deg(30)).scale(2);   // world-frame, applied in order
-odm.extrude([outerPts, holePts], { height: 4, twist: rad, scale: 0.5 });
-odm.revolve(profilePts, { segments: 96 });            // around Z; (x,y) → (radius, z)
-odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48)); // closed geometry only
+s.rotate([0, 1, 1], rad); s.transform(matrix4);       // arbitrary axis / raw matrix
 s.color('steelblue'); s.name('bolt');                 // labels show in odm tree
 ```
 
-2D profiles are `[[x, y], ...]` arrays or a `THREE.Shape` (curves get
-flattened). Exact engine-side queries — use these to position parts
-relative to computed geometry, never eyeball dimensions: `.volume()`,
-`.area()`, `.bounds()` → `{min, max}`, `.raycast(origin, dir)` →
+Exact engine-side queries — use these to position parts relative to
+computed geometry, never eyeball dimensions: `.volume()`, `.area()`,
+`.bounds()` → `{min, max}`, `.raycast(origin, dir, maxDist?)` →
 `{distance, position, normal} | null`.
 
 ## Composition
@@ -41,18 +50,43 @@ return odm.group(wheel.translate(-20, 0, 0), wheel.translate(20, 0, 0));
 ```
 
 The invoked file sees the args as `ctx.args` (JSON values; Solids are
-allowed and cross as handles). Instances can be transformed, colored and
-named, but not used in CSG. Invokes are memoized — same file + same args
+allowed and cross as handles). Groups and Instances can be transformed,
+colored and named, but not used in CSG; a color on a group applies to the
+descendants that have none. Invokes are memoized — same file + same args
 is free.
 
 ## Parameters and animation
 
-- `ctx.param('width', 40)` reads a project parameter (defined in
-  `odm.json` under `"params"`), with a default.
-- `ctx.t` is the animation time in seconds (0 for static scenes). Declare
-  a timeline with `"animation": { "duration": 4 }` in `odm.json`, and
-  model motion as a pure function of `ctx.t`. Only doohickeys that read
-  `ctx.t` rebuild when time changes.
+- `ctx.param('width', 40)` reads a project parameter, with a default.
+- `ctx.t` is the animation time in seconds (0 for static scenes). Model
+  motion as a pure function of it; only doohickeys that read `ctx.t`
+  rebuild when time changes.
+
+Both come from the optional `odm.json` at the project root:
+
+```json
+{ "params": { "width": 60 }, "animation": { "duration": 4 } }
+```
+
+`animation.duration` (seconds) is what enables the viewer's timeline and
+`--t` renders.
+
+## Colors
+
+Named CSS colors (a common subset — steelblue, crimson, silver, …), hex
+`'#rrggbb'`/`'#rgb'`, numeric `0xRRGGBB`, or `[r, g, b]` sRGB 0..1.
+Unknown names error with a hint. Alpha must be 1: the renderer has no
+transparency, so a translucent color is rejected rather than silently
+drawn opaque.
+
+## THREE
+
+A vendored subset of three.js r185: math (`Vector2/3/4`, `Matrix3/4`,
+`Quaternion`, `Euler`, `Box3`), `BufferGeometry`/`BufferAttribute`, the
+geometry generators (`Box`, `Cylinder`, `Sphere`, `Torus`, `Extrude`,
+`Lathe`, `Shape`), `Shape`/`Path`, curves, `MathUtils`. No renderer,
+scene or DOM classes. Three's generators are Y-up; ODM's primitives are
+Z-up.
 
 ## Conventions
 
@@ -64,5 +98,7 @@ is free.
 - `build(ctx)` must be **pure**: same inputs → same output. `Date` is
   frozen and `Math.random` is deterministic per build, but prefer
   explicit parameters.
+- `console.log` output comes back with build results, so it is a usable
+  debugging tool.
 - Common failure: "open surface, not a solid" — a profile or three.js
   geometry must enclose a volume.

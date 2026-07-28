@@ -2,7 +2,8 @@
 //! only place that speaks `serde_json::Value`.
 
 use crate::scene;
-use crate::state::EngineState;
+use crate::server::Conn;
+use crate::state::{EngineState, PollOutcome};
 use odm_build::{BuildFailure, FailureKind, PassResult};
 use odm_ir::Node;
 use odm_js::LogLine;
@@ -13,7 +14,8 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-const COMMANDS: &str = "status, sync, build, render, tree, inspect, raycast, selection";
+const COMMANDS: &str =
+    "status, sync, build, render, tree, inspect, raycast, selection, poll, say";
 
 /// One socket request. Unknown commands *and* unknown fields are errors, so
 /// agents hear about typos instead of silently getting a default.
@@ -47,6 +49,16 @@ enum Request {
         dir: Option<[f64; 3]>,
     },
     Selection {},
+    Poll {
+        timeout: Option<f64>,
+    },
+    Say {
+        text: String,
+    },
+    /// "I have the messages the last poll on this connection gave me." Sent by
+    /// the CLI after it prints them, and left out of `COMMANDS` because it is
+    /// part of poll's delivery handshake, not something an agent types.
+    Ack {},
 }
 
 #[derive(Deserialize)]
@@ -132,10 +144,12 @@ impl CmdError {
 }
 
 impl EngineState {
-    pub fn handle(&self, req: Value) -> Value {
-        let _guard = self.cmd_lock.lock().unwrap();
+    /// Answer one request. `conn` is the connection it arrived on: chat
+    /// commands need it to notice a client going away, and to keep messages
+    /// tied to the connection that has to acknowledge them.
+    pub fn handle(&self, req: Value, conn: &mut Conn) -> Value {
         let result = match serde_json::from_value::<Request>(req) {
-            Ok(req) => self.dispatch(req),
+            Ok(req) => self.dispatch(req, conn),
             Err(e) => Err(CmdError::bad_request(request_error(&e))),
         };
         match result {
@@ -149,7 +163,17 @@ impl EngineState {
         }
     }
 
-    fn dispatch(&self, req: Request) -> Result<Value, CmdError> {
+    fn dispatch(&self, req: Request, conn: &mut Conn) -> Result<Value, CmdError> {
+        // The chat commands neither sync nor build, and must stay off
+        // `cmd_lock`: a poll blocked on it for minutes would freeze the engine
+        // (see issues/engine-serializes-commands.md).
+        match req {
+            Request::Poll { timeout } => return self.cmd_poll(timeout, conn),
+            Request::Say { text } => return self.cmd_say(&text),
+            Request::Ack {} => return Ok(json!({ "acked": conn.confirm() })),
+            _ => {}
+        }
+        let _guard = self.cmd_lock.lock().unwrap();
         match req {
             // Every command syncs first, so `sync` is just `status`.
             Request::Status {} | Request::Sync {} => self.cmd_status(),
@@ -159,6 +183,9 @@ impl EngineState {
             Request::Inspect { t, node } => self.cmd_inspect(t, &node),
             Request::Raycast { t, origin, dir } => self.cmd_raycast(t, origin, dir),
             Request::Selection {} => self.cmd_selection(),
+            Request::Poll { .. } | Request::Say { .. } | Request::Ack {} => {
+                unreachable!("handled above")
+            }
         }
     }
 
@@ -350,6 +377,51 @@ impl EngineState {
         Ok(json!({ "selection": sel }))
     }
 
+    /// Block until the user sends something. Exiting is the delivery
+    /// mechanism: agent harnesses only look at a background command once it
+    /// has ended, so poll takes the whole queue in one go and returns.
+    ///
+    /// What it takes stays *in flight* — the messages are only retired when
+    /// the client acknowledges them (`Ack`, sent by the CLI once it has
+    /// printed them). Kill the CLI at any point and the connection dies with
+    /// unacknowledged messages, which puts them back in the queue.
+    fn cmd_poll(&self, timeout: Option<f64>, conn: &mut Conn) -> Result<Value, CmdError> {
+        // try_from rejects negative, NaN, infinite *and* too-large-for-Duration
+        // in one go; the from_ variant panics on the last two.
+        let timeout = match timeout.map(std::time::Duration::try_from_secs_f64).transpose() {
+            Ok(t) => t,
+            Err(_) => {
+                let what = "timeout must be a non-negative number of seconds";
+                return Err(CmdError::bad_request(what));
+            }
+        };
+        let taken = match self.poll_messages(timeout, conn.peer()) {
+            PollOutcome::Messages(taken) => taken,
+            PollOutcome::TimedOut => Vec::new(),
+            // Both leave nothing in flight, and both want the poll to end
+            // rather than sit on a queue nobody is coming back for.
+            PollOutcome::Disconnected => {
+                return Err(CmdError::new("disconnected", "client went away"));
+            }
+            PollOutcome::Stopped => {
+                return Err(CmdError::new("stopped", "engine is shutting down"));
+            }
+        };
+        let messages: Vec<Value> =
+            taken.iter().map(|(_, text)| json!({ "text": text })).collect();
+        conn.hold(taken.into_iter().map(|(i, _)| i));
+        Ok(json!({ "messages": messages }))
+    }
+
+    fn cmd_say(&self, text: &str) -> Result<Value, CmdError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(CmdError::bad_request("say needs a message"));
+        }
+        self.say(text.to_owned());
+        Ok(json!({}))
+    }
+
     fn root_node(&self, result: &PassResult) -> Result<Node, CmdError> {
         match self.build_engine().store.get(result.root).as_deref() {
             Some(Object::Node(n)) => Ok(n.clone()),
@@ -422,5 +494,19 @@ mod tests {
         assert!(e.contains("typo"), "{e}");
         let e = parse(r#"{"cmd":"render","typo":1}"#).err().unwrap();
         assert!(e.contains("typo"), "{e}");
+    }
+
+    #[test]
+    fn chat_commands() {
+        assert!(matches!(parse(r#"{"cmd":"poll"}"#), Ok(Request::Poll { timeout: None })));
+        assert!(
+            matches!(parse(r#"{"cmd":"poll","timeout":1.5}"#), Ok(Request::Poll { timeout: Some(s) }) if s == 1.5)
+        );
+        assert!(matches!(parse(r#"{"cmd":"say","text":"hi"}"#), Ok(Request::Say { text }) if text == "hi"));
+
+        let e = parse(r#"{"cmd":"poll","timout":1}"#).err().unwrap();
+        assert!(e.contains("timout"), "{e}");
+        let e = parse(r#"{"cmd":"say"}"#).err().unwrap();
+        assert!(e.contains("text"), "{e}");
     }
 }

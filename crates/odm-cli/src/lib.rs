@@ -2,6 +2,8 @@
 //! project's unix socket (found by walking up from cwd, like git). `odm run`
 //! lives in the `odm` binary crate; everything else lands here.
 
+mod prompt;
+
 use anyhow::{Context, bail};
 use serde_json::{Map, Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -22,6 +24,9 @@ pub const USAGE: &str = "  status                     project overview: files, g
   raycast --origin x,y,z --dir x,y,z [--t]
                              nearest hit in the scene
   selection                  viewer selection: list of {node, name}
+  poll    [--timeout <sec>]  wait for messages the user typed in the viewer
+  say     <text>             send a message to the user
+  prompt                     print the agent instructions (markdown, no engine)
 ";
 
 /// True if `args` asks for help rather than naming a command — including
@@ -50,6 +55,16 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         bail!("--project needs a command after it; run `odm --help`");
     };
     let rest = &args[1..];
+
+    // The one command with nothing to ask an engine: the instructions are
+    // compiled in, so this works with no project and no engine running.
+    if cmd == "prompt" {
+        if !rest.is_empty() {
+            bail!("prompt takes no arguments");
+        }
+        print!("{}", prompt::text());
+        return Ok(0);
+    }
 
     let request = match cmd.as_str() {
         "status" | "sync" | "selection" => parse_opts(&cmd, rest, &[])?,
@@ -85,6 +100,19 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             rest,
             &[("t", ArgKind::Num), ("origin", ArgKind::Vec3), ("dir", ArgKind::Vec3)],
         )?,
+        "poll" => parse_opts(&cmd, rest, &[("timeout", ArgKind::Num)])?,
+        // Everything after `say` is the message: no options, and no quoting
+        // rules to get wrong.
+        "say" => {
+            let text = rest.join(" ");
+            if text.trim().is_empty() {
+                bail!("say needs a message: odm say <text>");
+            }
+            let mut v = Map::new();
+            v.insert("cmd".into(), json!("say"));
+            v.insert("text".into(), json!(text));
+            v
+        }
         other => bail!("unknown command {other:?}; run `odm --help`"),
     };
 
@@ -111,7 +139,7 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     let mut line = request.to_string();
     line.push('\n');
     stream.write_all(line.as_bytes())?;
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream.try_clone()?);
     let mut response = String::new();
     reader.read_line(&mut response)?;
     if response.trim().is_empty() {
@@ -119,7 +147,29 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     }
     let value: Value = serde_json::from_str(&response).context("engine sent invalid JSON")?;
     println!("{}", serde_json::to_string_pretty(&value)?);
+    // Flush before acknowledging: until these bytes are out of our hands, the
+    // engine's copy is the only one there is.
+    std::io::stdout().flush()?;
+    if cmd == "poll" && delivered_messages(&value) {
+        acknowledge(&mut stream, &mut reader);
+    }
     Ok(if value.get("ok").and_then(|v| v.as_bool()) == Some(true) { 0 } else { 1 })
+}
+
+/// Did this response hand us messages the engine is still holding for us?
+fn delivered_messages(value: &Value) -> bool {
+    value.get("ok").and_then(|v| v.as_bool()) == Some(true)
+        && value.get("messages").and_then(|m| m.as_array()).is_some_and(|m| !m.is_empty())
+}
+
+/// Tell the engine we have the messages, so it can retire them. Until this
+/// lands they stay queued, which is what makes an interrupted `odm poll` lose
+/// nothing: best-effort, because if it fails the engine keeps them anyway.
+fn acknowledge(stream: &mut UnixStream, reader: &mut BufReader<UnixStream>) {
+    if stream.write_all(b"{\"cmd\":\"ack\"}\n").is_err() {
+        return;
+    }
+    let _ = reader.read_line(&mut String::new());
 }
 
 enum ArgKind {

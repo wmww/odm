@@ -36,6 +36,23 @@ pub fn list_box<R>(
     axes: Vec2b,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
+    scroll_box(ui, id_salt, size, axes, false, add)
+}
+
+/// A vertical list box that follows its tail: content added at the bottom
+/// scrolls into view, unless the user has scrolled up. For the chat panel.
+pub fn tail_box<R>(ui: &mut Ui, id_salt: &str, size: Vec2, add: impl FnOnce(&mut Ui) -> R) -> R {
+    scroll_box(ui, id_salt, size, Vec2b::new(false, true), true, add)
+}
+
+fn scroll_box<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    size: Vec2,
+    axes: Vec2b,
+    stick_to_bottom: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
     let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter().clone();
     p.rect_filled(outer, CornerRadius::ZERO, WINDOW);
@@ -56,6 +73,7 @@ pub fn list_box<R>(
     let out = egui::ScrollArea::new(axes)
         .id_salt(id_salt)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .stick_to_bottom(stick_to_bottom)
         .auto_shrink([false, false])
         .show(&mut child, add);
 
