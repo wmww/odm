@@ -28,7 +28,7 @@ Three ways in:
    profiles with arcs and beziers; curves flatten with the
    `curveSegments` option (default 32).
 3. **Math types**: `Vector2`s as profile points, `Vector3`s in
-   `rotate`/`raycast`, `Matrix4` in `transform()`.
+   `rotate`/`raycast`, `Matrix4` in `applyMatrix4()`.
 
 ## Gotchas
 

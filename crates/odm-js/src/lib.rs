@@ -62,7 +62,7 @@ pub struct BuildInput<'a> {
     /// Effective args: caller args validated against the file's declared
     /// inputs, with defaults merged in by the scheduler.
     pub args: &'a Value,
-    /// Input declarations for `ctx.get` routing/hydration, as JSON:
+    /// Input declarations for `ctx.input` routing/hydration, as JSON:
     /// `{ name: { cascade: bool, type: string|null } }`.
     pub decls: &'a Value,
     /// The build's environment: cascade input values by name.

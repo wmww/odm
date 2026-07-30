@@ -8,7 +8,7 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  const r = ctx.get('r');
+  const r = ctx.input('r');
   console.log(`drilling r=${r}`);
-  return ctx.get('blank').subtract(odm.cylinder({ r, h: 100 }));
+  return ctx.input('blank').subtract(odm.cylinder(r, 100));
 }

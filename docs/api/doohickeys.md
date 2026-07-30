@@ -28,7 +28,7 @@ export default function build(ctx) {
 ```
 
 The default export must be a function; it is called with a context
-object carrying `ctx.get()` (declared inputs — see
+object carrying `ctx.input()` (declared inputs — see
 [inputs.md](inputs.md)) and `ctx.invoke()`
 ([composition.md](composition.md)).
 
@@ -56,14 +56,13 @@ cut, so write the pragma. The whole story: `odm docs versioning`.
 `build()` may return:
 
 - a `Solid`, `Group`, or `Instance`;
-- a closed `THREE.BufferGeometry` (converted as if by
-  `odm.fromThreeGeometry`);
 - an **array** of any of these, nested arbitrarily — each array becomes
   an anonymous group node; `null`/`undefined` entries are dropped;
 - `null` for an empty scene.
 
-Anything else (a number, a plain object, a `THREE.Shape`, …) is a
-build error.
+Anything else (a number, a plain object, a `THREE.Shape`, a raw
+`THREE.BufferGeometry` — wrap that with `odm.fromThreeGeometry`, …) is
+a build error.
 
 ## Sandbox
 

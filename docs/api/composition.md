@@ -9,10 +9,10 @@ odm.group(bolt, nuts).name('assembly').translate(0, 0, 10); // arrays flatten
 ```
 
 Returns a `Group`: a pure grouping under one transform/color/name.
-Children may be Solids, Groups, Instances, closed
-`THREE.BufferGeometry`s, or arrays of those; one level of arrays is
-flattened and `null`/`undefined` children are dropped (handy for
-conditional parts). `g.children` returns a copy of the child list.
+Children may be Solids, Groups, Instances, or arrays of those; one
+level of arrays is flattened and `null`/`undefined` children are
+dropped (handy for conditional parts). `g.children` returns a copy of
+the child list.
 
 A Group can be transformed, colored, and named, but **not used in
 CSG**. Its color is a default: it applies to descendants that don't
@@ -27,7 +27,7 @@ return odm.group(wheel.translate(-20, 0, 0), wheel.translate(20, 0, 0));
 
 Builds another doohickey and returns its output as an `Instance`.
 `path` is project-relative. The invoked file reads the args through its
-declared inputs — `ctx.get('radius')` there — after validation against
+declared inputs — `ctx.input('radius')` there — after validation against
 its `meta.inputs` schemas, with declared defaults merged in
 ([inputs.md](inputs.md)).
 
@@ -41,7 +41,9 @@ its `meta.inputs` schemas, with declared defaults merged in
 - **`provides` is the second, separate channel**: cascade values that
   scope over the invoked file's whole subtree, no declaration needed at
   the call site. Args cannot set cascade inputs and provides cannot set
-  plain ones. See [inputs.md](inputs.md) for resolution.
+  plain ones. A provide that nothing in the subtree declares gets a
+  lint warning in the build report (it would otherwise silently do
+  nothing). See [inputs.md](inputs.md) for resolution.
 - **Memoized**: same file content + same effective inputs → the cached
   result, free. Invoking one file many times with different args is
   the intended pattern for repeated parts. (An arg spelled out at its

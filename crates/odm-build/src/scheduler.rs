@@ -625,7 +625,7 @@ pub(crate) fn effective_args(
     Ok(effective)
 }
 
-/// The declaration table `ctx.get` routes and hydrates with:
+/// The declaration table `ctx.input` routes and hydrates with:
 /// `{ name: { cascade, type } }`.
 fn decls_json(meta: &Meta) -> Value {
     let mut m = Map::new();

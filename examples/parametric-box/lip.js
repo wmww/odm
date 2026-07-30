@@ -10,9 +10,9 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  const width = ctx.get('width');
-  const depth = ctx.get('depth');
-  const wall = ctx.get('wall');
+  const width = ctx.input('width');
+  const depth = ctx.input('depth');
+  const wall = ctx.input('wall');
   const outline = [
     [0, 0],
     [width, 0],
@@ -26,7 +26,7 @@ export default function build(ctx) {
     [width - wall / 2, wall / 2],
   ];
   return odm
-    .extrude([outline, inner], { height: wall / 2 })
+    .extrude([outline, inner], wall / 2)
     .color('#aa6622')
     .name('lip');
 }

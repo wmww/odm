@@ -50,7 +50,7 @@ export default function build(ctx) {
 const WHEEL: &str = r#"
 export const meta = { inputs: { r: { type: 'number' } } };
 export default function build(ctx) {
-    return odm.cylinder({ r: ctx.get('r'), h: 1 }).color('#696969');
+    return odm.cylinder(ctx.input('r'), 1).color('#696969');
 }
 "#;
 
@@ -91,7 +91,7 @@ fn edits_invalidate_and_early_cutoff_applies() {
     assert_eq!(builds(&e), 2);
 
     // Behavior change in wheel: both wheel and root rebuild, root changes.
-    write(dir.path(), "parts/wheel.js", &WHEEL.replace("h: 1", "h: 2"));
+    write(dir.path(), "parts/wheel.js", &WHEEL.replace("('r'), 1)", "('r'), 2)"));
     let sync = e.sync().unwrap();
     let r2 = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
     assert_eq!(builds(&e), 4, "wheel + root rebuilt");
@@ -102,7 +102,7 @@ fn edits_invalidate_and_early_cutoff_applies() {
     write(
         dir.path(),
         "parts/wheel.js",
-        &format!("// cosmetic comment\n{}", WHEEL.replace("h: 1", "h: 2")),
+        &format!("// cosmetic comment\n{}", WHEEL.replace("('r'), 1)", "('r'), 2)")),
     );
     let sync = e.sync().unwrap();
     let r3 = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
@@ -120,7 +120,7 @@ fn cascade_only_invalidates_readers() {
         export const meta = { inputs: { t: { type: 'number', cascade: true, default: 0 } } };
         export default function build(ctx) {
             const wheel = ctx.invoke('parts/wheel.js', { r: 1 });
-            return wheel.rotateZ(ctx.get('t'));
+            return wheel.rotateZ(ctx.input('t'));
         }
         "#,
     );
@@ -156,7 +156,7 @@ fn view_provides_override_declared_defaults() {
         r#"
         export const meta = { inputs: { width: { type: 'number', cascade: true, default: 4 } } };
         export default function build(ctx) {
-            return odm.box([ctx.get('width'), 1, 1]);
+            return odm.box([ctx.input('width'), 1, 1]);
         }
         "#,
     );
@@ -200,7 +200,7 @@ fn defaults_merge_into_memo_identity() {
         "wheel.js",
         r#"
         export const meta = { inputs: { r: { type: 'number', default: 2 } } };
-        export default (ctx) => odm.cylinder({ r: ctx.get('r'), h: 1 });
+        export default (ctx) => odm.cylinder(ctx.input('r'), 1);
         "#,
     );
 
@@ -221,7 +221,7 @@ fn inputs_validate_at_boundaries() {
             r: { type: 'number', minimum: 0 },
             t: { type: 'number', cascade: true, default: 0 },
         } };
-        export default (ctx) => odm.cylinder({ r: ctx.get('r'), h: 1 });
+        export default (ctx) => odm.cylinder(ctx.input('r'), 1);
         "#,
     );
     let cases: Vec<(&str, &str)> = vec![
@@ -265,7 +265,7 @@ fn cascade_resolution_nearest_provider_wins() {
         "leaf.js",
         r#"
         export const meta = { inputs: { len: { type: 'number', cascade: true, default: 1 } } };
-        export default (ctx) => odm.box([ctx.get('len'), 1, 1]);
+        export default (ctx) => odm.box([ctx.input('len'), 1, 1]);
         "#,
     );
     write(
@@ -372,7 +372,7 @@ fn consistency_incremental_equals_scratch() {
 
     let incremental = engine(dir.path());
     let edits: Vec<(&str, String)> = vec![
-        ("parts/wheel.js", WHEEL.replace("ctx.get('r')", "ctx.get('r') * 2")),
+        ("parts/wheel.js", WHEEL.replace("ctx.input('r')", "ctx.input('r') * 2")),
         ("root.js", ROOT_WITH_WHEEL.replace("{ r: 2 }", "{ r: 3 }")),
         ("parts/wheel.js", WHEEL.replace("#696969", "#4682b4")),
         ("root.js", ROOT_WITH_WHEEL.replace("translate(-4, 0, 0)", "translate(-5, 0, 1)")),
@@ -422,9 +422,9 @@ fn cancellation_stops_expensive_build() {
         "root.js",
         r#"
         export default function build(ctx) {
-            let acc = odm.sphere({ r: 1, segments: 256 });
+            let acc = odm.sphere(1, { segments: 256 });
             for (let i = 0; i < 200; i++) {
-                acc = acc.union(odm.sphere({ r: 1, segments: 256 }).translate(0.01 * i, 0.02, 0));
+                acc = acc.union(odm.sphere(1, { segments: 256 }).translate(0.01 * i, 0.02, 0));
             }
             return acc;
         }
@@ -510,7 +510,7 @@ fn bounded_recursion_is_allowed() {
         r#"
         export const meta = { inputs: { depth: { type: 'integer' } } };
         export default function build(ctx) {
-            const depth = ctx.get('depth');
+            const depth = ctx.input('depth');
             const box = odm.box(1).translate(depth * 2, 0, 0);
             if (depth === 0) return box;
             const sub = ctx.invoke('tree.js', { depth: depth - 1 });

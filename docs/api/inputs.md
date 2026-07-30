@@ -18,14 +18,14 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  const r = ctx.get('radius');
-  const disc = odm.cylinder({ r, h: 4 }).rotateZ(ctx.get('t') * Math.PI);
-  return ctx.get('finish') === 'painted' ? disc.color('#b22222') : disc;
+  const r = ctx.input('radius');
+  const disc = odm.cylinder(r, 4).rotateZ(ctx.input('t') * Math.PI);
+  return ctx.input('finish') === 'painted' ? disc.color('#b22222') : disc;
 }
 ```
 
 `meta.inputs` is **one map**, name → entry. Reading is uniform —
-`ctx.get(name)` — and the *declaration* decides where the value comes
+`ctx.input(name)` — and the *declaration* decides where the value comes
 from:
 
 - **Plain input** (no `cascade`): the value comes from the immediate
@@ -52,7 +52,7 @@ declared schema.
 
 Beyond the JSON types, `type` can name an ODM extension type:
 
-| `type` | wire form (JSON) | `ctx.get` returns |
+| `type` | wire form (JSON) | `ctx.input` returns |
 | --- | --- | --- |
 | `'solid'` | opaque handle | a real `Solid` |
 | `'vector2'` | `[x, y]` | `THREE.Vector2` |
@@ -75,7 +75,7 @@ export const meta = {
   },
 };
 export default function build(ctx) {
-  const off = ctx.get('offset'); // a real THREE.Vector3
+  const off = ctx.input('offset'); // a real THREE.Vector3
   return odm.box(5).translate(off.x, off.y, off.z);
 }
 ```
@@ -107,7 +107,10 @@ After each build the engine reports which cascade names *fell through*
 to the view level (nothing below provided them) — that report is what
 the viewer's input panel and CLI `--set` validation are generated
 from. Two unrelated subtrees falling through with conflicting defaults
-get a lint warning; conflicting *types* are an error.
+get a lint warning; conflicting *types* are an error. An invoke's
+provide that nothing in the invoked subtree declares is also a lint
+warning — a typo'd provide (or a plain-input value sent through the
+provides channel) must not silently do nothing.
 
 ## Time is a convention, not a feature
 
@@ -120,7 +123,7 @@ range:
 export const meta = {
   inputs: { t: { type: 'number', cascade: true, default: 0, minimum: 0, maximum: 2 } },
 };
-export default (ctx) => odm.box([10, 2, 2]).rotateZ(Math.PI * ctx.get('t'));
+export default (ctx) => odm.box([10, 2, 2]).rotateZ(Math.PI * ctx.input('t'));
 ```
 
 The viewer renders a ranged, fall-through numeric control named `t` as

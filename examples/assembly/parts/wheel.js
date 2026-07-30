@@ -7,13 +7,13 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  const r = ctx.get('radius');
+  const r = ctx.input('radius');
   const tire = odm
-    .cylinder({ r, h: 6 })
-    .subtract(odm.cylinder({ r: r * 0.55, h: 8 }))
+    .cylinder(r, 6)
+    .subtract(odm.cylinder(r * 0.55, 8))
     .color('#222222')
     .name('tire');
-  const hub = odm.cylinder({ r: r * 0.2, h: 7 }).color('#c0c0c0').name('hub');
+  const hub = odm.cylinder(r * 0.2, 7).color('#c0c0c0').name('hub');
 
   const spokes = [];
   for (let i = 0; i < 5; i++) {

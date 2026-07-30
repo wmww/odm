@@ -15,7 +15,7 @@
 ## Purity
 
 `build(ctx)` must be a pure function of its file, its args, and the
-input values it reads (`ctx.get`). The engine memoizes on
+input values it reads (`ctx.input`). The engine memoizes on
 exactly those inputs and rebuilds only what a change touches; impure
 builds break that silently.
 

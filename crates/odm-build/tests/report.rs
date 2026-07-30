@@ -38,7 +38,7 @@ fn fall_through_names_reach_the_view() {
             return odm.group(
                 ctx.invoke('arm.js'),
                 ctx.invoke('arm.js', {}, { speed: 3 }).translate(0, 5, 0),
-                odm.box(1).translate(0, -5, ctx.get('t')),
+                odm.box(1).translate(0, -5, ctx.input('t')),
             );
         }
         "#,
@@ -48,7 +48,7 @@ fn fall_through_names_reach_the_view() {
         "arm.js",
         r#"
         export const meta = { inputs: { speed: { type: 'number', cascade: true, default: 1 } } };
-        export default (ctx) => odm.box([1, 1, 1 + ctx.get('speed')]);
+        export default (ctx) => odm.box([1, 1, 1 + ctx.input('speed')]);
         "#,
     );
 
@@ -92,6 +92,56 @@ fn fall_through_names_reach_the_view() {
 }
 
 #[test]
+fn unconsumed_provides_are_warned() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "root.js",
+        r#"
+        export default (ctx) => odm.group(
+            // 'lift' is consumed; 'lft' is a typo nothing reads.
+            ctx.invoke('pillar.js', { radius: 2 }, { lift: 3, lft: 1 }),
+            // 'radius' is the child's *plain* input — wrong channel.
+            ctx.invoke('pillar.js', { radius: 2 }, { radius: 4 }).translate(5, 0, 0),
+        );
+        "#,
+    );
+    write(
+        dir.path(),
+        "pillar.js",
+        r#"
+        export const meta = { inputs: {
+            radius: { type: 'number', default: 1 },
+            lift: { type: 'number', cascade: true, default: 1 },
+        } };
+        export default (ctx) => odm.box([ctx.input('radius'), 1, ctx.input('lift')]);
+        "#,
+    );
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    let pass = e.start_pass(&sync, View::of("root.js"));
+    e.build_view(&pass).unwrap();
+    let report = e.input_report(&pass);
+
+    assert!(
+        report.warnings.iter().any(|w| w.contains("\"lft\"") && w.contains("never read")),
+        "{:?}",
+        report.warnings
+    );
+    assert!(
+        report.warnings.iter().any(|w| w.contains("\"radius\"") && w.contains("plain input")),
+        "{:?}",
+        report.warnings
+    );
+    assert!(
+        !report.warnings.iter().any(|w| w.contains("\"lift\"")),
+        "consumed provide must not warn: {:?}",
+        report.warnings
+    );
+}
+
+#[test]
 fn conflicting_declarations_are_linted() {
     let dir = tempfile::tempdir().unwrap();
     write(
@@ -106,7 +156,7 @@ fn conflicting_declarations_are_linted() {
         "a.js",
         r#"
         export const meta = { inputs: { detail: { type: 'number', cascade: true, default: 16 } } };
-        export default (ctx) => odm.sphere({ r: 1, segments: Math.max(3, ctx.get('detail')) });
+        export default (ctx) => odm.sphere(1, { segments: Math.max(3, ctx.input('detail')) });
         "#,
     );
     write(
@@ -114,7 +164,7 @@ fn conflicting_declarations_are_linted() {
         "b.js",
         r#"
         export const meta = { inputs: { detail: { type: 'number', cascade: true, default: 32 } } };
-        export default (ctx) => odm.sphere({ r: 1, segments: Math.max(3, ctx.get('detail')) }).translate(3, 0, 0);
+        export default (ctx) => odm.sphere(1, { segments: Math.max(3, ctx.input('detail')) }).translate(3, 0, 0);
         "#,
     );
     write(
@@ -122,7 +172,7 @@ fn conflicting_declarations_are_linted() {
         "c.js",
         r#"
         export const meta = { inputs: { detail: { type: 'string', cascade: true, default: 'hi' } } };
-        export default (ctx) => odm.box(1).name(ctx.get('detail')).translate(6, 0, 0);
+        export default (ctx) => odm.box(1).name(ctx.input('detail')).translate(6, 0, 0);
         "#,
     );
 

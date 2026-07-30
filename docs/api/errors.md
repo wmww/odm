@@ -20,12 +20,18 @@ pass the Solid through `ctx.invoke` args instead
 project is built; each needs `export default function build(ctx)`.
 There are no shared library files — share by `ctx.invoke` or args.
 
-**"cannot put a X in the scene"** — `build()` returned (or `group()`
-received) something that isn't a Solid/Group/Instance/geometry/array —
-often a `THREE.Shape` (extrude it) or a plain object.
+**"cannot use a X — scene values are …"** — `build()` returned (or
+`group()` received) something that isn't a Solid/Group/Instance/array —
+often a `THREE.Shape` (extrude it) or a plain object. Raw
+`THREE.BufferGeometry` gets its own message: wrap it with
+`odm.fromThreeGeometry()`.
 
-**"unknown color '…'"** / **"translucent colors are not supported"** —
-see [colors.md](colors.md); use hex for names outside the subset, and
+**"unknown … option '…'"** — options objects reject unknown keys
+(`centre`, `segements`, …), so a typo'd option fails instead of being
+silently ignored. The message lists the valid keys.
+
+**"invalid color '…'"** / **"translucent colors are not supported"** —
+see [colors.md](colors.md); hex strings and `[r, g, b]` arrays only,
 alpha 1.
 
 **"ODM engine ops unavailable: this code only runs inside a build"** —

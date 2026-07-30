@@ -7,6 +7,6 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  const lift = ctx.get('lift');
-  return odm.box({ size: [1, 1, lift], center: false }).name('pillar');
+  const lift = ctx.input('lift');
+  return odm.box([1, 1, lift], { center: false }).name('pillar');
 }

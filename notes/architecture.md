@@ -16,12 +16,12 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   feature — just a ranged cascade input the viewer gives a transport.
 - **Inputs** (`docs/api/inputs.md` is the contract): `export const meta =
   { inputs, presets }`; one map, name → profiled JSON Schema + ODM keys
-  (`cascade`). Read via `ctx.get(name)`; plain inputs come from the caller's
+  (`cascade`). Read via `ctx.input(name)`; plain inputs come from the caller's
   args (defaults merged into memo identity), cascade inputs from the nearest
   provider up the invoke chain (view outermost, declarations auto-provide
   their defaults for their subtree). `ctx.invoke(path, args?, provides?)`.
   Extension types (solid/vector2/vector3/quaternion/matrix4/color) are
-  canonical JSON on the wire, hydrated to THREE instances by ctx.get.
+  canonical JSON on the wire, hydrated to THREE instances by ctx.input.
   Validation at every boundary via the `jsonschema` crate; unknown
   args/schema keys/`--set` names are errors.
 - The `//!` comment block doubles as prose description (summary line +

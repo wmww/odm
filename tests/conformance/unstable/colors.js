@@ -9,10 +9,10 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  // .color()/parseColor also take a 4-array as long as alpha is 1
-  // (forward-compat slot; the *wire* form stays canonical: 3 numbers).
-  odm.parseColor([1, 0, 0, 1]);
-  return odm.box(10).color(ctx.get('c'));
+  // .color() also takes a 4-array as long as alpha is 1 (forward-compat
+  // slot; the *wire* form stays canonical: 3 numbers).
+  odm.box(1).color([1, 0, 0, 1]);
+  return odm.box(10).color(ctx.input('c'));
 }
 
 export const checks = [

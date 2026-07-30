@@ -12,7 +12,7 @@ use crate::scheduler::{BuildEngine, Pass};
 use odm_ir::hash_json;
 use odm_store::{Dep, MemoKey};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 /// One view-settable cascade input: `name` fell through to the view level
@@ -100,6 +100,7 @@ impl BuildEngine {
         let view = pass.view();
         let mut sites: BTreeMap<String, Vec<Site>> = BTreeMap::new();
         let mut visited = HashSet::new();
+        let mut provide_warnings = BTreeSet::new();
         self.walk(
             pass,
             &view.path,
@@ -108,9 +109,11 @@ impl BuildEngine {
             0,
             &mut sites,
             &mut visited,
+            &mut provide_warnings,
         );
 
         let mut report = InputReport::default();
+        report.warnings.extend(provide_warnings);
 
         // The target's own plain inputs and presets, for the panel.
         if let Some(source) = pass.snapshot().sources.get(&view.path)
@@ -212,6 +215,7 @@ impl BuildEngine {
         depth: usize,
         sites: &mut BTreeMap<String, Vec<Site>>,
         visited: &mut HashSet<(odm_ir::Hash, odm_ir::Hash, u64)>,
+        provide_warnings: &mut BTreeSet<String>,
     ) {
         let Some(source) = pass.snapshot().sources.get(path) else { return };
         let meta = self.meta(path, source);
@@ -260,11 +264,96 @@ impl BuildEngine {
         let Some(entry) = self.store.memo_get(&key) else { return };
         for dep in &entry.deps {
             if let Dep::Invoke { path: child, args, provides, .. } = dep {
+                for name in provides.keys() {
+                    if !self.subtree_declares(pass, child, args, name, &mut HashSet::new()) {
+                        provide_warnings.insert(unconsumed_provide_warning(
+                            self, pass, path, child, name,
+                        ));
+                    }
+                }
                 let mut child_covered = covered.clone();
                 child_covered.extend(provides.keys().cloned());
-                self.walk(pass, child, args, &child_covered, depth + 1, sites, visited);
+                self.walk(
+                    pass,
+                    child,
+                    args,
+                    &child_covered,
+                    depth + 1,
+                    sites,
+                    visited,
+                    provide_warnings,
+                );
             }
         }
+    }
+
+    /// Does the subtree rooted at `(path, args)` reach a declaration of
+    /// cascade input `name` without an intervening invoke re-providing it?
+    /// Unknowns (missing source, broken meta, evicted memo entry) count as
+    /// "yes" so holes in the walk never produce spurious warnings.
+    fn subtree_declares(
+        self: &Arc<Self>,
+        pass: &Pass,
+        path: &str,
+        args: &Value,
+        name: &str,
+        seen: &mut HashSet<(odm_ir::Hash, odm_ir::Hash)>,
+    ) -> bool {
+        let Some(source) = pass.snapshot().sources.get(path) else { return true };
+        let meta = self.meta(path, source);
+        let Ok(meta) = meta.as_ref() else { return true };
+        if meta.inputs.get(name).is_some_and(|i| i.cascade) {
+            return true;
+        }
+        let Ok(effective) = crate::scheduler::effective_args(path, meta, args) else {
+            return true;
+        };
+        let args_hash = hash_json(&Value::Object(effective));
+        if !seen.insert((source.hash, args_hash)) {
+            return false;
+        }
+        let Some(entry) = self.store.memo_get(&MemoKey { code: source.hash, args: args_hash })
+        else {
+            return true;
+        };
+        entry.deps.iter().any(|dep| match dep {
+            Dep::Invoke { path: child, args, provides, .. } if !provides.contains_key(name) => {
+                self.subtree_declares(pass, child, args, name, seen)
+            }
+            _ => false,
+        })
+    }
+}
+
+/// The message for a provide no descendant can read: a misplaced plain
+/// input gets a pointed channel hint, anything else is likely a typo.
+fn unconsumed_provide_warning(
+    engine: &Arc<BuildEngine>,
+    pass: &Pass,
+    parent: &str,
+    child: &str,
+    name: &str,
+) -> String {
+    let plain_input = pass
+        .snapshot()
+        .sources
+        .get(child)
+        .and_then(|s| {
+            engine.meta(child, s).as_ref().as_ref().ok().map(|m| {
+                m.inputs.get(name).is_some_and(|i| !i.cascade)
+            })
+        })
+        .unwrap_or(false);
+    if plain_input {
+        format!(
+            "{parent} provides {name:?} to {child}, but {name:?} is a plain input there — \
+             pass it in the invoke's args (second argument), not provides"
+        )
+    } else {
+        format!(
+            "{parent} provides {name:?} to {child}, but nothing in that subtree declares a \
+             cascade input {name:?} — the value is never read"
+        )
     }
 }
 

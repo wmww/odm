@@ -4,26 +4,34 @@
 //! odm unstable
 export default function build(ctx) {
   const plate = odm.box([40, 20, 5]);
-  const hole = odm.cylinder({ r: 3, h: 12 });
+  const hole = odm.cylinder(3, 12);
   return plate.subtract(hole.translate(10, 0, 0)).color('#4682b4');
 }
 ```
 
 Doohickeys run in an isolated sandbox with the `odm` and `THREE` globals
 preloaded — no imports, no file or network access. Return a `Solid`,
-`Group`, `Instance`, a closed `THREE.BufferGeometry`, an array of these,
-or `null`. Start every file with the `//! odm unstable` pragma: it names
-the JS API version the file targets (`odm docs versioning`).
+`Group`, `Instance`, an array of these, or `null`. Start every file with
+the `//! odm unstable` pragma: it names the JS API version the file
+targets (`odm docs versioning`).
+
+**Everything is immutable**: every method returns a new value (unlike
+three.js). Reusing a value is always safe; a call whose result you
+discard does nothing — write `part = part.rotateZ(a)`, not
+`part.rotateZ(a)`.
 
 ## Solids
 
+Required dimensions are positional; the trailing options object holds
+only optional knobs, and unknown option keys are errors.
+
 ```js
-odm.box([20, 10, 4]);                   // also odm.box(10), odm.box({ size, center })
-odm.cylinder({ r: 3, h: 10 });          // along Z; odm.cylinder(r, h); r1/r2 for a cone
-odm.sphere({ r: 5, segments: 64 });     // segment defaults: cylinder 64, sphere 48
+odm.box([20, 10, 4]);                   // per-axis; odm.box(10) is a cube
+odm.cylinder(3, 10);                    // (r, h), along Z; { r2 } tapers the top
+odm.sphere(5, { segments: 64 });        // segment defaults: cylinder 64, sphere 48
 const outer = [[0, 0], [20, 0], [20, 10], [0, 10]];  // 2D profile: [x,y] loops
 const hole = [[8, 4], [12, 4], [12, 6], [8, 6]];
-odm.extrude([outer, hole], { height: 4, twist: odm.deg(45), scale: 0.5 });  // along +Z
+odm.extrude([outer, hole], 4, { twist: odm.deg(45), scale: 0.5 });  // along +Z from z=0
 odm.revolve(outer, { angle: Math.PI, segments: 96 });  // around Z; (x,y) → (radius, z), x ≥ 0
 odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48));  // closed geometry only
 ```
@@ -36,16 +44,19 @@ is a radius, so it must be ≥ 0.
 
 ```js
 const [a, b, s] = [odm.box(10), odm.sphere(6), odm.cylinder(2, 12)];
-a.subtract(b); a.union(b); a.intersect(b); a.hull();  // odm.difference(a, b) etc. also work
-s.translate(5, 0, 2).rotateZ(odm.deg(30)).scale(2);   // world-frame, applied in order
-s.rotate([0, 1, 1], 0.5); s.transform(new THREE.Matrix4()); // arbitrary axis / raw matrix
-s.color('#4682b4'); s.name('bolt');                   // labels show in odm tree
+a.subtract(b); a.union(b); a.intersect(b); a.hull();     // CSG: methods only
+s.translate(5, 0, 2).rotateZ(odm.deg(30)).scale(2, 2, 2); // world-frame, in call order
+s.rotateZ(0.5, { about: [5, 0, 0] });                     // pivot instead of the origin
+s.rotate([0, 1, 1], 0.5); s.applyMatrix4(new THREE.Matrix4()); // arbitrary axis / raw matrix
+s.color('#4682b4'); s.name('bolt');                       // labels show in odm tree
 ```
 
-Exact engine-side queries — use these to position parts relative to
-computed geometry, never eyeball dimensions: `.volume()`, `.area()`,
-`.bounds()` → `{min, max}`, `.raycast(origin, dir, maxDist?)` →
-`{distance, position, normal} | null`.
+Rotations and scales happen about the **origin** unless you pass
+`{ about: point }`. Exact engine-side queries — use these to position
+parts relative to computed geometry, never eyeball dimensions:
+`.volume()`, `.area()`, `.bounds()` → `THREE.Box3 | null`,
+`.raycast(origin, dir, maxDist?)` →
+`{distance, point: Vector3, normal: Vector3} | null`.
 
 ## Composition
 
@@ -64,7 +75,7 @@ inputs is free.
 ## Inputs
 
 Declare everything a file can be given in `export const meta`; read
-with `ctx.get(name)` (reading an undeclared name is an error):
+with `ctx.input(name)` (reading an undeclared name is an error):
 
 ```js
 //! odm unstable
@@ -75,7 +86,7 @@ export const meta = {
   },
   presets: { wide: { width: 90 } },
 };
-export default (ctx) => odm.box([ctx.get('width'), 10, 4]).rotateZ(ctx.get('t'));
+export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('t'));
 ```
 
 - Entries are strict-profile JSON Schemas (`type`, `enum`, `default`,

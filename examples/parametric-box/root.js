@@ -14,14 +14,14 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  const width = ctx.get('width');
-  const depth = ctx.get('depth');
-  const height = ctx.get('height');
-  const wall = ctx.get('wall');
+  const width = ctx.input('width');
+  const depth = ctx.input('depth');
+  const height = ctx.input('height');
+  const wall = ctx.input('wall');
 
-  const outer = odm.box({ size: [width, depth, height], center: false });
+  const outer = odm.box([width, depth, height], { center: false });
   const cavity = odm
-    .box({ size: [width - 2 * wall, depth - 2 * wall, height], center: false })
+    .box([width - 2 * wall, depth - 2 * wall, height], { center: false })
     .translate(wall, wall, wall);
 
   const lip = ctx.invoke('lip.js', { width, depth, wall });

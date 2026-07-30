@@ -8,7 +8,6 @@
 Nothing else — no named colors, no `0xRRGGBB` numbers.
 
 Inputs are sRGB; conversion to linear happens internally.
-`odm.parseColor(c)` exposes the parser (returns linear `[r, g, b, a]`).
 
 **Alpha must be 1.** The renderer has no transparency, so a translucent
 color is rejected with an error rather than silently drawn opaque.

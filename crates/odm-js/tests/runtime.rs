@@ -86,7 +86,7 @@ fn basic_csg_build() {
         r#"
         export default function build(ctx) {
             const plate = odm.box([20, 10, 4]);
-            const hole = odm.cylinder({ r: 2, h: 10 });
+            const hole = odm.cylinder(2, 10);
             return plate.subtract(hole).color('#4682b4').name('plate');
         }
         "#,
@@ -108,7 +108,7 @@ fn determinism_same_code_same_hash() {
         export default function build(ctx) {
             const s = new THREE.Shape().moveTo(0, 0).lineTo(4, 0).lineTo(4, 2)
                 .absarc(2, 2, 1, 0, Math.PI, false).lineTo(0, 2);
-            const body = odm.extrude(s, { height: 1.5 });
+            const body = odm.extrude(s, 1.5);
             const noise = Math.random(); // seeded PRNG: same in every isolate
             return body.translate(noise, 0, 0);
         }
@@ -133,7 +133,7 @@ fn cascade_reads_recorded_as_deps() {
         &w,
         r#"
         export default function build(ctx) {
-            return odm.box([ctx.get('width'), ctx.get('depth'), 5]).translate(ctx.get('t'), 0, 0);
+            return odm.box([ctx.input('width'), ctx.input('depth'), 5]).translate(ctx.input('t'), 0, 0);
         }
         "#,
         &json!({ "depth": 7 }),
@@ -163,7 +163,7 @@ fn undeclared_get_is_an_error() {
     let w = world();
     let err = build_full(
         &w,
-        "export default (ctx) => odm.box(ctx.get('nope'))",
+        "export default (ctx) => odm.box(ctx.input('nope'))",
         &json!({}),
         &json!({ "size": { "cascade": false, "type": "number" } }),
         &HashMap::new(),
@@ -182,13 +182,13 @@ fn extension_types_hydrate_to_three_instances() {
         &w,
         r#"
         export default function build(ctx) {
-            const off = ctx.get('off');
+            const off = ctx.input('off');
             if (!(off instanceof THREE.Vector3)) throw new Error('off not a Vector3');
-            const m = ctx.get('m');
+            const m = ctx.input('m');
             if (!(m instanceof THREE.Matrix4)) throw new Error('m not a Matrix4');
-            const q = ctx.get('q');
+            const q = ctx.input('q');
             if (!(q instanceof THREE.Quaternion)) throw new Error('q not a Quaternion');
-            const c = ctx.get('c');
+            const c = ctx.input('c');
             return odm.box(1).translate(off.x, off.y, off.z).color(c);
         }
         "#,
@@ -263,7 +263,7 @@ fn open_surface_rejected_with_explanation() {
 fn bad_return_value_rejected() {
     let w = world();
     let err = build(&w, "export default () => 42").unwrap_err();
-    assert!(err.to_string().contains("in the scene"), "{err}");
+    assert!(err.to_string().contains("scene value"), "{err}");
 
     let err = build(&w, "export const nope = 1;").unwrap_err();
     assert!(err.to_string().contains("default"), "{err}");
@@ -294,7 +294,7 @@ fn groups_and_arrays_nest() {
         &w,
         r#"
         export default function build(ctx) {
-            const wheel = odm.cylinder({ r: 2, h: 1 });
+            const wheel = odm.cylinder(2, 1);
             return odm.group(
                 wheel.translate(-3, 0, 0).name('left'),
                 [wheel.translate(3, 0, 0).name('right'), null],
@@ -385,7 +385,7 @@ fn invoke_runs_nested_isolate_and_records_dep() {
         (
             r#"
             export default function build(ctx) {
-                return odm.cylinder({ r: ctx.get('radius'), h: 1 }).name('wheel');
+                return odm.cylinder(ctx.input('radius'), 1).name('wheel');
             }
             "#
             .to_string(),
@@ -445,7 +445,7 @@ fn repeated_invokes_share_one_stored_subtree() {
         codes.insert(
             "parts/wheel.js".to_string(),
             (
-                "export default (ctx) => odm.cylinder({ r: ctx.get('radius'), h: 1 }).name('wheel')"
+                "export default (ctx) => odm.cylinder(ctx.input('radius'), 1).name('wheel')"
                     .to_string(),
                 json!({ "radius": { "cascade": false, "type": "number" } }),
             ),
@@ -495,7 +495,7 @@ fn solids_serialize_through_invoke_args() {
             r#"
             export default function build(ctx) {
                 // The Solid arrives revived: subtract it from a plate.
-                return odm.box([10, 10, 2]).subtract(ctx.get('tool'));
+                return odm.box([10, 10, 2]).subtract(ctx.input('tool'));
             }
             "#
             .to_string(),
@@ -511,7 +511,7 @@ fn solids_serialize_through_invoke_args() {
         &w,
         r#"
         export default function build(ctx) {
-            const tool = odm.cylinder({ r: 1, h: 5 }).translate(2, 2, 0);
+            const tool = odm.cylinder(1, 5).translate(2, 2, 0);
             return ctx.invoke('cut.js', { tool });
         }
         "#,
@@ -535,7 +535,7 @@ fn provides_flow_to_the_nested_build() {
     codes.insert(
         "spinner.js".to_string(),
         (
-            "export default (ctx) => odm.box(1).rotateZ(ctx.get('t'))".to_string(),
+            "export default (ctx) => odm.box(1).rotateZ(ctx.input('t'))".to_string(),
             json!({ "t": { "cascade": true, "type": "number" } }),
         ),
     );
@@ -595,7 +595,7 @@ fn queries_work_inside_build() {
             const v = s.volume();
             if (Math.abs(v - 8) > 1e-9) throw new Error('volume ' + v);
             const b = s.bounds();
-            if (Math.abs(b.min[0] + 1) > 1e-9) throw new Error('bounds ' + JSON.stringify(b));
+            if (Math.abs(b.min.x + 1) > 1e-9) throw new Error('bounds ' + JSON.stringify(b));
             const hit = s.raycast([0, 0, 5], [0, 0, -1]);
             if (Math.abs(hit.distance - 4) > 1e-9) throw new Error('ray ' + JSON.stringify(hit));
             const miss = s.translate(10, 0, 0).raycast([0, 0, 5], [0, 0, -1]);

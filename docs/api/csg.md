@@ -8,7 +8,7 @@ Boolean operations combine Solids into a new Solid. Operands must be
 ## Methods
 
 ```js skip
-a.union(b, c, ...)       // a ∪ b ∪ c;  .add() is an alias
+a.union(b, c, ...)       // a ∪ b ∪ c
 a.subtract(b, c, ...)    // a minus (b ∪ c)
 a.intersect(b, c, ...)   // a ∩ b ∩ c
 a.hull(b, ...)           // convex hull of all operands together
@@ -16,13 +16,9 @@ a.hull()                 // convex hull of a alone
 ```
 
 All are variadic and flatten one level of arrays:
-`base.subtract(holes)` works with `holes` an array of Solids.
-
-## Free functions
-
-`odm.union(a, b, ...)`, `odm.difference(a, b, ...)`,
-`odm.intersection(a, b, ...)`, `odm.hull(a, b, ...)` — identical to the
-methods on the first argument.
+`base.subtract(holes)` works with `holes` an array of Solids. These
+methods are the only CSG vocabulary — there are no free-function
+equivalents.
 
 ## Semantics
 
@@ -38,6 +34,6 @@ methods on the first argument.
 
 ```js
 const plate = odm.box([40, 20, 5]).color('#4682b4');
-const holes = [-15, 0, 15].map((x) => odm.cylinder({ r: 2, h: 10 }).translate(x, 0, 0));
-return plate.subtract(holes); // blue plate with three holes
+const holes = [-15, 0, 15].map((x) => odm.cylinder(2, 10).translate(x, 0, 0));
+return plate.subtract(holes); // steel-blue plate with three holes
 ```

@@ -12,9 +12,9 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  const w = ctx.get('width');
-  const d = ctx.get('depth');
-  const h = 1 + ctx.get('t');
+  const w = ctx.input('width');
+  const d = ctx.input('depth');
+  const h = 1 + ctx.input('t');
   return odm.group(
     odm.box([w, d, h]).name('slab'),
     // The explicit provide wins over pillar.js's own default (1)...

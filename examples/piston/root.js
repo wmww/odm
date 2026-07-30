@@ -10,8 +10,8 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  const rpm = ctx.get('rpm');
-  const a = ctx.get('t') * 2 * Math.PI * (rpm / 60); // crank angle
+  const rpm = ctx.input('rpm');
+  const a = ctx.input('t') * 2 * Math.PI * (rpm / 60); // crank angle
   const R = 10; // crank radius
   const L = 30; // connecting rod length
 
@@ -20,12 +20,12 @@ export default function build(ctx) {
 
   // Crank disc + pin rotate about the Y axis at the origin.
   const crank = odm
-    .cylinder({ r: 14, h: 6 })
+    .cylinder(14, 6)
     .rotateX(odm.deg(90))
     .color('#555566')
     .name('crank');
   const crankPin = odm
-    .cylinder({ r: 3, h: 12 })
+    .cylinder(3, 12)
     .rotateX(odm.deg(90))
     .translate(pin[0], 0, pin[2])
     .color('#c0c0c0')
@@ -42,7 +42,7 @@ export default function build(ctx) {
     .name('rod');
 
   const piston = odm
-    .cylinder({ r: 9, h: 16 })
+    .cylinder(9, 16)
     .translate(0, 0, pistonZ + 6)
     .color('#aa6633')
     .name('piston');

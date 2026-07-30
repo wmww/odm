@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 /// ODM's extension types: `type` values beyond JSON Schema's own. On the
 /// wire they are canonical JSON (vectors `[x, y, z]`, matrix4 = 16 numbers
-/// column-major, color = hex string or `[r, g, b]`); `ctx.get` hydrates them
+/// column-major, color = hex string or `[r, g, b]`); `ctx.input` hydrates them
 /// into real THREE instances, declaration-driven.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtType {

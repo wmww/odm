@@ -108,7 +108,7 @@ export default function build(ctx) {
     if (odm.apiProbe() !== 'test') throw new Error('test file got the unstable surface');
     // And back across: invoke an unstable file from a test-version file.
     const inner = ctx.invoke('inner.js');
-    return odm.group(odm.sphere(ctx.get('r')), inner);
+    return odm.group(odm.sphere(ctx.input('r')), inner);
 }
 "#,
     );

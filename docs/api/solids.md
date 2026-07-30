@@ -4,38 +4,40 @@ All constructors return a `Solid`: an immutable handle to engine-side
 geometry ([transforms.md](transforms.md), [queries.md](queries.md)).
 Dimensions are project units (any consistent unit); all angles radians.
 
+One rule throughout: **required dimensions are positional; the options
+object holds only optional knobs.** Every option has exactly one name,
+and an unknown option key is an error (a typo can't silently no-op).
+
 ## odm.box(size, opts?)
 
 ```js
 odm.box(10);                       // 10×10×10 cube
 odm.box([40, 20, 5]);              // per-axis size
-odm.box({ size: [40, 20, 5], center: false });
+odm.box([40, 20, 5], { center: false });
 ```
 
 Centered on the origin by default; `center: false` puts the min corner
 at the origin (box spans `[0, size]` on each axis).
 
-## odm.cylinder(r, h, opts?) / odm.cylinder(opts)
+## odm.cylinder(r, h, opts?)
 
 ```js
 odm.cylinder(3, 10);                        // radius, height
-odm.cylinder({ r: 3, h: 10 });
-odm.cylinder({ r1: 5, r2: 0, h: 8 });       // cone: base/top radii
-odm.cylinder({ r: 3, h: 10, segments: 128, center: false });
+odm.cylinder(5, 8, { r2: 0 });              // cone: r is the base, r2 the top
+odm.cylinder(3, 10, { segments: 128, center: false });
 ```
 
-Axis along Z. Options: `r` (or `r1`/`r2` for base/top; `r2` defaults to
-`r1`), `h` (alias `height`), `segments` (default 64), `center` (default
-true; `false` puts the base at z=0).
+Axis along Z. Options: `r2` (top radius, defaults to `r`), `segments`
+(default 64), `center` (default true; `false` puts the base at z=0).
 
-## odm.sphere(r, opts?) / odm.sphere(opts)
+## odm.sphere(r, opts?)
 
 ```js
 odm.sphere(5);
-odm.sphere({ r: 5, segments: 64 });   // alias: radius
+odm.sphere(5, { segments: 64 });   // default 48
 ```
 
-Centered on the origin. `segments` defaults to 48.
+Centered on the origin.
 
 ## 2D profiles
 
@@ -49,17 +51,16 @@ Centered on the origin. `segments` defaults to 48.
   flattened; `curveSegments` in the options (default 32) sets how
   finely.
 
-## odm.extrude(profile, opts)
+## odm.extrude(profile, height, opts?)
 
 ```js
-odm.extrude([[0, 0], [20, 0], [20, 10], [0, 10]], { height: 4 });
+odm.extrude([[0, 0], [20, 0], [20, 10], [0, 10]], 4);
 const shape = new THREE.Shape().absarc(0, 0, 10, 0, Math.PI * 2);
-odm.extrude(shape, { height: 30, twist: odm.deg(90), scale: 0.5 });
+odm.extrude(shape, 30, { twist: odm.deg(90), scale: 0.5 });
 ```
 
 Extrudes along +Z, from z=0 to z=`height`. Options:
 
-- `height` (aliases `depth`, `h`) — required.
 - `twist` (radians, default 0) — total rotation of the top relative to
   the bottom, spread over the height.
 - `scale` (default 1) — scale factor at the top; a number or `[x, y]`.
@@ -72,7 +73,7 @@ Extrudes along +Z, from z=0 to z=`height`. Options:
 
 ```js
 const profile = [[5, 0], [8, 0], [8, 10], [5, 10]];
-odm.revolve(profile, {});                             // tube
+odm.revolve(profile);                                 // tube
 odm.revolve(profile, { angle: Math.PI, segments: 96 }); // half, capped
 ```
 
@@ -87,9 +88,10 @@ full turn), `curveSegments`.
 odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48));
 ```
 
-Turns a closed `THREE.BufferGeometry` into a Solid. The mesh is welded
-engine-side (seam-duplicated vertices are fine, indexed or not), so
-three.js generator output works directly — but the surface must enclose
-a volume; open surfaces (`PlaneGeometry`, an unclosed `LatheGeometry`,
+Turns a closed `THREE.BufferGeometry` into a Solid — the only way raw
+three.js geometry enters a scene. The mesh is welded engine-side
+(seam-duplicated vertices are fine, indexed or not), so three.js
+generator output works directly — but the surface must enclose a
+volume; open surfaces (`PlaneGeometry`, an unclosed `LatheGeometry`,
 …) are rejected with a diagnosis. Remember three.js generators are
 Y-up ([three.md](three.md)).

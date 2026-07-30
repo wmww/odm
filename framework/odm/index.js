@@ -1,9 +1,10 @@
 // ODM framework: the API doohickeys build with.
 //
 // Conventions: Z-up, distances in project units, ALL angles in radians
-// (like three.js; `odm.deg(90)` converts). Solids are immutable — every
-// method returns a new value. Geometry lives engine-side; a Solid holds an
-// opaque content-hash handle plus a pending transform and color.
+// (like three.js; `odm.deg(90)` converts). Scene values are immutable —
+// every method returns a new value; a call whose result you discard does
+// nothing. Geometry lives engine-side; a Solid holds an opaque
+// content-hash handle plus a pending transform and color.
 import * as THREE from '../three/entry.js';
 import { parseColor } from './colors.js';
 
@@ -13,6 +14,37 @@ function ops() {
     throw new Error('ODM engine ops unavailable: this code only runs inside a build');
   }
   return o;
+}
+
+// ---------- argument checking ----------
+
+function num(v, what) {
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    throw new TypeError(`${what} must be a finite number, got ${v}`);
+  }
+  return v;
+}
+
+/** Options objects reject unknown keys: a typo'd option must not silently no-op. */
+function checkOpts(opts, allowed, what) {
+  if (opts === undefined) return {};
+  if (opts === null || typeof opts !== 'object' || Array.isArray(opts)) {
+    throw new TypeError(`${what} options must be an object, got ${opts === null ? 'null' : typeof opts}`);
+  }
+  for (const k of Object.keys(opts)) {
+    if (!allowed.includes(k)) {
+      throw new TypeError(`unknown ${what} option '${k}' (valid: ${allowed.join(', ')})`);
+    }
+  }
+  return opts;
+}
+
+function vec3(v, what) {
+  if (Array.isArray(v) && v.length === 3) {
+    return [num(v[0], what), num(v[1], what), num(v[2], what)];
+  }
+  if (v instanceof THREE.Vector3) return [v.x, v.y, v.z];
+  throw new TypeError(`${what} must be [x, y, z] or a THREE.Vector3`);
 }
 
 // ---------- matrices ----------
@@ -31,7 +63,7 @@ function isIdentity(m) {
 function toMatrix4(m) {
   if (m instanceof THREE.Matrix4) return m.clone();
   if (Array.isArray(m) && m.length === 16) return new THREE.Matrix4().fromArray(m);
-  throw new TypeError('transform() takes a THREE.Matrix4 or a column-major array of 16 numbers');
+  throw new TypeError('applyMatrix4() takes a THREE.Matrix4 or a column-major array of 16 numbers');
 }
 
 /** Left-multiply: apply `extra` (in world frame) after the existing matrix. */
@@ -44,30 +76,61 @@ function premul(matrix, extra) {
 
 const transformable = (Base) =>
   class extends Base {
-    translate(x = 0, y = 0, z = 0) {
-      return this._with({ matrix: premul(this._matrix, new THREE.Matrix4().makeTranslation(x, y, z)) });
+    /** Apply `m`, conjugated by translation to `opts.about` if given. */
+    _pivoted(m, opts, what) {
+      const o = checkOpts(opts, ['about'], what);
+      let full = m;
+      if (o.about !== undefined) {
+        const [cx, cy, cz] = vec3(o.about, `${what} about`);
+        full = new THREE.Matrix4()
+          .makeTranslation(cx, cy, cz)
+          .multiply(m)
+          .multiply(new THREE.Matrix4().makeTranslation(-cx, -cy, -cz));
+      }
+      return this._with({ matrix: premul(this._matrix, full) });
     }
-    rotateX(rad) {
-      return this._with({ matrix: premul(this._matrix, new THREE.Matrix4().makeRotationX(rad)) });
-    }
-    rotateY(rad) {
-      return this._with({ matrix: premul(this._matrix, new THREE.Matrix4().makeRotationY(rad)) });
-    }
-    rotateZ(rad) {
-      return this._with({ matrix: premul(this._matrix, new THREE.Matrix4().makeRotationZ(rad)) });
-    }
-    /** Rotate around an arbitrary axis ([x,y,z] or Vector3) through the origin. */
-    rotate(axis, rad) {
-      const a = Array.isArray(axis) ? new THREE.Vector3(...axis) : axis.clone();
+    translate(x, y, z) {
       return this._with({
-        matrix: premul(this._matrix, new THREE.Matrix4().makeRotationAxis(a.normalize(), rad)),
+        matrix: premul(
+          this._matrix,
+          new THREE.Matrix4().makeTranslation(
+            num(x, 'translate x'),
+            num(y, 'translate y'),
+            num(z, 'translate z'),
+          ),
+        ),
       });
     }
-    scale(x, y, z) {
-      if (y === undefined) [y, z] = [x, x];
-      return this._with({ matrix: premul(this._matrix, new THREE.Matrix4().makeScale(x, y, z)) });
+    rotateX(rad, opts) {
+      return this._pivoted(new THREE.Matrix4().makeRotationX(num(rad, 'rotateX angle')), opts, 'rotateX');
     }
-    transform(m) {
+    rotateY(rad, opts) {
+      return this._pivoted(new THREE.Matrix4().makeRotationY(num(rad, 'rotateY angle')), opts, 'rotateY');
+    }
+    rotateZ(rad, opts) {
+      return this._pivoted(new THREE.Matrix4().makeRotationZ(num(rad, 'rotateZ angle')), opts, 'rotateZ');
+    }
+    /** Rotate around an arbitrary axis (normalized for you). */
+    rotate(axis, rad, opts) {
+      const a = new THREE.Vector3(...vec3(axis, 'rotate axis'));
+      if (a.lengthSq() === 0) throw new TypeError('rotate axis must be nonzero');
+      return this._pivoted(
+        new THREE.Matrix4().makeRotationAxis(a.normalize(), num(rad, 'rotate angle')),
+        opts,
+        'rotate',
+      );
+    }
+    scale(x, y, z, opts) {
+      if (y === undefined || z === undefined) {
+        throw new TypeError('scale(x, y, z) takes all three factors (uniform: scale(k, k, k))');
+      }
+      return this._pivoted(
+        new THREE.Matrix4().makeScale(num(x, 'scale x'), num(y, 'scale y'), num(z, 'scale z')),
+        opts,
+        'scale',
+      );
+    }
+    applyMatrix4(m) {
       return this._with({ matrix: premul(this._matrix, toMatrix4(m)) });
     }
     color(c) {
@@ -98,10 +161,6 @@ export class Solid extends transformable(SceneValue) {
     return new Solid(this._geom, matrix, color, name);
   }
 
-  get geometry() {
-    return this._geom;
-  }
-
   _operand() {
     return { geom: this._geom, matrix: matElements(this._matrix) };
   }
@@ -122,9 +181,6 @@ export class Solid extends transformable(SceneValue) {
   union(...others) {
     return Solid._bool('union', [this, ...others.flat()], this);
   }
-  add(...others) {
-    return this.union(...others);
-  }
   subtract(...others) {
     return Solid._bool('difference', [this, ...others.flat()], this);
   }
@@ -133,13 +189,16 @@ export class Solid extends transformable(SceneValue) {
   }
   hull(...others) {
     const all = [this, ...others.flat()];
+    for (const s of all) {
+      if (!(s instanceof Solid)) {
+        throw new TypeError(
+          `hull operands must be Solids (got ${s?.constructor?.name ?? typeof s}); ` +
+            'Groups/Instances cannot be used in CSG',
+        );
+      }
+    }
     const geom = ops().op_hull(all.map((s) => s._operand()));
     return new Solid(geom, null, this._color, this._name);
-  }
-
-  /** Bake the pending transform into the geometry (usually not needed). */
-  bake() {
-    return new Solid(this._baked(), null, this._color, this._name);
   }
 
   _baked() {
@@ -156,18 +215,29 @@ export class Solid extends transformable(SceneValue) {
   area() {
     return ops().op_area(this._baked());
   }
-  /** Axis-aligned bounds in this solid's (world) frame: {min, max} or null if empty. */
+  /** Axis-aligned bounds in this solid's (world) frame: THREE.Box3, or null if empty. */
   bounds() {
-    return ops().op_bounds(this._baked());
+    const b = ops().op_bounds(this._baked());
+    if (!b) return null;
+    return new THREE.Box3(new THREE.Vector3(...b.min), new THREE.Vector3(...b.max));
   }
   /**
-   * Nearest surface hit of the ray from `origin` along `dir`, or null.
-   * Returns { distance, position: [x,y,z], normal: [x,y,z] }.
+   * Nearest surface hit of the ray from `origin` along `dir` (each [x,y,z]
+   * or Vector3), or null. Returns { distance, point: Vector3, normal: Vector3 }.
    */
   raycast(origin, dir, maxDist = 1e9) {
-    const o = Array.isArray(origin) ? origin : [origin.x, origin.y, origin.z];
-    const d = Array.isArray(dir) ? dir : [dir.x, dir.y, dir.z];
-    return ops().op_raycast(this._baked(), o, d, maxDist);
+    const hit = ops().op_raycast(
+      this._baked(),
+      vec3(origin, 'raycast origin'),
+      vec3(dir, 'raycast dir'),
+      num(maxDist, 'raycast maxDist'),
+    );
+    if (!hit) return null;
+    return {
+      distance: hit.distance,
+      point: new THREE.Vector3(...hit.position),
+      normal: new THREE.Vector3(...hit.normal),
+    };
   }
 
   _toIR() {
@@ -229,66 +299,58 @@ export class Instance extends transformable(SceneValue) {
   }
 }
 
+function sceneTypeError(v, where) {
+  if (v instanceof THREE.BufferGeometry) {
+    return new TypeError(
+      `${where}: raw three.js geometry is not a scene value — wrap it with odm.fromThreeGeometry() first`,
+    );
+  }
+  return new TypeError(
+    `${where}: cannot use a ${v?.constructor?.name ?? typeof v} — ` +
+      'scene values are Solids, Groups, Instances, arrays of those, or null',
+  );
+}
+
 function toIRNode(v) {
   if (v === null || v === undefined) return {};
   if (v instanceof Solid || v instanceof Group || v instanceof Instance) return v._toIR();
   if (Array.isArray(v)) {
     return { children: v.filter((c) => c !== null && c !== undefined).map(toIRNode) };
   }
-  if (v instanceof THREE.BufferGeometry) return fromThreeGeometry(v)._toIR();
-  throw new TypeError(
-    `cannot put a ${v?.constructor?.name ?? typeof v} in the scene: ` +
-      'build() must return Solids, Groups, Instances, three.js geometries, arrays of those, or null',
-  );
+  throw sceneTypeError(v, 'build() return value');
 }
 
 // ---------- primitives ----------
 
-function num(v, what) {
-  if (typeof v !== 'number' || !Number.isFinite(v)) {
-    throw new TypeError(`${what} must be a finite number, got ${v}`);
-  }
-  return v;
-}
-
-/** Box. `odm.box(10)`, `odm.box([x,y,z])`, or `odm.box({size, center})`. Centered by default. */
-export function box(size, opts = {}) {
-  let s = size;
-  let center = opts.center ?? true;
-  if (size && typeof size === 'object' && !Array.isArray(size)) {
-    s = size.size;
-    center = size.center ?? true;
-  }
-  if (typeof s === 'number') s = [s, s, s];
+/** Box. `odm.box(10)` (cube) or `odm.box([x, y, z])`. Centered by default. */
+export function box(size, opts) {
+  const o = checkOpts(opts, ['center'], 'box');
+  let s = typeof size === 'number' ? [size, size, size] : size;
   if (!Array.isArray(s) || s.length !== 3) {
     throw new TypeError('box size must be a number or [x, y, z]');
   }
-  s.forEach((v) => num(v, 'box size'));
-  return new Solid(ops().op_solid_box(s, center));
+  s = s.map((v) => num(v, 'box size'));
+  return new Solid(ops().op_solid_box(s, o.center ?? true));
 }
 
 /**
- * Cylinder along Z. `odm.cylinder(r, h)` or
- * `odm.cylinder({ r | r1, r2, h, segments, center })`. Centered by default;
+ * Cylinder along Z. `odm.cylinder(r, h, { r2, segments, center })` — `r2`
+ * is the top radius (cone; defaults to `r`). Centered by default;
  * `center: false` puts the base at z=0.
  */
-export function cylinder(a, b, opts = {}) {
-  let o;
-  if (typeof a === 'object') {
-    o = a;
-  } else {
-    o = { ...opts, r: a, h: b };
-  }
-  const r1 = num(o.r1 ?? o.r, 'cylinder radius');
-  const r2 = o.r2 ?? o.r1 ?? o.r;
-  const h = num(o.h ?? o.height, 'cylinder height');
-  return new Solid(ops().op_solid_cylinder(h, r1, num(r2, 'cylinder r2'), o.segments ?? 64, o.center ?? true));
+export function cylinder(r, h, opts) {
+  const o = checkOpts(opts, ['r2', 'segments', 'center'], 'cylinder');
+  const r1 = num(r, 'cylinder radius');
+  const r2 = o.r2 === undefined ? r1 : num(o.r2, 'cylinder r2');
+  const segments = o.segments === undefined ? 64 : num(o.segments, 'cylinder segments');
+  return new Solid(ops().op_solid_cylinder(num(h, 'cylinder height'), r1, r2, segments, o.center ?? true));
 }
 
-/** Sphere at the origin. `odm.sphere(r)` or `odm.sphere({ r, segments })`. */
-export function sphere(a, opts = {}) {
-  const o = typeof a === 'object' ? a : { ...opts, r: a };
-  return new Solid(ops().op_solid_sphere(num(o.r ?? o.radius, 'sphere radius'), o.segments ?? 48));
+/** Sphere at the origin. `odm.sphere(r, { segments })`. */
+export function sphere(r, opts) {
+  const o = checkOpts(opts, ['segments'], 'sphere');
+  const segments = o.segments === undefined ? 48 : num(o.segments, 'sphere segments');
+  return new Solid(ops().op_solid_sphere(num(r, 'sphere radius'), segments));
 }
 
 // ---------- 2D profiles → solids ----------
@@ -304,13 +366,14 @@ function pt2(p, what) {
  * flattened with `curveSegments`), one polygon `[[x,y], ...]`, or a list of
  * polygons (first outer, rest holes — or any even-odd arrangement).
  */
-function toPolygons(profile, curveSegments = 32) {
+function toPolygons(profile, curveSegments) {
+  const cs = curveSegments === undefined ? 32 : num(curveSegments, 'curveSegments');
   if (profile instanceof THREE.Shape) {
-    const pts = profile.extractPoints(curveSegments);
+    const pts = profile.extractPoints(cs);
     return [pts.shape.map((p) => [p.x, p.y]), ...pts.holes.map((h) => h.map((p) => [p.x, p.y]))];
   }
   if (profile instanceof THREE.Path) {
-    return [profile.getPoints(curveSegments).map((p) => [p.x, p.y])];
+    return [profile.getPoints(cs).map((p) => [p.x, p.y])];
   }
   if (Array.isArray(profile) && profile.length > 0) {
     const first = profile[0];
@@ -326,30 +389,42 @@ function toPolygons(profile, curveSegments = 32) {
 }
 
 /**
- * Extrude a 2D profile along +Z.
- * `odm.extrude(profile, { height, twist = 0, scale = 1, slices, curveSegments })`
+ * Extrude a 2D profile along +Z, from z=0 to z=height.
+ * `odm.extrude(profile, height, { twist = 0, scale = 1, slices, curveSegments })`
  * — twist in radians over the full height; scale is the top scale factor
  * (number or [x, y]).
  */
-export function extrude(profile, opts = {}) {
-  const height = num(opts.height ?? opts.depth ?? opts.h, 'extrude height');
-  const twist = opts.twist ?? 0;
-  let scale = opts.scale ?? 1;
+export function extrude(profile, height, opts) {
+  const o = checkOpts(opts, ['twist', 'scale', 'slices', 'curveSegments'], 'extrude');
+  const h = num(height, 'extrude height');
+  const twist = o.twist === undefined ? 0 : num(o.twist, 'extrude twist');
+  let scale = o.scale ?? 1;
   if (typeof scale === 'number') scale = [scale, scale];
+  if (!Array.isArray(scale) || scale.length !== 2) {
+    throw new TypeError('extrude scale must be a number or [x, y]');
+  }
+  scale = scale.map((v) => num(v, 'extrude scale'));
   const twistDeg = (twist * 180) / Math.PI;
-  const slices = opts.slices ?? (twist !== 0 ? Math.max(2, Math.ceil(Math.abs(twistDeg) / 10)) : 1);
-  const polys = toPolygons(profile, opts.curveSegments);
-  return new Solid(ops().op_solid_extrude(polys, height, slices, twistDeg, scale));
+  const slices =
+    o.slices === undefined
+      ? twist !== 0
+        ? Math.max(2, Math.ceil(Math.abs(twistDeg) / 10))
+        : 1
+      : num(o.slices, 'extrude slices');
+  const polys = toPolygons(profile, o.curveSegments);
+  return new Solid(ops().op_solid_extrude(polys, h, slices, twistDeg, scale));
 }
 
 /**
  * Revolve a 2D profile (x >= 0) around the Z axis; profile (x, y) maps to
  * (radius, z). `odm.revolve(profile, { angle = 2π, segments = 64 })`.
  */
-export function revolve(profile, opts = {}) {
-  const angle = opts.angle ?? Math.PI * 2;
-  const polys = toPolygons(profile, opts.curveSegments);
-  return new Solid(ops().op_solid_revolve(polys, opts.segments ?? 64, (angle * 180) / Math.PI));
+export function revolve(profile, opts) {
+  const o = checkOpts(opts, ['angle', 'segments', 'curveSegments'], 'revolve');
+  const angle = o.angle === undefined ? Math.PI * 2 : num(o.angle, 'revolve angle');
+  const segments = o.segments === undefined ? 64 : num(o.segments, 'revolve segments');
+  const polys = toPolygons(profile, o.curveSegments);
+  return new Solid(ops().op_solid_revolve(polys, segments, (angle * 180) / Math.PI));
 }
 
 // ---------- three.js interop ----------
@@ -381,36 +456,16 @@ export function fromThreeGeometry(g) {
 export function group(...children) {
   const kids = children.flat().filter((c) => c !== null && c !== undefined);
   for (const c of kids) {
-    if (
-      !(c instanceof Solid || c instanceof Group || c instanceof Instance || Array.isArray(c) ||
-        c instanceof THREE.BufferGeometry)
-    ) {
-      throw new TypeError(`group() child must be a scene value, got ${c?.constructor?.name ?? typeof c}`);
+    if (!(c instanceof Solid || c instanceof Group || c instanceof Instance || Array.isArray(c))) {
+      throw sceneTypeError(c, 'group() child');
     }
   }
   return new Group(kids);
 }
 
-export function union(first, ...rest) {
-  if (!(first instanceof Solid)) throw new TypeError('union takes Solids');
-  return first.union(...rest);
-}
-export function difference(first, ...rest) {
-  if (!(first instanceof Solid)) throw new TypeError('difference takes Solids');
-  return first.subtract(...rest);
-}
-export function intersection(first, ...rest) {
-  if (!(first instanceof Solid)) throw new TypeError('intersection takes Solids');
-  return first.intersect(...rest);
-}
-export function hull(first, ...rest) {
-  if (!(first instanceof Solid)) throw new TypeError('hull takes Solids');
-  return first.hull(...rest);
-}
-
 /** Degrees → radians. */
 export function deg(d) {
-  return (d * Math.PI) / 180;
+  return (num(d, 'deg') * Math.PI) / 180;
 }
 
 // ---------- args serialization (Solids cross invoke() by content hash) ----------
@@ -473,7 +528,7 @@ function reviveValue(v) {
 
 // ---------- build context ----------
 
-// Declaration-driven hydration: the wire carries canonical JSON; ctx.get
+// Declaration-driven hydration: the wire carries canonical JSON; ctx.input
 // returns real THREE instances for the extension types. Colors stay in
 // their wire form (hex string or [r, g, b]) — exactly what .color() takes.
 function hydrate(type, v) {
@@ -510,13 +565,13 @@ function makeCtx(argsJson, decls) {
      * from the immediate caller's args (or the declared default); cascade
      * inputs resolve up the invoke chain, view outermost.
      */
-    get(name) {
+    input(name) {
       name = String(name);
       const decl = decls[name];
       if (!decl) {
         const known = Object.keys(decls);
         throw new Error(
-          `ctx.get(${JSON.stringify(name)}): not declared in meta.inputs` +
+          `ctx.input(${JSON.stringify(name)}): not declared in meta.inputs` +
             (known.length ? ` (declared: ${known.join(', ')})` : ' (this file declares no inputs)'),
         );
       }
@@ -569,12 +624,7 @@ export function installGlobals(g) {
     revolve,
     fromThreeGeometry,
     group,
-    union,
-    difference,
-    intersection,
-    hull,
     deg,
-    parseColor,
   };
 
   const log = (level) => (...a) => {

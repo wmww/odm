@@ -8,6 +8,45 @@ version exists — the API is the freely-breaking `unstable` channel
 until it stops moving under real project load (user: build test
 projects and run agent feedback rounds before stabilizing anything).
 
+## API surface principles (user-confirmed 2026-07-30 cleanup)
+
+The big pre-stable cleanup (aliases purged, fail-loud everywhere).
+Rules to preserve in future API work:
+
+- **One name, one call shape.** No aliases (`add`/`height`/`radius`/
+  free-function CSG all removed). Required dimensions positional,
+  options object holds only optional knobs: `box(size, opts)`,
+  `cylinder(r, h, {r2, segments, center})`, `sphere(r, opts)`,
+  `extrude(profile, height, opts)`, `revolve(profile, opts)`.
+- **Fail loud**: unknown option keys throw; every numeric arg
+  validated; `translate`/`scale` require all three components
+  (`scale(k)` uniform removed — matched three and killed the
+  translate(5)-vs-scale(5) asymmetry); unconsumed invoke `provides`
+  are linted in the input report (report.rs `subtree_declares`).
+- **Align with THREE.BufferGeometry's transform family** (the right
+  model — solids are geometry-like values, not Object3D):
+  `applyMatrix4` (was `transform`), raycast returns `point` (three's
+  Raycaster name). Never reuse a three name with different semantics
+  (our world-axis `rotate` is deliberately NOT `rotateOnAxis`).
+- **Arrays or THREE in, THREE out**: inputs accept `[x,y,z]` or
+  `Vector3`; queries return `Box3`/`Vector3` (`bounds()` → Box3 or
+  null — null, not inverted-empty, so misses fail loud).
+- **Immutability is the one deliberate three divergence** (mutation
+  would break place-one-value-many-times and can't cover CSG anyway);
+  docs lead with it (transforms.md, prompts/js.md).
+- **`{about}` pivot** on rotations + scale (conjugated translation) —
+  a strict superset of the three-style one-arg calls.
+- **`ctx.input`** (was `ctx.get`); ctx stays an argument (never
+  globals): odm.* are pure functions of their args, ctx.* depend on
+  the running build — ambient input/invoke would let module-scope
+  reads bake one build's value into isolate state.
+- Removed from the surface: `Solid.geometry`, `bake()` (content
+  addressing makes it useless), `odm.parseColor`, auto-conversion of
+  raw BufferGeometry (explicit `fromThreeGeometry` only).
+- Conformance pins all of this: `strict-errors.js` (mode-enum pattern
+  for many error cases in one file), `transforms-about.js`,
+  `extrude.js`.
+
 ## Decisions and why (user-confirmed 2026-07-29)
 
 - **Per-file pragma** `//! odm <version>`, single integer versions
@@ -40,7 +79,7 @@ projects and run agent feedback rounds before stabilizing anything).
   entirely (2026-07-29, implemented): params/animation are per-doohickey
   declared inputs, `odm.toml` is the project marker, `root.js` the
   default-view convention. Doohickey `meta` (inputs/presets) IS part of
-  the versioned API surface (`ctx.get`, `ctx.invoke(path, args,
+  the versioned API surface (`ctx.input`, `ctx.invoke(path, args,
   provides)`).
 
 ## Implementation map (all built, tested)
