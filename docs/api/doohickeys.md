@@ -5,6 +5,7 @@ is a doohickey: one composable piece, like a React component. `main.js`
 is the root; its output is the scene.
 
 ```js
+//! odm unstable
 export default function build(ctx) {
   return odm.box([40, 20, 5]).color('steelblue');
 }
@@ -14,6 +15,15 @@ The default export must be a function; it is called with a context
 object (`ctx.args`, `ctx.t`, `ctx.param()`, `ctx.invoke()` — see
 [composition.md](composition.md) and
 [params-and-animation.md](params-and-animation.md)).
+
+## The API version pragma
+
+`//! odm <version>` in the leading comments names the JS API version the
+file targets — `unstable` (the current, freely-breaking dev channel) or,
+once stamped versions exist, `v1`, `v2`, …. It is per file: versions
+coexist in one project and `ctx.invoke` crosses them freely. A missing
+pragma currently means `unstable`; that default goes away when v1 is
+cut, so write the pragma. The whole story: `odm docs versioning`.
 
 ## Return values
 

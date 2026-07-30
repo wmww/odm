@@ -3,6 +3,7 @@
 //! is the optional manifest.
 
 use odm_ir::Hash;
+use odm_js::ApiVersion;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -34,10 +35,21 @@ pub enum ScanError {
     NotADirectory(String),
 }
 
+/// One doohickey's source as of a sync.
+#[derive(Debug, Clone)]
+pub struct Source {
+    pub code: String,
+    pub hash: Hash,
+    /// From the `//! odm <version>` pragma; a bad pragma is kept as the
+    /// error and surfaces when (if) the file is built. Missing pragma =
+    /// unstable until v1 is cut, then it becomes an error too.
+    pub api: Result<ApiVersion, String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProjectSnapshot {
-    /// path → (code, code hash) for every doohickey.
-    pub sources: BTreeMap<String, (String, Hash)>,
+    /// path → source for every doohickey.
+    pub sources: BTreeMap<String, Source>,
     pub manifest: Manifest,
     /// path → content hash for generation identity (doohickeys + odm.json).
     pub generation_sources: BTreeMap<String, Hash>,
@@ -67,7 +79,7 @@ pub fn scan_project(dir: &Path) -> Result<ProjectSnapshot, ScanError> {
 fn walk(
     dir: &Path,
     prefix: &str,
-    sources: &mut BTreeMap<String, (String, Hash)>,
+    sources: &mut BTreeMap<String, Source>,
     generation_sources: &mut BTreeMap<String, Hash>,
 ) -> Result<(), ScanError> {
     let entries = std::fs::read_dir(dir)
@@ -93,8 +105,9 @@ fn walk(
             let code = std::fs::read_to_string(&path)
                 .map_err(|e| ScanError::Io { path: rel.clone(), err: e.to_string() })?;
             let hash = Hash::of_bytes(code.as_bytes());
+            let api = odm_js::parse_pragma(&code).map(|v| v.unwrap_or(ApiVersion::Unstable));
             generation_sources.insert(rel.clone(), hash);
-            sources.insert(rel, (code, hash));
+            sources.insert(rel, Source { code, hash, api });
         }
     }
     Ok(())

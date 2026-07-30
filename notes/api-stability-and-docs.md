@@ -1,105 +1,100 @@
-# JS API stability & docs plan
+# JS API stability & docs
 
-Status: discussed with user 2026-07-29; direction agreed below except where
-marked open. Not yet implemented.
+The user/agent-facing contract lives in `docs/versioning.md` (pragma,
+stamped-version promises, suite rules, the version-cut checklist). This
+note holds the rationale and the implementation map. Infrastructure
+built 2026-07-29 (was `plans/api-versioning-infra.md`); NO stable
+version exists — the API is the freely-breaking `unstable` channel
+until it stops moving under real project load (user: build test
+projects and run agent feedback rounds before stabilizing anything).
 
-## Why
+## Decisions and why (user-confirmed 2026-07-29)
 
-The JS API must be stable once ready: projects are long-lived and agents
-shouldn't be forced to migrate whole projects (error-prone) on engine
-upgrades. CLI/engine internals need no such promise — agents are
-re-prompted each session. Current API is NOT frozen yet (user explicit).
-
-## Versioning model
-
-- **Per-file API version**, chosen by the file itself via a static pragma
-  readable at sync time without evaluating the module. Syntax (user
-  decided): `//! odm v1`, `//! odm v2`, …; `//! odm unstable` for the
-  permanent dev channel (always the current surface, no promises, breaks
-  freely; in-repo examples live here). Cutting vN copies the then-current
-  unstable surface/docs/suite to vN and freezes them.
-- **Single integer versions** (Rust-editions style): the pragma gates
-  breaking changes only. Feature additions land silently and are exposed
-  to every file of that major — user explicitly wants no feature-hiding
-  for old files. Safe in JS: a file shadowing a name in its own isolate
-  keeps its shadow. Rejected X.Y min-featureset (Go-style): unenforced
-  minor rots; its only payoff (clear "engine too old" error) is had more
-  cheaply via good unknown-API errors. Pragma grammar can grow an
-  optional minor later if lagging-engine scenarios become real.
-  Fits the architecture for free: each doohickey gets its own isolate, so
-  version = which framework snapshot to instantiate.
-- **One live implementation, not frozen copies.** Rust-editions model:
-  engine ops + core stay singular and current; each version is a thin JS
-  shim over them. The frozen artifact per version is its **conformance
-  test suite** (+ docs), not code. Anything may change as long as every
-  version's frozen suite passes.
-- **Old versions stay bug-compatible by default** (user decision —
-  reversed my earlier Rust-style stance). A core bugfix that would change
-  a stamped version's behavior gets a compat shim preserving the old
-  behavior, unless we deliberately decide the fix applies there too.
-  "Frozen" suites may still be touched to: add tests, port to new test
-  infra, and (when decided) assert a bugfix in an old version.
-- Suites assert **semantics, not bytes** (volume/bounds/raycast within
-  epsilon, image-diff tolerance) — Manifold upgrades change exact
-  triangulation legitimately.
-- Pragma **required** once v1 exists (missing → error with hint);
-  "default = latest" would reintroduce break-on-upgrade.
+- **Per-file pragma** `//! odm <version>`, single integer versions
+  (Rust-editions style): the pragma gates breaking changes only;
+  features land in every version where they aren't a break (user
+  explicitly wants no feature-hiding for old files — safe because a
+  file shadowing a new name in its own isolate keeps its shadow).
+  Rejected X.Y min-featureset: unenforced minor rots; its one payoff
+  (clear "engine too old" error) is had cheaper via good unknown-API
+  errors. Pragma grammar can grow a minor later.
+- **One live implementation, not frozen copies**: engine ops + core
+  stay singular; each stamped version is a thin JS shim. The frozen
+  artifact per version is its conformance suite + docs.
+- **Bug-compatible by default** in stamped versions (user decision):
+  behavior-changing core fixes get compat shims there unless we
+  deliberately decide otherwise.
+- Suites assert semantics within epsilon, never bytes (Manifold
+  upgrades change triangulation legitimately). Append-only within a
+  version; existing assertions never weakened.
+- Pragma required once v1 exists (missing → error with hint);
+  "default = latest" would reintroduce break-on-upgrade. Until then,
+  missing = unstable.
 - Cross-version `ctx.invoke` works via the engine-mediated boundary
-  (JSON + handles); that protocol is engine-owned, additive-only,
-  versioned separately from the API surface.
-- Vendored THREE subset is pinned per API version (part of the surface).
-  Deterministic Math.random PRNG likewise per-version.
-- Cadence: batch breaking changes into deliberate infrequent cuts —
-  every version is permanent surface (shim + suite + docs).
-
-## Sequencing
-
-Current API = the unstable channel, explicitly breakable. Build real
-test projects on it now, accept churn (agents do mechanical migrations),
-let usage shape the API. Cut v1 when it stops moving under load; the
-test projects' assertions seed the v1 conformance suite. Do not
-stabilize from theory. User confirmed: projects + agent feedback rounds
-before stabilizing anything.
-
-## Docs
-
-- Layout (done 2026-07-29, user picked): everything under `docs/` —
-  `docs/prompts/` is the lean in-context layer (~100-line cheat sheet,
-  compiled into `odm prompt`; moved from top-level `prompts/`), and
-  `docs/api/` is the full reference, one topic per file (written; see
-  `docs/api/README.md` for the index).
-- Full reference searched on demand via CLI (`odm docs <query>`, grep +
-  section extraction to start) so agents pull detail without filling
-  context — CLI not built yet.
-- Version cut snapshots `docs/vN/`; frozen versions' docs are frozen
-  (typo fixes ok). CLI `--api N`, default latest.
-- **Doctests**: every docs example extracted and run in CI against its
-  version. This enforces both docs-freshness and API stability; examples
-  double as conformance tests.
-- **Migration guides**: one file per hop, named `docs/changes/vN.md`
-  (covers v(N-1) → vN; user picked this naming). Bullets only, mechanical
-  before→after per breaking change. CLI serves the concatenated path
-  (`odm docs changes 1 4`) so an agent updating a file gets exactly the
-  deltas. Guides freeze once written; before/after snippets doctested
-  under their respective versions.
-
-## Decided
-
-- Single integer versions, no X.Y (user confirmed).
+  (JSON + handles), additive-only, versioned separately.
 - Old versions live indefinitely; revisit only if a shim becomes
-  burdensome (user confirmed).
-- Suites are append-only within a live major as features are added;
-  "frozen" precisely = existing assertions never weakened or removed.
-- Plan for building the infra: `plans/api-versioning-infra.md`
-  (explicitly does not include cutting v1).
+  burdensome.
+
+## Implementation map (all built, tested)
+
+- **Pragma parsing**: `crates/odm-js/src/version.rs` (`ApiVersion`,
+  `SUPPORTED`, `parse_pragma` — only `//!` lines are pragma
+  candidates, plain `//` comments never; parsed at sync time in
+  `odm-build/src/sources.rs`, stored as `Source::api:
+  Result<ApiVersion, String>`; a bad pragma fails only that file's
+  build (`FailureKind::Version` → CLI kind `bad-version`), never the
+  sync — a broken scratch file must not take the project down).
+- **One snapshot, per-isolate surface selection**:
+  `framework/versions/<v>` manifests register installers in
+  `__odmVersions`; `run_build` executes
+  `__odmVersions[v].install(globalThis)` before the doohickey loads;
+  bare `'odm'`/`'three'` imports resolve per version
+  (`odm-js/src/snapshot.rs`). One snapshot per version does NOT work —
+  see "V8 constraints" below.
+- **Test-only version** `test` (surface diff: `odm.apiProbe`) behind
+  the odm-js cargo feature `test-api-version`, enabled by
+  dev-dependencies only; release engines reject the id. Keeps routing,
+  coexistence, and cross-version invoke exercised before v1:
+  `odm-build/tests/versions.rs`.
+- **Conformance suite**: `tests/conformance/unstable/*.js` (+ dirs for
+  multi-file/params tests), declarative `export const checks` (volume/
+  area/bounds/raycast/error/console, per-check `t`); format and
+  semantics in `tests/conformance/README.md`. Runner:
+  `crates/odm-engine/src/conformance.rs` (unit-test module — it needs
+  crate-private query helpers). Grow it with every feature and bug.
+- **`odm docs`**: `crates/odm-cli/src/docs.rs`, whole `docs/` tree
+  `include_dir`'d into the binary. Topics, `search` (whole markdown
+  sections out), `changes <from> <to>`, `--api N` (rejected until
+  snapshots exist). `docs/changes/` exists, empty.
+- **Doctests**: `crates/odm-build/tests/doctests.rs` runs every fenced
+  ```js block under docs/ (` ```js skip` opts out, ` ```js error="…"`
+  expects failure; fragments get a build(ctx) wrapper; `invoke('…')`
+  targets get stub doohickeys). Docs examples were made
+  self-contained to pass — keep new examples runnable.
+- In-repo examples carry explicit `//! odm unstable` pragmas.
+
+## V8 constraints discovered (2026-07-29, deno_core 0.408)
+
+Pinned by `odm-js/tests/multi_snapshot.rs` (two `#[ignore]`d tests
+reproduce the aborts — run individually to re-verify on V8 upgrades):
+
+- Structurally different snapshot blobs cannot coexist in one process:
+  V8 seeds a process-wide read-only heap from the first blob used;
+  deserializing a different shape dies on external-reference indexes.
+  This kills the original snapshot-per-version design and is why all
+  versions share ONE snapshot with per-isolate install.
+- Snapshot creation while any other thread executes JS aborts the
+  process (the shared read-only heap is mutated during creation).
+  Same-thread nesting (creation under a suspended isolate) is fine.
+  Consequence for tests: one `JsEnv` per test binary, built before
+  builds run (OnceLock pattern everywhere).
 
 ## Open questions
 
 - Whether odm.json (params/animation) semantics fall under the API
   version or stay a separate additive-forever format (leaning latter).
-  User wants a broader discussion of odm.json and how we think about
-  projects vs files — pending.
-- Project-level metadata recording a target engine version, so an agent
-  opening a project touched by a newer engine gets nudged to update
-  ("your coworker edited this on a newer version"). Deferred — can be
-  added backwards-compatibly later, nothing baked into project files.
+  User wants a broader discussion of odm.json and projects vs files —
+  pending.
+- Project-level metadata recording a target engine version (nudge
+  agents on engine skew). Deferred — can be added
+  backwards-compatibly later.

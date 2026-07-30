@@ -444,13 +444,17 @@ pub(crate) mod tests {
     use serde_json::json;
     use std::sync::mpsc;
 
+    /// The whole test binary shares one snapshot: tests run in parallel
+    /// threads, and V8 aborts if a snapshot is built while another thread
+    /// executes JS (see odm-js/tests/multi_snapshot.rs).
+    pub(crate) fn env() -> Arc<JsEnv> {
+        static ENV: std::sync::OnceLock<Arc<JsEnv>> = std::sync::OnceLock::new();
+        ENV.get_or_init(|| Arc::new(JsEnv::new().expect("js snapshot"))).clone()
+    }
+
     /// A bare engine: no project on disk, since chat never builds.
     pub(crate) fn engine() -> Arc<EngineState> {
-        // One snapshot per process, as `JsEnv::new` requires — tests run in
-        // parallel threads, and a second V8 snapshot build crashes.
-        static ENV: std::sync::OnceLock<Arc<JsEnv>> = std::sync::OnceLock::new();
-        let env = ENV.get_or_init(|| Arc::new(JsEnv::new().expect("js snapshot"))).clone();
-        EngineState::new(PathBuf::from("/nonexistent-odm-chat-test"), env).unwrap()
+        EngineState::new(PathBuf::from("/nonexistent-odm-chat-test"), env()).unwrap()
     }
 
     /// Run `f` off-thread and fail rather than hang if it blocks.

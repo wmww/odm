@@ -20,6 +20,8 @@ Axis-aligned bounding box: `{ min: [x, y, z], max: [x, y, z] }`, or
 `null` for an empty solid.
 
 ```js
+const part = odm.cylinder(8, 20);
+const other = odm.box(10);
 const b = part.bounds();
 const onTop = other.translate(0, 0, b.max[2] - other.bounds().min[2]);
 ```
@@ -30,6 +32,7 @@ Nearest surface hit of the ray from `origin` along `dir`, within
 `maxDist` (default 1e9):
 
 ```js
+const part = odm.box(10);
 const hit = part.raycast([0, 0, 50], [0, 0, -1]);
 // → { distance, position: [x,y,z], normal: [x,y,z] }  or  null
 ```

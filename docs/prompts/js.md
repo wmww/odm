@@ -1,6 +1,7 @@
 # Writing doohickeys
 
 ```js
+//! odm unstable
 export default function build(ctx) {
   const plate = odm.box([40, 20, 5]);
   const hole = odm.cylinder({ r: 3, h: 12 });
@@ -11,7 +12,8 @@ export default function build(ctx) {
 Doohickeys run in an isolated sandbox with the `odm` and `THREE` globals
 preloaded — no imports, no file or network access. Return a `Solid`,
 `Group`, `Instance`, a closed `THREE.BufferGeometry`, an array of these,
-or `null`.
+or `null`. Start every file with the `//! odm unstable` pragma: it names
+the JS API version the file targets (`odm docs versioning`).
 
 ## Solids
 
@@ -19,8 +21,10 @@ or `null`.
 odm.box([20, 10, 4]);                   // also odm.box(10), odm.box({ size, center })
 odm.cylinder({ r: 3, h: 10 });          // along Z; odm.cylinder(r, h); r1/r2 for a cone
 odm.sphere({ r: 5, segments: 64 });     // segment defaults: cylinder 64, sphere 48
-odm.extrude([outerPts, holePts], { height: 4, twist: rad, scale: 0.5 });  // along +Z
-odm.revolve(profilePts, { angle: Math.PI, segments: 96 });  // around Z; (x,y) → (radius, z)
+const outer = [[0, 0], [20, 0], [20, 10], [0, 10]];  // 2D profile: [x,y] loops
+const hole = [[8, 4], [12, 4], [12, 6], [8, 6]];
+odm.extrude([outer, hole], { height: 4, twist: odm.deg(45), scale: 0.5 });  // along +Z
+odm.revolve(outer, { angle: Math.PI, segments: 96 });  // around Z; (x,y) → (radius, z), x ≥ 0
 odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48));  // closed geometry only
 ```
 
@@ -31,9 +35,10 @@ box's corner (or a cylinder's base) there instead. 2D profiles are
 is a radius, so it must be ≥ 0.
 
 ```js
+const [a, b, s] = [odm.box(10), odm.sphere(6), odm.cylinder(2, 12)];
 a.subtract(b); a.union(b); a.intersect(b); a.hull();  // odm.difference(a, b) etc. also work
-s.translate(x, y, z).rotateZ(odm.deg(30)).scale(2);   // world-frame, applied in order
-s.rotate([0, 1, 1], rad); s.transform(matrix4);       // arbitrary axis / raw matrix
+s.translate(5, 0, 2).rotateZ(odm.deg(30)).scale(2);   // world-frame, applied in order
+s.rotate([0, 1, 1], 0.5); s.transform(new THREE.Matrix4()); // arbitrary axis / raw matrix
 s.color('steelblue'); s.name('bolt');                 // labels show in odm tree
 ```
 

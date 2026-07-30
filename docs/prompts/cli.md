@@ -4,8 +4,8 @@ The `odm` CLI talks to the running engine. Run it from anywhere inside
 the project (it walks up to find the engine socket), or pass
 `--project <dir>` first. Every command that looks at the scene **syncs
 first** — rescans files, rebuilds what changed, then answers — and prints
-a single JSON object. Exit code 0 = ok, nonzero = error. (`prompt` is the
-one exception: no engine, and markdown rather than JSON.)
+a single JSON object. Exit code 0 = ok, nonzero = error. (`prompt` and
+`docs` are the exceptions: no engine, and markdown rather than JSON.)
 
 ```
 odm status                    # files, generation, animation duration
@@ -18,6 +18,8 @@ odm selection                 # what the user selected in the viewer
 odm poll [--timeout <sec>]    # wait for messages from the user
 odm say <text>                # send a message to the user
 odm prompt                    # print these instructions
+odm docs [<topic>]            # full API reference (list topics when bare)
+odm docs search <pattern>     # grep the reference, whole sections out
 ```
 
 Node ids are child-index paths from the root (`""`, `0`, `0/2`); get

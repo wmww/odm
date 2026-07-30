@@ -20,3 +20,5 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# Tests exercise the multi-version machinery via the test-only API version.
+odm-js = { path = "../odm-js", features = ["test-api-version"] }

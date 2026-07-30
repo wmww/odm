@@ -1,3 +1,4 @@
+//! odm unstable
 // A wheel: tire + hub + spokes, built along the Z axis.
 export default function build(ctx) {
   const r = ctx.args.radius ?? 8;

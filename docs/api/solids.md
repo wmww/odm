@@ -53,6 +53,7 @@ Centered on the origin. `segments` defaults to 48.
 
 ```js
 odm.extrude([[0, 0], [20, 0], [20, 10], [0, 10]], { height: 4 });
+const shape = new THREE.Shape().absarc(0, 0, 10, 0, Math.PI * 2);
 odm.extrude(shape, { height: 30, twist: odm.deg(90), scale: 0.5 });
 ```
 
@@ -70,8 +71,9 @@ Extrudes along +Z, from z=0 to z=`height`. Options:
 ## odm.revolve(profile, opts?)
 
 ```js
-odm.revolve([[5, 0], [8, 0], [8, 10], [5, 10]], {});          // tube
-odm.revolve(profile, { angle: Math.PI, segments: 96 });
+const profile = [[5, 0], [8, 0], [8, 10], [5, 10]];
+odm.revolve(profile, {});                             // tube
+odm.revolve(profile, { angle: Math.PI, segments: 96 }); // half, capped
 ```
 
 Revolves the profile around the Z axis; profile `(x, y)` maps to

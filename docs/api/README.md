@@ -20,7 +20,9 @@ case.
 
 ## The globals
 
-Doohickeys see three globals; there are no imports.
+Doohickeys see three globals. (`import`ing `'odm'` or `'three'` also
+works and resolves to the same surface; any other import is an error —
+use `ctx.invoke` to reach other doohickeys.)
 
 - **`odm`** — the framework:
   classes `Solid`, `Group`, `Instance` (usable for `instanceof`);

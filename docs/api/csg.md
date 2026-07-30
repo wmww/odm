@@ -7,7 +7,7 @@ Boolean operations combine Solids into a new Solid. Operands must be
 
 ## Methods
 
-```js
+```js skip
 a.union(b, c, ...)       // a ∪ b ∪ c;  .add() is an alias
 a.subtract(b, c, ...)    // a minus (b ∪ c)
 a.intersect(b, c, ...)   // a ∩ b ∩ c

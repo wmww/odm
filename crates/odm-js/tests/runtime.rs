@@ -38,6 +38,7 @@ fn build_full(
         BuildInput {
             path: "main.js",
             code,
+            api: odm_js::ApiVersion::Unstable,
             args,
             context,
             kernel: w.kernel.clone(),
@@ -286,6 +287,7 @@ impl Invoker for NestedInvoker {
             BuildInput {
                 path,
                 code: &code,
+                api: odm_js::ApiVersion::Unstable,
                 args,
                 context: &HashMap::new(),
                 kernel: self.world.kernel.clone(),

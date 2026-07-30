@@ -3,8 +3,9 @@
 ## odm.group(...children)
 
 ```js
-odm.group(a, b, c).name('assembly').translate(0, 0, 10);
-odm.group(parts);           // an array works too
+const bolt = odm.cylinder(1, 8);
+const nuts = [odm.sphere(2), odm.sphere(2).translate(0, 0, 8)];
+odm.group(bolt, nuts).name('assembly').translate(0, 0, 10); // arrays flatten
 ```
 
 Returns a `Group`: a pure grouping under one transform/color/name.

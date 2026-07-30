@@ -1,3 +1,4 @@
+//! odm unstable
 // A separate doohickey so editing main.js alone shows partial rebuilds
 // (this one stays memoized).
 export default function build(ctx) {

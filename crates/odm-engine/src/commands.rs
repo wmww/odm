@@ -120,6 +120,7 @@ impl CmdError {
             FailureKind::Cancelled => "cancelled",
             FailureKind::MissingDoohickey => "missing-doohickey",
             FailureKind::BadOutput => "bad-output",
+            FailureKind::Version => "bad-version",
             FailureKind::Internal => "internal",
         };
         CmdError {

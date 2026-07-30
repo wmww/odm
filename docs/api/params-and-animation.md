@@ -29,6 +29,7 @@ Animation time in seconds; `0` in static scenes. Model motion as a pure
 function of it:
 
 ```js
+const rpm = ctx.param('rpm', 30);
 const angle = ctx.t * 2 * Math.PI * (rpm / 60);
 ```
 

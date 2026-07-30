@@ -4,6 +4,8 @@
 //! so CLI results always reflect the files on disk.
 
 mod commands;
+#[cfg(test)]
+mod conformance;
 mod icons;
 mod scene;
 mod server;

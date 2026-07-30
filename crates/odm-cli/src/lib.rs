@@ -2,6 +2,7 @@
 //! project's unix socket (found by walking up from cwd, like git). `odm run`
 //! lives in the `odm` binary crate; everything else lands here.
 
+mod docs;
 mod prompt;
 
 use anyhow::{Context, bail};
@@ -27,6 +28,9 @@ pub const USAGE: &str = "  status                     project overview: files, g
   poll    [--timeout <sec>]  wait for messages the user typed in the viewer
   say     <text>             send a message to the user
   prompt                     print the agent instructions (markdown, no engine)
+  docs    [<topic>]          the full API reference (markdown, no engine)
+  docs    search <pattern>   grep the reference, whole sections out
+  docs    changes <from> <to>  API migration guides, concatenated
 ";
 
 /// True if `args` asks for help rather than naming a command — including
@@ -56,14 +60,17 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     };
     let rest = &args[1..];
 
-    // The one command with nothing to ask an engine: the instructions are
-    // compiled in, so this works with no project and no engine running.
+    // The two commands with nothing to ask an engine: prompts and docs are
+    // compiled in, so they work with no project and no engine running.
     if cmd == "prompt" {
         if !rest.is_empty() {
             bail!("prompt takes no arguments");
         }
         print!("{}", prompt::text());
         return Ok(0);
+    }
+    if cmd == "docs" {
+        return docs::run(rest);
     }
 
     let request = match cmd.as_str() {

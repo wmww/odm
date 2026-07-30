@@ -2564,6 +2564,7 @@ name = "odm-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "include_dir",
  "serde_json",
 ]
 
@@ -2583,6 +2584,7 @@ dependencies = [
  "png",
  "serde",
  "serde_json",
+ "tempfile",
  "winit",
 ]
 
@@ -2605,6 +2607,7 @@ dependencies = [
  "futures",
  "include_dir",
  "odm-ir",
+ "odm-js",
  "odm-kernel",
  "odm-store",
  "serde",

@@ -1,7 +1,7 @@
 use crate::registry::{Acquire, RKey, Registry};
 use crate::sources::{ProjectSnapshot, ScanError, scan_project};
 use odm_ir::{Hash, Hasher, hash_json};
-use odm_js::{BuildError, BuildInput, Invoker, JsEnv, LogLine, run_build};
+use odm_js::{ApiVersion, BuildError, BuildInput, Invoker, JsEnv, LogLine, run_build};
 use odm_kernel::{CancelToken, Kernel};
 use odm_store::{Dep, GenerationId, MemoEntry, MemoKey, Store};
 use serde_json::Value;
@@ -28,6 +28,8 @@ pub enum FailureKind {
     Cancelled,
     MissingDoohickey,
     BadOutput,
+    /// Bad or unsupported `//! odm <version>` pragma.
+    Version,
     Internal,
 }
 
@@ -197,7 +199,7 @@ impl BuildEngine {
         if pass.is_cancelled() {
             return Err(fail(path, FailureKind::Cancelled, "build cancelled"));
         }
-        let Some((code, code_hash)) = pass.snapshot.sources.get(path) else {
+        let Some(source) = pass.snapshot.sources.get(path) else {
             let available: Vec<&str> =
                 pass.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
             return Err(fail(
@@ -208,6 +210,10 @@ impl BuildEngine {
                     if available.is_empty() { "(no .js files)".into() } else { available.join(", ") }
                 ),
             ));
+        };
+        let api = match &source.api {
+            Ok(v) => *v,
+            Err(e) => return Err(fail(path, FailureKind::Version, format!("{path}: {e}"))),
         };
         let args_hash = hash_json(args);
         // Cycle = same (path, args) already building in this chain. Keying on
@@ -225,7 +231,7 @@ impl BuildEngine {
             ));
         }
 
-        let key = MemoKey { code: *code_hash, args: args_hash };
+        let key = MemoKey { code: source.hash, args: args_hash };
         let rkey = RKey { context: pass.context_hash, code: key.code, args: key.args };
 
         loop {
@@ -261,8 +267,8 @@ impl BuildEngine {
             }
         }
 
-        let code = code.clone();
-        let result = self.run_one(pass, chain, path, &code, args, key);
+        let code = source.code.clone();
+        let result = self.run_one(pass, chain, path, &code, api, args, key);
         self.registry.release(rkey);
         result
     }
@@ -273,6 +279,7 @@ impl BuildEngine {
         chain: &[(String, Hash)],
         path: &str,
         code: &str,
+        api: ApiVersion,
         args: &Value,
         key: MemoKey,
     ) -> Result<Hash, BuildFailure> {
@@ -289,6 +296,7 @@ impl BuildEngine {
             BuildInput {
                 path,
                 code,
+                api,
                 args,
                 context: &pass.context,
                 kernel: self.kernel.clone(),

@@ -1,3 +1,4 @@
+//! odm unstable
 // assembly: doohickey composition. One wheel geometry, four placements —
 // content addressing stores the wheel mesh once.
 export default function build(ctx) {

@@ -1,3 +1,4 @@
+//! odm unstable
 // parametric-box: sizes come from odm.json params — edit them (or the
 // defaults here) and watch the rebuild.
 export default function build(ctx) {

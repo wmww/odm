@@ -45,10 +45,12 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (ExecutionContext), Hash→Manifold cache with rebuild-from-store fallback.
   Segments are always explicit — kernel rejects <3; framework defaults:
   cylinder 64, sphere 48, revolve 64.
-- `odm-js` — deno_core =0.408.0; per-build disposable isolates from a
-  snapshot embedding `framework/` (odm API + three r185 subset); ops
+- `odm-js` — deno_core =0.408.0; per-build disposable isolates from ONE
+  snapshot embedding `framework/` (odm API + three r185 subset, every
+  supported API version's surface manifest — see "API versions" below); ops
   extension; dep recording; console capture; `run_build` is the single
-  entry point. `ir_json::node_from_json` interns the framework's IR JSON into
+  entry point (`extract_export` the side door for reading a module's export
+  without building — the conformance runner uses it). `ir_json::node_from_json` interns the framework's IR JSON into
   the store and returns the root hash; `ctx.invoke` crosses the boundary as a
   hash string, and a JSON node `{"ref": "<hex>"}` (no other keys) *is* that
   stored subtree — so an Instance with no transform/color/name reuses the
@@ -130,9 +132,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - `odm-cli` — client commands: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
   from `ok`. Also owns `find_project` (the walk-up), which `run` reuses, and
-  `prompt.rs`: `odm prompt` `include_str!`s the repo's `docs/prompts/*.md` (via
-  `CARGO_MANIFEST_DIR`) and prints them concatenated — no socket, no project,
-  and the one command that emits markdown instead of JSON.
+  the two engine-less markdown commands: `prompt.rs` (`odm prompt`
+  `include_str!`s `docs/prompts/*.md`) and `docs.rs` (`odm docs`
+  `include_dir!`s the whole `docs/` tree: topic dump, section-grepping
+  `search`, `changes <from> <to>` migration concatenation, `--api N`
+  rejected until frozen docs snapshots exist).
 - `odm` — the only binary. `odm run [<dir>] [--headless]` → `odm_engine::run`;
   everything else → `odm_cli::run`. Top-level `--help` splices in
   `odm_cli::USAGE`. Splitting the two halves into libs behind one bin keeps
@@ -333,6 +337,19 @@ Consequences:
   delivers a whole press-move-release chain inside one frame, so an injected
   drag never registers. Screenshot the look there, test behavior in unit tests.
 
+## API versions
+
+Contract: `docs/versioning.md`; rationale + implementation map:
+`notes/api-stability-and-docs.md`. The short version: every doohickey
+carries `//! odm <version>` (parsed at sync time in odm-build/sources.rs,
+missing = unstable until v1); `framework/versions/<v>` manifests register
+per-version installers in one shared snapshot, `run_build` installs the
+selected surface into each isolate before its module loads, and bare
+`'odm'`/`'three'` imports resolve per version. A test-only `test` version
+(feature `test-api-version`, dev-deps only) keeps the machinery honest.
+One snapshot per process is a hard V8 constraint, not a choice — see
+notes/spike-findings.md "Snapshot count/concurrency".
+
 ## Invariants & policies
 
 - Consistency: every published result is byte-equivalent to a from-scratch
@@ -351,18 +368,30 @@ Consequences:
 
 `cargo test` runs everything in ~1s after compile. Almost all tests are
 integration tests in `crates/*/tests/`; the unit tests in `src/` are
-`odm-render/src/grid.rs` and, in odm-engine, `icons.rs`, `commands.rs`,
-`state.rs` (the chat queue), `server.rs` (delivery over a real socket),
-`viewer/tree.rs` and `theme/scroll.rs`. `state.rs`'s tests build an
-`EngineState` directly and share one `JsEnv` in a `OnceLock` — a second V8
-snapshot in a process is a SIGSEGV — and `server.rs` reuses that helper.
+`odm-render/src/grid.rs`, `odm-js/src/version.rs` (pragma parsing) and, in
+odm-engine, `icons.rs`, `commands.rs`, `state.rs` (the chat queue),
+`server.rs` (delivery over a real socket), `viewer/tree.rs`,
+`theme/scroll.rs`, and `conformance.rs` (the suite runner, below). Every
+test binary shares one `JsEnv` in a `OnceLock` (`state::tests::env()` in
+odm-engine) — building a snapshot while another test thread runs JS aborts
+the process (see spike-findings "Snapshot count/concurrency").
+
+Two data-driven suites guard the JS API:
+- **Conformance**: `tests/conformance/unstable/` (repo root), run by
+  `cargo test -p odm-engine conformance`. Declarative `export const
+  checks` per test doohickey; format in `tests/conformance/README.md`.
+  Add a test with every feature and every bug found — it seeds the frozen
+  v1 suite.
+- **Doctests**: every fenced ```js block under `docs/` must build
+  (`cargo test -p odm-build --test doctests`; ` ```js skip` opts out).
+  Keep docs examples self-contained — free variables fail the build.
 
 Manifests suppress empty harness output: `doctest = false` on every lib (we
-write no doctests, and `odm-js` otherwise inherits an ignored one from a
-deno_core macro), `test = false` on the `odm` bin and on the six libs with no
-`#[cfg(test)]` modules. **If you add unit tests to `src/` in odm-build/
-odm-cli/odm-ir/odm-js/odm-kernel/odm-store, flip that crate's `[lib] test`
-back to true** — the manifest carries a comment saying so.
+write no *Rust* doctests, and `odm-js` otherwise inherits an ignored one
+from a deno_core macro), `test = false` on the `odm` bin and on the libs
+with no `#[cfg(test)]` modules. **If you add unit tests to `src/` in
+odm-build/odm-cli/odm-ir/odm-kernel/odm-store, flip that crate's `[lib]
+test` back to true** — the manifest carries a comment saying so.
 
 Useful invocations: `cargo test -p odm-build`, `cargo test --test render`,
 `cargo test <substring>`, `cargo test -q` (dots instead of one line per test).

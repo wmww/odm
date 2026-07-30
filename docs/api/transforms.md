@@ -4,7 +4,7 @@ Available on `Solid`, `Group`, and `Instance` alike. All values are
 immutable: every method returns a new value and never mutates the
 receiver.
 
-```js
+```js skip
 s.translate(x, y, z)      // missing components default to 0
 s.rotateX(rad)  s.rotateY(rad)  s.rotateZ(rad)
 s.rotate(axis, rad)       // axis: [x,y,z] or Vector3, through the origin
@@ -26,7 +26,9 @@ the value's center — translate-then-rotate orbits the part around the
 origin. To spin a part in place around its own center `c`:
 
 ```js
-s.translate(-c[0], -c[1], -c[2]).rotateZ(a).translate(c[0], c[1], c[2]);
+const s = odm.box([20, 4, 4]).translate(30, 0, 0); // its center c:
+const c = [30, 0, 0];
+s.translate(-c[0], -c[1], -c[2]).rotateZ(odm.deg(30)).translate(c[0], c[1], c[2]);
 // or equivalently, build the part centered on the origin, rotate, then move.
 ```
 

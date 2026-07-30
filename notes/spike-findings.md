@@ -26,6 +26,15 @@ did we measure / what did we prove" record behind `design-decisions.md`.
   main module in the snapshot blocks loading any runtime main module). A
   runtime-loaded module can import snapshotted modules — the snapshotted
   module map serves them, so no `extension!` esm is needed.
+- Snapshot count/concurrency (measured 2026-07-29, deno_core 0.408; pinned
+  by odm-js/tests/multi_snapshot.rs): structurally *different* blobs cannot
+  coexist in one process — V8 seeds a process-wide read-only heap from the
+  first blob used, and deserializing another shape dies on external-ref
+  indexes ("Check failed: index < size()"). Identical-shape blobs are fine.
+  Creating a snapshot while any other thread executes JS aborts the process
+  ("IsFreeSpaceOrFiller"); same-thread LIFO nesting under a suspended
+  isolate is fine. Hence: ONE snapshot per process (API versions select
+  their surface per isolate), built before any build runs.
 - The vendored three.js subset (44 files: math/core/geometries/extras) runs
   in a bare isolate with **zero stubs** — DOM references only occur inside
   function bodies the geometry path never calls. Loads in plain Node too.

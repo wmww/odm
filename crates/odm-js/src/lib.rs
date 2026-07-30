@@ -9,10 +9,12 @@ mod ir_json;
 mod ops;
 mod session;
 mod snapshot;
+mod version;
 
 pub use ir_json::node_from_json;
 pub use session::{Invoker, LogLine, SessionState};
 pub use snapshot::JsEnv;
+pub use version::{ApiVersion, SUPPORTED, parse_pragma};
 
 /// Re-export so downstream crates can hold isolate handles without a direct
 /// deno_core dependency.
@@ -54,6 +56,9 @@ pub struct BuildInput<'a> {
     /// Project-relative path, used for module specifier + error messages.
     pub path: &'a str,
     pub code: &'a str,
+    /// API version from the file's `//! odm <version>` pragma; picks the
+    /// framework snapshot this build's isolate is created from.
+    pub api: ApiVersion,
     pub args: &'a Value,
     /// Full context map: `t`, `params.<name>`, ...
     pub context: &'a HashMap<String, Value>,
@@ -81,13 +86,18 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Buil
     let specifier = snapshot::doohickey_specifier(input.path)
         .map_err(|e| BuildError::Internal(format!("bad doohickey path {:?}: {e}", input.path)))?;
 
-    let loader = snapshot::DoohickeyLoader::new(specifier.clone(), input.code.to_string());
+    let loader = snapshot::DoohickeyLoader::new(input.api, specifier.clone(), input.code.to_string());
     let mut rt = JsRuntime::new(RuntimeOptions {
         startup_snapshot: Some(env.snapshot()),
         module_loader: Some(Rc::new(loader)),
         extensions: vec![ops::odm_ops::init()],
         ..Default::default()
     });
+
+    // Install the API surface the file's pragma selects, before its module
+    // (whose top level may already use `odm`/`THREE`) loads.
+    rt.execute_script("odm:select-version", snapshot::select_version_script(input.api))
+        .map_err(|e| BuildError::Internal(format!("select api version {}: {e}", input.api)))?;
 
     let BuildInput { path, args, context, kernel, store, cancel, invoker, on_isolate, .. } = input;
     let session = SessionState {
@@ -192,6 +202,66 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Buil
         deps: std::mem::take(&mut session.deps),
         logs: std::mem::take(&mut session.logs),
     })
+}
+
+/// Load a doohickey module (without calling its build()) and return one of
+/// its exports as JSON — `None` if the export is absent. The conformance
+/// runner reads `export const checks` this way. The module's top level runs,
+/// so it gets a real session (ops work) under the version its pragma picks.
+pub fn extract_export(
+    env: &JsEnv,
+    path: &str,
+    code: &str,
+    api: ApiVersion,
+    export: &str,
+    kernel: Arc<odm_kernel::Kernel>,
+    store: Arc<odm_store::Store>,
+) -> Result<Option<Value>, BuildError> {
+    let specifier = snapshot::doohickey_specifier(path)
+        .map_err(|e| BuildError::Internal(format!("bad doohickey path {path:?}: {e}")))?;
+    let loader = snapshot::DoohickeyLoader::new(api, specifier.clone(), code.to_string());
+    let mut rt = JsRuntime::new(RuntimeOptions {
+        startup_snapshot: Some(env.snapshot()),
+        module_loader: Some(Rc::new(loader)),
+        extensions: vec![ops::odm_ops::init()],
+        ..Default::default()
+    });
+    rt.execute_script("odm:select-version", snapshot::select_version_script(api))
+        .map_err(|e| BuildError::Internal(format!("select api version {api}: {e}")))?;
+    rt.op_state().borrow_mut().put(SessionState {
+        kernel,
+        store,
+        context: HashMap::new(),
+        cancel: None,
+        deps: Vec::new(),
+        logs: Vec::new(),
+        invoker: None,
+    });
+
+    let mod_id = futures::executor::block_on(async {
+        let id = rt.load_main_es_module(&specifier).await?;
+        let eval = rt.mod_evaluate(id);
+        rt.run_event_loop(PollEventLoopOptions::default()).await?;
+        eval.await.map(|_| id)
+    })
+    .map_err(|e| BuildError::Js(format!("{path}: {e}")))?;
+
+    let ns_global = rt
+        .get_module_namespace(mod_id)
+        .map_err(|e| BuildError::Internal(format!("module namespace: {e}")))?;
+    deno_core::scope!(scope, &mut rt);
+    let ns = v8::Local::new(scope, ns_global);
+    let key = v8::String::new(scope, export)
+        .ok_or_else(|| BuildError::Internal("export name to v8".into()))?;
+    let Some(value) = ns.get(scope, key.into()) else {
+        return Ok(None);
+    };
+    if value.is_undefined() {
+        return Ok(None);
+    }
+    serde_v8::from_v8::<Value>(scope, value)
+        .map(Some)
+        .map_err(|e| BuildError::BadOutput(format!("export {export:?} not serializable: {e}")))
 }
 
 fn format_js_error(e: &JsError) -> String {
