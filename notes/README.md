@@ -3,6 +3,10 @@
 - `architecture.md` — the system as built: project format, crate map with
   per-crate gotchas, viewer fonts/icons/tree, user↔agent chat, invariants,
   testing, seeing the viewer. Start here.
+- `api-stability-and-docs.md` — agreed model for JS API versioning
+  (per-file pragma, frozen conformance suites over one live
+  implementation, bug-compat old versions) and versioned searchable docs
+  with doctests. Build plan: `plans/api-versioning-infra.md`.
 - `design-decisions.md` — why the stack/architecture is what it is: decisions
   from the 2026-07 concept review, rejected alternatives, licensing, egui
   i18n limits.
