@@ -477,6 +477,53 @@ fn dot(mesh: &mut egui::Mesh, x: f32, y: f32, color: Color32) {
     mesh.add_colored_rect(Rect::from_min_size(pos2(x, y), Vec2::splat(1.0)), color);
 }
 
+// ----------------------------------------------------------------------------
+// Tabs
+
+/// Height of an unselected notebook tab.
+pub const TAB_HEIGHT: f32 = 20.0;
+/// How far the selected tab grows on each side: up over its neighbours, out
+/// past their edges, and down across the client edge it opens into.
+pub const TAB_GROW: f32 = 2.0;
+
+/// One notebook tab: a raised face with chamfered top corners, open at the
+/// bottom so the selected one runs into the page below it.
+///
+/// A `Mesh`, as in [`pixels`]: every edge here is one pixel wide.
+pub fn tab(p: &egui::Painter, rect: Rect) {
+    let (left, top) = (rect.left().round(), rect.top().round());
+    let (right, bottom) = (rect.right().round(), rect.bottom().round());
+    let mut mesh = egui::Mesh::default();
+    let mut px = |x: f32, y: f32, w: f32, color| {
+        mesh.add_colored_rect(Rect::from_min_size(pos2(x, y), vec2(w, 1.0)), color);
+    };
+    let mut y = top;
+    while y < bottom {
+        // The corners step in over the first two rows.
+        let inset = (2.0 - (y - top)).max(0.0);
+        let (x0, x1) = (left + inset, right - inset);
+        px(x0, y, x1 - x0, FACE);
+        px(x0, y, 1.0, HILIGHT); // left edge, and the light half of the chamfer
+        px(x1 - 2.0, y, 1.0, SHADOW); // right edge: inner dark…
+        px(x1 - 1.0, y, 1.0, FRAME); // …and outer
+        y += 1.0;
+    }
+    // The top edge, between the two chamfers.
+    px(left + 2.0, top, right - left - 6.0, HILIGHT);
+    p.add(mesh);
+}
+
+/// The raised edge of the page the tabs sit on. Drawn after the unselected
+/// tabs (which it cuts off) and before the selected one (which cuts it).
+pub fn tab_edge(p: &egui::Painter, y: f32, x0: f32, x1: f32) {
+    let mut mesh = egui::Mesh::default();
+    mesh.add_colored_rect(
+        Rect::from_min_max(pos2(x0.round(), y.round()), pos2(x1.round(), y.round() + 1.0)),
+        HILIGHT,
+    );
+    p.add(mesh);
+}
+
 /// A status-bar cell: thin sunken box around a label.
 pub fn status_field(ui: &mut Ui, text: impl Into<String>) {
     let res = egui::Frame::new()
@@ -731,8 +778,8 @@ fn title_bar(ui: &mut Ui, title: &str) -> bool {
     ui.interact(box_rect, ui.id().with("close"), egui::Sense::click()).clicked()
 }
 
-/// The close box's ×: a 7×7 pixel cross centered on `at`.
-fn cross(p: &egui::Painter, at: Pos2, color: Color32) {
+/// A close box's ×: a 7×7 pixel cross centered on `at`.
+pub fn cross(p: &egui::Painter, at: Pos2, color: Color32) {
     let origin = pos2((at.x - 3.0).round(), (at.y - 3.0).round());
     let mut mesh = egui::Mesh::default();
     for i in 0..7 {

@@ -203,6 +203,12 @@ impl EngineState {
         self.published.lock().unwrap().get(slot).cloned().unwrap_or_default()
     }
 
+    /// Whether a slot's last publish carried a build error. The tab strip
+    /// marks every tab, but only the active one polls its whole `Published`.
+    pub fn build_failed(&self, slot: &str) -> bool {
+        self.published.lock().unwrap().get(slot).is_some_and(|p| p.error.is_some())
+    }
+
     /// The view a slot is showing.
     pub fn view_of(&self, slot: &str) -> Option<View> {
         self.views.lock().unwrap().get(slot).cloned()

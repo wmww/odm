@@ -397,34 +397,154 @@ impl ViewerApp {
         self.save_tabs();
     }
 
-    /// The tab strip: one button per tab, × closes the active one, + opens
-    /// the file picker.
+    /// The tab strip: a row of notebook tabs, each with its own close box, and
+    /// a + at the end that opens the file picker.
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
+        /// Face left and right of a tab's contents.
+        const PAD: f32 = 8.0;
+        /// Side of a close box, and the gap between it and the label.
+        const CLOSE: f32 = 13.0;
+        const CLOSE_GAP: f32 = 5.0;
+        /// Narrowest a tab is squeezed to when the strip runs out of room.
+        const MIN_TAB: f32 = 52.0;
+        /// The + at the end of the row.
+        const PLUS: egui::Vec2 = egui::Vec2 { x: 20.0, y: 16.0 };
+        /// Gap between the last tab and the +.
+        const PLUS_GAP: f32 = 5.0;
+
+        let grow = theme::TAB_GROW;
+        let height = theme::TAB_HEIGHT + grow * 2.0;
+        let (strip, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+        let origin = theme::snap(ui, strip.left_top());
+        // The selected tab starts `grow` higher than the rest and crosses the
+        // page edge they stop at; both end their text on the same line.
+        let edge_y = origin.y + grow + theme::TAB_HEIGHT;
+
+        let closable = self.tabs.len() > 1; // the last tab stays
+        let extra = PAD * 2.0 + if closable { CLOSE + CLOSE_GAP } else { 0.0 };
+        // Tabs take their natural width, squeezed to an even share of the strip
+        // once the row no longer fits.
+        let room = strip.width() - PLUS.x - PLUS_GAP;
+        let share = (room / self.tabs.len() as f32).max(MIN_TAB);
+        let failed: Vec<bool> =
+            self.tabs.iter().map(|tab| self.state.build_failed(&tab.slot)).collect();
+        let labels: Vec<_> = self
+            .tabs
+            .iter()
+            .zip(&failed)
+            .map(|(tab, failed)| {
+                let color = if *failed { theme::ERROR } else { theme::TEXT };
+                let font = egui::FontId::proportional(theme::UI_SIZE);
+                let text = tab.label().to_owned();
+                let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(share - extra);
+                ui.painter().layout_job(job)
+            })
+            .collect();
+
+        // Each tab's outer shape; the selected one bulges on three sides.
+        let mut x = origin.x;
+        let tab_rects: Vec<egui::Rect> = labels
+            .iter()
+            .enumerate()
+            .map(|(i, galley)| {
+                let width = (galley.size().x + extra).round();
+                let out = if i == self.active { grow } else { 0.0 };
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(x - out, origin.y + grow - out),
+                    egui::pos2(x + width + out, edge_y + out),
+                );
+                x += width;
+                rect
+            })
+            .collect();
+
+        // Unselected tabs, then the page edge cutting them off, then the
+        // selected tab cutting the edge: the order the shapes overlap in.
+        for (i, rect) in tab_rects.iter().enumerate() {
+            if i != self.active {
+                theme::tab(ui.painter(), *rect);
+            }
+        }
+        theme::tab_edge(ui.painter(), edge_y, strip.left(), strip.right());
+        theme::tab(ui.painter(), tab_rects[self.active]);
+
+        // The + keeps its place at the right end even when the row overruns
+        // the strip, so a full strip can still be added to.
+        let plus_x = (x + PLUS_GAP).min(strip.right() - PLUS.x);
+
         let mut switch: Option<usize> = None;
         let mut close: Option<usize> = None;
         let mut add = false;
-        ui.horizontal(|ui| {
-            for (i, tab) in self.tabs.iter().enumerate() {
-                let current = i == self.active;
-                let label =
-                    if current { format!("[{}]", tab.label()) } else { tab.label().to_string() };
-                let button = theme::button(ui, label);
-                let button = match &tab.published.error {
-                    Some(_) => button.on_hover_text("build error"),
-                    None => button.on_hover_text(&tab.path),
-                };
-                if button.clicked() {
-                    switch = Some(i);
+        for (i, (rect, galley)) in tab_rects.iter().zip(&labels).enumerate() {
+            let out = if i == self.active { grow } else { 0.0 };
+            let mid = ((rect.top() + out + edge_y) / 2.0).round();
+            let left = rect.left() + out + PAD;
+            let pos = theme::snap(ui, egui::pos2(left, mid - galley.size().y / 2.0));
+            // The color is baked into the galley (see the layout job above).
+            ui.painter().galley(pos, galley.clone(), theme::TEXT);
+
+            let close_box = egui::Rect::from_center_size(
+                theme::snap(ui, egui::pos2(left + galley.size().x + CLOSE_GAP + CLOSE / 2.0, mid)),
+                egui::Vec2::splat(CLOSE),
+            );
+            if closable {
+                let hit = ui.interact(close_box, ui.id().with(("close", i)), egui::Sense::click());
+                let armed = hit.hovered();
+                if armed {
+                    // The one bit of hover feedback on the strip: a close box
+                    // is a small target, and should say when it is armed. Thin
+                    // edges — a full bevel crowds the × inside 13 pixels.
+                    let bevel = match hit.is_pointer_button_down_on() {
+                        true => theme::Bevel::ThinSunken,
+                        false => theme::Bevel::ThinRaised,
+                    };
+                    theme::bevel(ui.painter(), close_box, bevel);
+                }
+                let color = if armed { theme::TEXT } else { theme::WEAK_TEXT };
+                theme::cross(ui.painter(), close_box.center(), color);
+                if hit.clicked() {
+                    close = Some(i);
                 }
             }
-            if self.tabs.len() > 1 && theme::button(ui, "×").on_hover_text("close tab").clicked()
-            {
-                close = Some(self.active);
+            // The rest of the tab switches to it — stopping at the close box
+            // rather than running under it, so neither steals the other's click.
+            let right = if closable { close_box.left() } else { rect.right() };
+            let body = rect.with_max_x(right.min(plus_x - PLUS_GAP));
+            if body.width() <= 0.0 {
+                continue; // squeezed off the end of the strip
             }
-            if theme::button(ui, "+").on_hover_text("new tab").clicked() {
-                add = true;
+            let hit = ui.interact(body, ui.id().with(("tab", i)), egui::Sense::click());
+            let hit = match failed[i] {
+                true => hit.on_hover_text(format!("{} — build error", self.tabs[i].path)),
+                false => hit.on_hover_text(&self.tabs[i].path),
+            };
+            if hit.clicked() {
+                switch = Some(i);
             }
-        });
+        }
+
+        // The +, standing on the page edge past the end of the row.
+        let plus =
+            egui::Rect::from_min_size(theme::snap(ui, egui::pos2(plus_x, edge_y - PLUS.y)), PLUS);
+        let hit = ui.interact(plus, ui.id().with("add-tab"), egui::Sense::click());
+        ui.painter().rect_filled(plus, egui::CornerRadius::ZERO, theme::FACE);
+        let bevel = match hit.is_pointer_button_down_on() {
+            true => theme::Bevel::Sunken,
+            false => theme::Bevel::Raised,
+        };
+        theme::bevel(ui.painter(), plus, bevel);
+        let galley = ui.painter().layout_no_wrap(
+            "+".to_owned(),
+            egui::FontId::proportional(theme::UI_SIZE),
+            theme::TEXT,
+        );
+        ui.painter().galley(theme::snap(ui, plus.center() - galley.size() / 2.0), galley, theme::TEXT);
+        if hit.on_hover_text("new tab").clicked() {
+            add = true;
+        }
+
         if let Some(i) = switch {
             self.switch_tab(i);
         }

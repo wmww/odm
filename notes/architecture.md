@@ -116,7 +116,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - `odm-engine` — library, entered via `odm run` (`run(project, headless)`).
   Headless: socket server only. Default: + eframe
   viewer (menu bar, tab strip — one view per tab, persisted in
-  `.odm/viewer.json` —, offscreen texture viewport via
+  `.odm/viewer.json`; classic notebook tabs, each with its own close box, a
+  red label when that tab's last build failed —, offscreen texture viewport via
   register_native_texture, orbit/pan/zoom, tree panel, generated input panel
   (right side; controls from the tab's fall-through report: trackbars for
   ranged numbers, toggles, choice buttons, JSON-ish text fields, presets), a
@@ -153,16 +154,17 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`,
   `collapsing`, `list_box`, `text_edit`, `trackbar`, `menu_bar`/`menu`,
-  `dialog`, `list_row`, …) that paint two-tone 3D bevels —
+  `dialog`, `list_row`, `tab`/`tab_edge`, …) that paint two-tone 3D bevels —
   egui's `WidgetVisuals` has one uniform `bg_stroke`, so bevels can't be
   themed and must be drawn over each widget's rect. Prefer these wrappers over
   bare `ui.button`/`egui::ScrollArea`/`egui::CollapsingHeader`/
   `egui::Slider`/`ui.menu_button` in viewer code — egui's own are all off-theme
   (rounded, hover lit, anti-aliased glyphs, twisty arrows). Two standing rules:
   no animation (`animation_time = 0`, `ScrollAnimation::none()`, no scroll-edge
-  fade, no busy spinner — state changes snap), and no hover feedback — the one
-  exception being drop-down items, which highlight because that is how a menu
-  is read while dragging through it.
+  fade, no busy spinner — state changes snap), and no hover feedback — the
+  exceptions being drop-down items, which highlight because that is how a menu
+  is read while dragging through it, and a tab's close box, which is too small
+  a target not to say when it is armed.
   Text is bundled bitmap fonts and tree icons are bundled pixel art, not system
   ones — see "Viewer fonts" and "Viewer icons" below; small glyphs that are not
   worth a file (the checkmark, scrollbar arrows, the tree's +/-) are painted
@@ -183,6 +185,17 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   skew, one `--help`, and a place to hang engine auto-start if we want it.
   Costs measured before merging: +1.7ms per client invocation (0.66→2.4ms,
   the binary is ~500MB in debug), and a touched-CLI relink goes 0.22s→1.05s.
+
+### Tab strip
+
+`ViewerApp::tab_bar` lays the whole strip out by hand (`theme::tab` paints one
+tab, `theme::tab_edge` the page edge under them). Three things it depends on:
+the paint order — unselected tabs, then the edge cutting them off, then the
+selected tab (grown 2px on three sides) cutting the edge —, the close box being
+carved *out* of the tab's click rect rather than layered over it, so neither
+steals the other's click, and the + being pinned to the right end when the row
+overruns, so a full strip can still be added to. Labels elide
+(`TextWrapping::truncate_at_width`) once tabs are squeezed past their share.
 
 ### Menu bar, and switching projects
 
