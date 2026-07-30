@@ -61,12 +61,16 @@ test projects' assertions seed the v1 conformance suite. Do not
 stabilize from theory. User confirmed: projects + agent feedback rounds
 before stabilizing anything.
 
-## Docs (proposed)
+## Docs
 
-- `prompts/` stays lean (~100-line cheat sheet layer, in-context).
-- `docs/` = full reference, one topic per file, searched on demand via
-  CLI (`odm docs <query>`, grep + section extraction to start) so agents
-  pull detail without filling context.
+- Layout (done 2026-07-29, user picked): everything under `docs/` —
+  `docs/prompts/` is the lean in-context layer (~100-line cheat sheet,
+  compiled into `odm prompt`; moved from top-level `prompts/`), and
+  `docs/api/` is the full reference, one topic per file (written; see
+  `docs/api/README.md` for the index).
+- Full reference searched on demand via CLI (`odm docs <query>`, grep +
+  section extraction to start) so agents pull detail without filling
+  context — CLI not built yet.
 - Version cut snapshots `docs/vN/`; frozen versions' docs are frozen
   (typo fixes ok). CLI `--api N`, default latest.
 - **Doctests**: every docs example extracted and run in CI against its

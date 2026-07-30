@@ -1,11 +1,12 @@
-//! `odm prompt` — the agent-facing instructions, compiled in from `prompts/`.
+//! `odm prompt` — the agent-facing instructions, compiled in from
+//! `docs/prompts/`.
 //!
 //! Markdown, not JSON: this one is for pasting into an agent's context
 //! (`odm prompt > AGENTS.md`), not for parsing.
 
 macro_rules! prompt {
     ($name:literal) => {
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../prompts/", $name, ".md"))
+        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/prompts/", $name, ".md"))
     };
 }
 

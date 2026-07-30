@@ -60,17 +60,16 @@ stamped versions. This avoids ever renaming/retiring an identifier.
   stamped version is a deliberate per-case decision (default is
   bug-compatibility with the original).
 
-## Phase 4 — docs/ tree + `odm docs` CLI
+## Phase 4 — docs tree + `odm docs` CLI
 
-- `docs/*.md`: full reference for the current (unstable) surface, one topic per
-  file. Seed by expanding `prompts/js.md` sections: solids, transforms &
-  CSG, queries, composition/invoke, params & animation, colors, THREE
-  subset, conventions & determinism, common errors. `prompts/` stays the
-  short in-context layer and points at `odm docs` for depth.
+- DONE (2026-07-29): `docs/api/*.md` full reference written, one topic
+  per file (index in `docs/api/README.md`); `prompts/` moved to
+  `docs/prompts/` and stays the short in-context layer. Remaining: point
+  prompts at `odm docs` for depth once that CLI exists.
 - `docs/changes/vN.md`: migration guide for v(N-1) → vN. Bullets only,
   mechanical before→after per breaking change. None exist yet; the
   directory and CLI support do.
-- Embed docs in the binary like `prompts/` (`crates/odm-cli/src/prompt.rs`
+- Embed docs in the binary like the prompts (`crates/odm-cli/src/prompt.rs`
   pattern) so `odm docs` works from any project dir and always matches the
   engine build.
 - CLI surface:
@@ -85,7 +84,7 @@ stamped versions. This avoids ever renaming/retiring an identifier.
 
 ## Phase 5 — doctests in CI
 
-- Extractor pulls fenced `js` blocks from `docs/` and `prompts/` and runs
+- Extractor pulls fenced `js` blocks from `docs/` (api + prompts) and runs
   each under the appropriate API version. Blocks containing
   `export default` run as-is; bare fragments are auto-wrapped in a
   standard `build(ctx)` prelude; ```js skip``` opts out. Default

@@ -130,7 +130,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - `odm-cli` — client commands: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
   from `ok`. Also owns `find_project` (the walk-up), which `run` reuses, and
-  `prompt.rs`: `odm prompt` `include_str!`s the repo's `prompts/*.md` (via
+  `prompt.rs`: `odm prompt` `include_str!`s the repo's `docs/prompts/*.md` (via
   `CARGO_MANIFEST_DIR`) and prints them concatenated — no socket, no project,
   and the one command that emits markdown instead of JSON.
 - `odm` — the only binary. `odm run [<dir>] [--headless]` → `odm_engine::run`;
@@ -181,7 +181,7 @@ list is a `theme::list_box`, so it gets the era's scrollbar for free.
 ### Talking to the agent
 
 The user types in the viewer's chat panel; the agent collects messages with
-`odm poll` and answers with `odm say`. No MCP: CLI + `prompts/` is
+`odm poll` and answers with `odm say`. No MCP: CLI + `docs/prompts/` is
 agent-agnostic and enough.
 
 - **Poll's contract is set by agent harnesses.** They can't read a running
@@ -189,7 +189,7 @@ agent-agnostic and enough.
   until ≥1 message is queued, prints them all, and exits; process exit is the
   delivery mechanism. `--timeout` bounds the wait (empty `messages`), and a
   retired session (File ▸ Open) answers `{"ok": false, "error": {"kind":
-  "stopped"}}` so a poll never outlives its engine. `prompts/cli.md` tells the
+  "stopped"}}` so a poll never outlives its engine. `docs/prompts/cli.md` tells the
   agent to keep one poll running at all times.
 - **Delivery is committed, not assumed** (the fix for a 2026-07-27 bug where
   Ctrl+C on a poll made the next message disappear). Each entry carries a
@@ -199,7 +199,7 @@ agent-agnostic and enough.
   in flight. Every other ending — Ctrl+C, broken pipe, crashed harness, a
   connection that just closes — drops the `Conn`, whose `Drop` returns anything
   unacked to `Pending`. Failure therefore duplicates rather than loses, which
-  is the direction to fail in; `prompts/cli.md` warns the agent about repeats.
+  is the direction to fail in; `docs/prompts/cli.md` warns the agent about repeats.
   The viewer dims anything not `Done`, so an undelivered message still looks
   like one.
 - **A blocked poll must notice its client dying.** Reading is on its own

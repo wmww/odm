@@ -24,7 +24,7 @@ To point an agent at a project, give it the instructions ODM ships with:
 odm prompt > AGENTS.md     # or CLAUDE.md, or paste into a system prompt
 ```
 
-Those are `prompts/` — how to write doohickeys, and how to use the CLI
+Those are `docs/prompts/` — how to write doohickeys, and how to use the CLI
 (including `odm poll` / `odm say`, which carry messages between the user's
 viewer and the agent).
 
@@ -43,8 +43,9 @@ viewer and the agent).
 - `crates/odm` — the one `odm` binary: `run` is the engine, the rest is the client
 - `framework/` — JS framework + vendored three.js subset (r185)
 - `examples/` — example projects (double as integration tests)
-- `prompts/` — the instructions for agents *using* ODM on a project;
-  `odm prompt` prints them, compiled into the binary
+- `docs/` — for agents *using* ODM on a project: `docs/prompts/` is the
+  short in-context layer (`odm prompt` prints it, compiled into the
+  binary); `docs/api/` is the full JS API reference
 
 Design notes and decisions live in `notes/`; known issues in `issues/`.
 
