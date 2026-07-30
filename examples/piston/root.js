@@ -28,7 +28,7 @@ export default function build(ctx) {
     .cylinder({ r: 3, h: 12 })
     .rotateX(odm.deg(90))
     .translate(pin[0], 0, pin[2])
-    .color('silver')
+    .color('#c0c0c0')
     .name('crank-pin');
 
   // Rod from the crank pin up to the piston pin.

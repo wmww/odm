@@ -20,7 +20,7 @@ export const meta = {
 export default function build(ctx) {
   const r = ctx.get('radius');
   const disc = odm.cylinder({ r, h: 4 }).rotateZ(ctx.get('t') * Math.PI);
-  return ctx.get('finish') === 'painted' ? disc.color('firebrick') : disc;
+  return ctx.get('finish') === 'painted' ? disc.color('#b22222') : disc;
 }
 ```
 
@@ -59,7 +59,7 @@ Beyond the JSON types, `type` can name an ODM extension type:
 | `'vector3'` | `[x, y, z]` | `THREE.Vector3` |
 | `'quaternion'` | `[x, y, z, w]` | `THREE.Quaternion` |
 | `'matrix4'` | 16 numbers, column-major | `THREE.Matrix4` |
-| `'color'` | CSS string or `[r, g, b]` | as sent — exactly what `.color()` takes |
+| `'color'` | hex string or `[r, g, b]` | as sent — exactly what `.color()` takes |
 
 Senders may pass THREE instances or the JSON form; values are
 normalized to the wire form at the boundary (so hashing and

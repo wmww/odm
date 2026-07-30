@@ -13,7 +13,7 @@ export default function build(ctx) {
     .subtract(odm.cylinder({ r: r * 0.55, h: 8 }))
     .color('#222222')
     .name('tire');
-  const hub = odm.cylinder({ r: r * 0.2, h: 7 }).color('silver').name('hub');
+  const hub = odm.cylinder({ r: r * 0.2, h: 7 }).color('#c0c0c0').name('hub');
 
   const spokes = [];
   for (let i = 0; i < 5; i++) {

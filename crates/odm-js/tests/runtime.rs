@@ -87,7 +87,7 @@ fn basic_csg_build() {
         export default function build(ctx) {
             const plate = odm.box([20, 10, 4]);
             const hole = odm.cylinder({ r: 2, h: 10 });
-            return plate.subtract(hole).color('steelblue').name('plate');
+            return plate.subtract(hole).color('#4682b4').name('plate');
         }
         "#,
     )
@@ -97,7 +97,7 @@ fn basic_csg_build() {
     let mesh_hash = node.mesh.expect("solid output has geometry");
     assert!(matches!(&*w.store.get(mesh_hash).unwrap(), Object::Mesh(m) if m.triangle_count() > 0));
     let color = node.color.unwrap();
-    assert!(color.b > color.r, "steelblue should be blue-ish");
+    assert!(color.b > color.r, "#4682b4 should be blue-ish");
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn extension_types_hydrate_to_three_instances() {
             "off": [1, 2, 3],
             "m": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
             "q": [0, 0, 0, 1],
-            "c": "steelblue",
+            "c": "#4682b4",
         }),
         &json!({
             "off": { "cascade": false, "type": "vector3" },
@@ -298,7 +298,7 @@ fn groups_and_arrays_nest() {
             return odm.group(
                 wheel.translate(-3, 0, 0).name('left'),
                 [wheel.translate(3, 0, 0).name('right'), null],
-            ).color('red');
+            ).color('#f00');
         }
         "#,
     )
@@ -404,7 +404,7 @@ fn invoke_runs_nested_isolate_and_records_dep() {
             const wheel = ctx.invoke('parts/wheel.js', { radius: 2 });
             return odm.group(
                 wheel.translate(-4, 0, 0),
-                wheel.translate(4, 0, 0).color('black'),
+                wheel.translate(4, 0, 0).color('#000'),
             );
         }
         "#,

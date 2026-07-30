@@ -475,7 +475,7 @@ function reviveValue(v) {
 
 // Declaration-driven hydration: the wire carries canonical JSON; ctx.get
 // returns real THREE instances for the extension types. Colors stay in
-// their wire form (CSS string or [r, g, b]) — exactly what .color() takes.
+// their wire form (hex string or [r, g, b]) — exactly what .color() takes.
 function hydrate(type, v) {
   const nums = (v, n) => {
     if (Array.isArray(v) && v.length === n) return v;

@@ -9,6 +9,11 @@ unless marked otherwise.
 
 - Materials deferred: basic color only. Focus is CAD + simple animation;
   lighting/materials extendable later.
+- Colors (API review 2026-07-30): hex strings ('#rrggbb'/'#rgb') and
+  [r,g,b]/[r,g,b,1] sRGB arrays only. Named colors dropped — a curated
+  subset agents must memorize is a trap ('aliceblue' is valid CSS but
+  would error); 0xRRGGBB numbers dropped — indistinguishable from a
+  plain integer by the time the parser sees it. One obvious way each.
 - Low-level types (vectors/matrices) are three.js; higher-level types
   (scene/objects) are ODM-owned API. Vendor only the three.js subset the
   framework actually uses.

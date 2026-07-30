@@ -13,7 +13,7 @@ case.
 | [queries.md](queries.md) | `volume`, `area`, `bounds`, `raycast` |
 | [composition.md](composition.md) | `group`, `Group`, `ctx.invoke`, `Instance`, passing Solids as args |
 | [inputs.md](inputs.md) | `meta.inputs`, `ctx.get`, cascade values, presets, the `t` convention |
-| [colors.md](colors.md) | Accepted color formats, the named-color list, inheritance |
+| [colors.md](colors.md) | Accepted color formats, inheritance |
 | [three.md](three.md) | The vendored THREE subset and how to use it with ODM |
 | [determinism.md](determinism.md) | Conventions (Z-up, radians, units), purity, memoization |
 | [errors.md](errors.md) | Common errors and what they actually mean |

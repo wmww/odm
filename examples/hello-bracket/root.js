@@ -17,5 +17,5 @@ export default function build(ctx) {
       hole.translate(46, 28, 0),
     );
 
-  return bracket.color('steelblue').name('bracket');
+  return bracket.color('#4682b4').name('bracket');
 }

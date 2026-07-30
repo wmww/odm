@@ -37,7 +37,7 @@ methods on the first argument.
   further ops.
 
 ```js
-const plate = odm.box([40, 20, 5]).color('steelblue');
+const plate = odm.box([40, 20, 5]).color('#4682b4');
 const holes = [-15, 0, 15].map((x) => odm.cylinder({ r: 2, h: 10 }).translate(x, 0, 0));
-return plate.subtract(holes); // steelblue plate with three holes
+return plate.subtract(holes); // blue plate with three holes
 ```

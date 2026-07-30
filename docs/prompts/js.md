@@ -5,7 +5,7 @@
 export default function build(ctx) {
   const plate = odm.box([40, 20, 5]);
   const hole = odm.cylinder({ r: 3, h: 12 });
-  return plate.subtract(hole.translate(10, 0, 0)).color('steelblue');
+  return plate.subtract(hole.translate(10, 0, 0)).color('#4682b4');
 }
 ```
 
@@ -39,7 +39,7 @@ const [a, b, s] = [odm.box(10), odm.sphere(6), odm.cylinder(2, 12)];
 a.subtract(b); a.union(b); a.intersect(b); a.hull();  // odm.difference(a, b) etc. also work
 s.translate(5, 0, 2).rotateZ(odm.deg(30)).scale(2);   // world-frame, applied in order
 s.rotate([0, 1, 1], 0.5); s.transform(new THREE.Matrix4()); // arbitrary axis / raw matrix
-s.color('steelblue'); s.name('bolt');                 // labels show in odm tree
+s.color('#4682b4'); s.name('bolt');                   // labels show in odm tree
 ```
 
 Exact engine-side queries — use these to position parts relative to
@@ -97,11 +97,9 @@ export default (ctx) => odm.box([ctx.get('width'), 10, 4]).rotateZ(ctx.get('t'))
 
 ## Colors
 
-Named CSS colors (a common subset — steelblue, crimson, silver, …), hex
-`'#rrggbb'`/`'#rgb'`, numeric `0xRRGGBB`, or `[r, g, b]` sRGB 0..1.
-Unknown names error with a hint. Alpha must be 1: the renderer has no
-transparency, so a translucent color is rejected rather than silently
-drawn opaque.
+Hex `'#rrggbb'`/`'#rgb'`, or `[r, g, b]` sRGB 0..1. No named colors,
+no numbers. Alpha must be 1: the renderer has no transparency, so a
+translucent color is rejected rather than silently drawn opaque.
 
 ## THREE
 

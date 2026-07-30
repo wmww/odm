@@ -23,7 +23,7 @@ warns when the project was last touched by a newer engine.
 //! odm unstable
 //! A steel plate, for the doohickeys chapter.
 export default function build(ctx) {
-  return odm.box([40, 20, 5]).color('steelblue');
+  return odm.box([40, 20, 5]).color('#4682b4');
 }
 ```
 

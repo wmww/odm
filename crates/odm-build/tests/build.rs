@@ -50,7 +50,7 @@ export default function build(ctx) {
 const WHEEL: &str = r#"
 export const meta = { inputs: { r: { type: 'number' } } };
 export default function build(ctx) {
-    return odm.cylinder({ r: ctx.get('r'), h: 1 }).color('dimgray');
+    return odm.cylinder({ r: ctx.get('r'), h: 1 }).color('#696969');
 }
 "#;
 
@@ -374,7 +374,7 @@ fn consistency_incremental_equals_scratch() {
     let edits: Vec<(&str, String)> = vec![
         ("parts/wheel.js", WHEEL.replace("ctx.get('r')", "ctx.get('r') * 2")),
         ("root.js", ROOT_WITH_WHEEL.replace("{ r: 2 }", "{ r: 3 }")),
-        ("parts/wheel.js", WHEEL.replace("dimgray", "steelblue")),
+        ("parts/wheel.js", WHEEL.replace("#696969", "#4682b4")),
         ("root.js", ROOT_WITH_WHEEL.replace("translate(-4, 0, 0)", "translate(-5, 0, 1)")),
     ];
 

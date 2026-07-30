@@ -3,7 +3,7 @@
 //! addressing stores the wheel mesh once.
 export default function build(ctx) {
   const wheel = ctx.invoke('parts/wheel.js', { radius: 8 });
-  const chassis = odm.box([70, 30, 10]).translate(0, 0, 16).color('crimson').name('chassis');
+  const chassis = odm.box([70, 30, 10]).translate(0, 0, 16).color('#dc143c').name('chassis');
 
   // Wheels are built along Z; lay them on their side so the axle runs along Y.
   const laid = wheel.rotateX(odm.deg(90));
