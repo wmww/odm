@@ -23,13 +23,14 @@ fn world() -> World {
 }
 
 fn build(w: &World, code: &str) -> Result<BuildOutput, BuildError> {
-    build_full(w, code, &json!({}), &HashMap::new(), None)
+    build_full(w, code, &json!({}), &json!({}), &HashMap::new(), None)
 }
 
 fn build_full(
     w: &World,
     code: &str,
     args: &Value,
+    decls: &Value,
     context: &HashMap<String, Value>,
     invoker: Option<Box<dyn Invoker>>,
 ) -> Result<BuildOutput, BuildError> {
@@ -40,6 +41,7 @@ fn build_full(
             code,
             api: odm_js::ApiVersion::Unstable,
             args,
+            decls,
             context,
             kernel: w.kernel.clone(),
             store: w.store.clone(),
@@ -117,21 +119,25 @@ fn determinism_same_code_same_hash() {
 }
 
 #[test]
-fn context_reads_recorded_as_deps() {
+fn cascade_reads_recorded_as_deps() {
     let w = world();
     let mut ctx = HashMap::new();
     ctx.insert("t".to_string(), json!(1.5));
-    ctx.insert("params.width".to_string(), json!(30.0));
+    ctx.insert("width".to_string(), json!(30.0));
+    let decls = json!({
+        "width": { "cascade": true, "type": "number" },
+        "t": { "cascade": true, "type": "number" },
+        "depth": { "cascade": false, "type": "number" },
+    });
     let out = build_full(
         &w,
         r#"
         export default function build(ctx) {
-            const width = ctx.param('width', 10);
-            const missing = ctx.param('nope', 7);
-            return odm.box([width, 5, 5]).translate(ctx.t, missing, 0);
+            return odm.box([ctx.get('width'), ctx.get('depth'), 5]).translate(ctx.get('t'), 0, 0);
         }
         "#,
-        &json!({}),
+        &json!({ "depth": 7 }),
+        &decls,
         &ctx,
         None,
     )
@@ -144,11 +150,67 @@ fn context_reads_recorded_as_deps() {
             other => panic!("unexpected dep {other:?}"),
         })
         .collect();
-    assert_eq!(keys, vec!["params.width", "params.nope", "t"]);
+    // Only cascade reads touch the environment; `depth` came from args.
+    assert_eq!(keys, vec!["width", "t"]);
 
-    // A build that never reads t has no t dep.
+    // A build that reads nothing has no deps.
     let out2 = build(&w, "export default () => odm.sphere(1)").unwrap();
     assert!(out2.deps.is_empty());
+}
+
+#[test]
+fn undeclared_get_is_an_error() {
+    let w = world();
+    let err = build_full(
+        &w,
+        "export default (ctx) => odm.box(ctx.get('nope'))",
+        &json!({}),
+        &json!({ "size": { "cascade": false, "type": "number" } }),
+        &HashMap::new(),
+        None,
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not declared in meta.inputs"), "{msg}");
+    assert!(msg.contains("size"), "should list declared inputs: {msg}");
+}
+
+#[test]
+fn extension_types_hydrate_to_three_instances() {
+    let w = world();
+    let out = build_full(
+        &w,
+        r#"
+        export default function build(ctx) {
+            const off = ctx.get('off');
+            if (!(off instanceof THREE.Vector3)) throw new Error('off not a Vector3');
+            const m = ctx.get('m');
+            if (!(m instanceof THREE.Matrix4)) throw new Error('m not a Matrix4');
+            const q = ctx.get('q');
+            if (!(q instanceof THREE.Quaternion)) throw new Error('q not a Quaternion');
+            const c = ctx.get('c');
+            return odm.box(1).translate(off.x, off.y, off.z).color(c);
+        }
+        "#,
+        &json!({
+            "off": [1, 2, 3],
+            "m": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1],
+            "q": [0, 0, 0, 1],
+            "c": "steelblue",
+        }),
+        &json!({
+            "off": { "cascade": false, "type": "vector3" },
+            "m": { "cascade": false, "type": "matrix4" },
+            "q": { "cascade": false, "type": "quaternion" },
+            "c": { "cascade": false, "type": "color" },
+        }),
+        &HashMap::new(),
+        None,
+    )
+    .unwrap();
+    let node = output_node(&w, &out);
+    assert!(!node.transform.is_identity());
+    assert!(node.color.is_some());
 }
 
 #[test]
@@ -273,15 +335,26 @@ fn subtree_refs_are_validated() {
 /// nesting pattern the scheduler will use).
 struct NestedInvoker {
     world: World,
-    codes: HashMap<String, String>,
+    /// path -> (code, decls). At this layer the scheduler's meta machinery
+    /// doesn't exist, so tests hand the declaration table over directly.
+    codes: HashMap<String, (String, Value)>,
     calls: Vec<(String, Value)>,
 }
 
 impl Invoker for NestedInvoker {
-    fn invoke(&mut self, path: &str, args: &Value) -> Result<Hash, String> {
+    fn invoke(
+        &mut self,
+        path: &str,
+        args: &Value,
+        provides: &serde_json::Map<String, Value>,
+    ) -> Result<Hash, String> {
         self.calls.push((path.to_string(), args.clone()));
-        let code =
+        let (code, decls) =
             self.codes.get(path).ok_or_else(|| format!("no doohickey at {path}"))?.clone();
+        // Provides become the nested build's environment (the scheduler
+        // additionally overlays declaration defaults).
+        let context: HashMap<String, Value> =
+            provides.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let out = run_build(
             env(),
             BuildInput {
@@ -289,7 +362,8 @@ impl Invoker for NestedInvoker {
                 code: &code,
                 api: odm_js::ApiVersion::Unstable,
                 args,
-                context: &HashMap::new(),
+                decls: &decls,
+                context: &context,
                 kernel: self.world.kernel.clone(),
                 store: self.world.store.clone(),
                 cancel: None,
@@ -308,12 +382,15 @@ fn invoke_runs_nested_isolate_and_records_dep() {
     let mut codes = HashMap::new();
     codes.insert(
         "parts/wheel.js".to_string(),
-        r#"
-        export default function build(ctx) {
-            return odm.cylinder({ r: ctx.args.radius, h: 1 }).name('wheel');
-        }
-        "#
-        .to_string(),
+        (
+            r#"
+            export default function build(ctx) {
+                return odm.cylinder({ r: ctx.get('radius'), h: 1 }).name('wheel');
+            }
+            "#
+            .to_string(),
+            json!({ "radius": { "cascade": false, "type": "number" } }),
+        ),
     );
     let invoker = NestedInvoker {
         world: World { store: w.store.clone(), kernel: w.kernel.clone() },
@@ -331,6 +408,7 @@ fn invoke_runs_nested_isolate_and_records_dep() {
             );
         }
         "#,
+        &json!({}),
         &json!({}),
         &HashMap::new(),
         Some(Box::new(invoker)),
@@ -366,8 +444,11 @@ fn repeated_invokes_share_one_stored_subtree() {
         let mut codes = HashMap::new();
         codes.insert(
             "parts/wheel.js".to_string(),
-            "export default (ctx) => odm.cylinder({ r: ctx.args.radius, h: 1 }).name('wheel')"
-                .to_string(),
+            (
+                "export default (ctx) => odm.cylinder({ r: ctx.get('radius'), h: 1 }).name('wheel')"
+                    .to_string(),
+                json!({ "radius": { "cascade": false, "type": "number" } }),
+            ),
         );
         let invoker = NestedInvoker {
             world: World { store: w.store.clone(), kernel: w.kernel.clone() },
@@ -387,6 +468,7 @@ fn repeated_invokes_share_one_stored_subtree() {
                 }}
                 "#
             ),
+            &json!({}),
             &json!({}),
             &HashMap::new(),
             Some(Box::new(invoker)),
@@ -409,13 +491,16 @@ fn solids_serialize_through_invoke_args() {
     let mut codes = HashMap::new();
     codes.insert(
         "cut.js".to_string(),
-        r#"
-        export default function build(ctx) {
-            // The Solid arrives revived: subtract it from a plate.
-            return odm.box([10, 10, 2]).subtract(ctx.args.tool);
-        }
-        "#
-        .to_string(),
+        (
+            r#"
+            export default function build(ctx) {
+                // The Solid arrives revived: subtract it from a plate.
+                return odm.box([10, 10, 2]).subtract(ctx.get('tool'));
+            }
+            "#
+            .to_string(),
+            json!({ "tool": { "cascade": false, "type": "solid" } }),
+        ),
     );
     let invoker = NestedInvoker {
         world: World { store: w.store.clone(), kernel: w.kernel.clone() },
@@ -431,12 +516,52 @@ fn solids_serialize_through_invoke_args() {
         }
         "#,
         &json!({}),
+        &json!({}),
         &HashMap::new(),
         Some(Box::new(invoker)),
     )
     .unwrap();
     // A plain Instance embeds its tree directly: the root IS the cut result.
     let node = output_node(&w, &out);
+    assert!(node.mesh.is_some());
+}
+
+/// `ctx.invoke(path, args, provides)`: provides reach the child's
+/// environment and are recorded on the invoke dep.
+#[test]
+fn provides_flow_to_the_nested_build() {
+    let w = world();
+    let mut codes = HashMap::new();
+    codes.insert(
+        "spinner.js".to_string(),
+        (
+            "export default (ctx) => odm.box(1).rotateZ(ctx.get('t'))".to_string(),
+            json!({ "t": { "cascade": true, "type": "number" } }),
+        ),
+    );
+    let invoker = NestedInvoker {
+        world: World { store: w.store.clone(), kernel: w.kernel.clone() },
+        codes,
+        calls: vec![],
+    };
+    let out = build_full(
+        &w,
+        "export default (ctx) => ctx.invoke('spinner.js', {}, { t: 0.5 })",
+        &json!({}),
+        &json!({}),
+        &HashMap::new(),
+        Some(Box::new(invoker)),
+    )
+    .unwrap();
+    let dep = out.deps.iter().find_map(|d| match d {
+        Dep::Invoke { path, provides, .. } if path == "spinner.js" => Some(provides.clone()),
+        _ => None,
+    });
+    assert_eq!(dep.unwrap().get("t"), Some(&json!(0.5)));
+    // A bare Instance return embeds the child's tree directly: the root IS
+    // the spun box, transform applied inside the nested build.
+    let node = output_node(&w, &out);
+    assert!(!node.transform.is_identity());
     assert!(node.mesh.is_some());
 }
 

@@ -23,7 +23,7 @@ impl Quit {
 }
 
 pub fn run_viewer(sessions: Arc<Sessions>) -> Result<(), String> {
-    let title = window_title(sessions.current().project());
+    let title = window_title(&sessions.current());
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 840.0]).with_title(&title),

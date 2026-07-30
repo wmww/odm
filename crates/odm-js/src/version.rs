@@ -56,11 +56,10 @@ impl std::fmt::Display for ApiVersion {
     }
 }
 
-/// Find the `//! odm <version>` pragma in the comments before the first line
-/// of code. `Ok(None)` = no pragma. Lines like `//! text` that don't start
-/// with `odm` are ignored (doc text); a second `odm` pragma is an error.
-pub fn parse_pragma(code: &str) -> Result<Option<ApiVersion>, String> {
-    let mut found: Option<ApiVersion> = None;
+/// The text of every `//!` line in the leading comment block (before the
+/// first line of code), with `//!` and one leading space stripped.
+fn doc_lines(code: &str) -> Vec<&str> {
+    let mut out = Vec::new();
     let mut in_block = false;
     'lines: for line in code.lines() {
         let mut rest = line.trim_start();
@@ -78,27 +77,11 @@ pub fn parse_pragma(code: &str) -> Result<Option<ApiVersion>, String> {
                 continue 'lines;
             }
             if let Some(text) = rest.strip_prefix("//") {
-                // Only `//!` lines can be pragmas; plain `//` comments are
-                // never inspected (a comment mentioning odm must not error).
+                // Only `//!` lines are doc/pragma lines; plain `//` comments
+                // are never inspected (a comment mentioning odm must not
+                // become a pragma).
                 if let Some(text) = text.strip_prefix('!') {
-                    let text = text.trim();
-                    if let Some(spec) = text.strip_prefix("odm")
-                        && (spec.is_empty() || spec.starts_with(char::is_whitespace))
-                    {
-                        if found.is_some() {
-                            return Err("more than one `//! odm <version>` pragma".into());
-                        }
-                        let mut words = spec.split_whitespace();
-                        let Some(version) = words.next() else {
-                            return Err("pragma is missing its version: `//! odm <version>`".into());
-                        };
-                        if let Some(extra) = words.next() {
-                            return Err(format!(
-                                "unexpected {extra:?} after the version in `//! {text}`"
-                            ));
-                        }
-                        found = Some(ApiVersion::parse(version)?);
-                    }
+                    out.push(text.strip_prefix(' ').unwrap_or(text).trim_end());
                 }
                 continue 'lines;
             }
@@ -107,11 +90,56 @@ pub fn parse_pragma(code: &str) -> Result<Option<ApiVersion>, String> {
                 rest = after;
                 continue;
             }
-            // First line of code: the pragma block is over.
+            // First line of code: the doc block is over.
             break 'lines;
         }
     }
+    out
+}
+
+/// Is this `//!` line an `odm <version>` pragma (rather than doc text)?
+fn is_pragma(text: &str) -> bool {
+    text.trim()
+        .strip_prefix("odm")
+        .is_some_and(|spec| spec.is_empty() || spec.starts_with(char::is_whitespace))
+}
+
+/// Find the `//! odm <version>` pragma in the comments before the first line
+/// of code. `Ok(None)` = no pragma. Lines like `//! text` that don't start
+/// with `odm` are ignored (doc text); a second `odm` pragma is an error.
+pub fn parse_pragma(code: &str) -> Result<Option<ApiVersion>, String> {
+    let mut found: Option<ApiVersion> = None;
+    for text in doc_lines(code) {
+        let text = text.trim();
+        if !is_pragma(text) {
+            continue;
+        }
+        let spec = text.strip_prefix("odm").unwrap();
+        if found.is_some() {
+            return Err("more than one `//! odm <version>` pragma".into());
+        }
+        let mut words = spec.split_whitespace();
+        let Some(version) = words.next() else {
+            return Err("pragma is missing its version: `//! odm <version>`".into());
+        };
+        if let Some(extra) = words.next() {
+            return Err(format!("unexpected {extra:?} after the version in `//! {text}`"));
+        }
+        found = Some(ApiVersion::parse(version)?);
+    }
     Ok(found)
+}
+
+/// The doohickey's prose description: every non-pragma `//!` line in the
+/// leading comment block, joined. First line = one-sentence summary, the
+/// rest is the body. Parsed without evaluating the module, so it survives
+/// broken builds.
+pub fn parse_doc(code: &str) -> String {
+    let lines: Vec<&str> =
+        doc_lines(code).into_iter().filter(|text| !is_pragma(text)).collect();
+    let start = lines.iter().position(|l| !l.is_empty()).unwrap_or(lines.len());
+    let end = lines.iter().rposition(|l| !l.is_empty()).map_or(start, |i| i + 1);
+    lines[start..end].join("\n")
 }
 
 #[cfg(test)]
@@ -158,5 +186,21 @@ mod tests {
     #[test]
     fn test_version_parses_under_feature() {
         assert_eq!(parse_pragma("//! odm test\n"), Ok(Some(ApiVersion::Test)));
+    }
+
+    #[test]
+    fn doc_descriptions() {
+        // Pragma line excluded; summary + body preserved with blank lines.
+        let code = "//! odm unstable\n//! A wheel.\n//!\n//! Spokes and a rim.\ncode();";
+        assert_eq!(parse_doc(code), "A wheel.\n\nSpokes and a rim.");
+        // Order doesn't matter; plain `//` comments are not doc text.
+        assert_eq!(parse_doc("// notes\n//! A wheel.\n//! odm unstable\n"), "A wheel.");
+        // No `//!` doc lines at all.
+        assert_eq!(parse_doc("// plain comment\ncode();"), "");
+        assert_eq!(parse_doc("//! odm unstable\ncode();"), "");
+        // Doc lines after the first code line don't count.
+        assert_eq!(parse_doc("code();\n//! late"), "");
+        // Indentation after `//! ` is kept (lists), trailing blanks dropped.
+        assert_eq!(parse_doc("//! A part.\n//!  - indented\n//!\ncode();"), "A part.\n - indented");
     }
 }

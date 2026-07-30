@@ -36,11 +36,12 @@ projects and run agent feedback rounds before stabilizing anything).
   (JSON + handles), additive-only, versioned separately.
 - Old versions live indefinitely; revisit only if a shim becomes
   burdensome.
-- odm.json does not fall under the API version — it is deleted
-  entirely (resolved 2026-07-29): params/animation become per-doohickey
-  declared inputs and `root.js` replaces main.js as marker + default
-  view; see `plans/views-and-metadata.md`. Doohickey `meta`
-  (inputs/presets) IS part of the versioned API surface.
+- odm.json does not fall under the API version — it was deleted
+  entirely (2026-07-29, implemented): params/animation are per-doohickey
+  declared inputs, `odm.toml` is the project marker, `root.js` the
+  default-view convention. Doohickey `meta` (inputs/presets) IS part of
+  the versioned API surface (`ctx.get`, `ctx.invoke(path, args,
+  provides)`).
 
 ## Implementation map (all built, tested)
 

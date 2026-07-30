@@ -9,7 +9,9 @@ use std::sync::Arc;
 pub struct SessionState {
     pub kernel: Arc<Kernel>,
     pub store: Arc<Store>,
-    /// Context values by full key: "t", "params.<name>", ...
+    /// The build's environment: cascade input values by name (explicit
+    /// provides from the invoke chain plus auto-provided declaration
+    /// defaults), resolved by the scheduler for this exact invoke path.
     pub context: HashMap<String, Value>,
     pub cancel: Option<CancelToken>,
     pub deps: Vec<Dep>,
@@ -24,5 +26,10 @@ pub use odm_store::LogLine;
 /// worker thread; may create its own (LIFO-nested) isolate. Returns the hash
 /// of the invoked doohickey's output Node in the store.
 pub trait Invoker {
-    fn invoke(&mut self, path: &str, args: &Value) -> Result<Hash, String>;
+    fn invoke(
+        &mut self,
+        path: &str,
+        args: &Value,
+        provides: &serde_json::Map<String, Value>,
+    ) -> Result<Hash, String>;
 }

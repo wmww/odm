@@ -12,7 +12,7 @@ case.
 | [csg.md](csg.md) | `union`/`subtract`/`intersect`/`hull` and their semantics |
 | [queries.md](queries.md) | `volume`, `area`, `bounds`, `raycast` |
 | [composition.md](composition.md) | `group`, `Group`, `ctx.invoke`, `Instance`, passing Solids as args |
-| [params-and-animation.md](params-and-animation.md) | `ctx.param`, `ctx.t`, `ctx.args`, `odm.json` |
+| [inputs.md](inputs.md) | `meta.inputs`, `ctx.get`, cascade values, presets, the `t` convention |
 | [colors.md](colors.md) | Accepted color formats, the named-color list, inheritance |
 | [three.md](three.md) | The vendored THREE subset and how to use it with ODM |
 | [determinism.md](determinism.md) | Conventions (Z-up, radians, units), purity, memoization |
@@ -34,6 +34,6 @@ use `ctx.invoke` to reach other doohickeys.)
 - **`console`** — `log`/`info`/`debug`/`warn`/`error`, captured into
   build results ([doohickeys.md](doohickeys.md)).
 
-The build function's `ctx` argument carries `args`, `t`, `param()`, and
-`invoke()` — see [composition.md](composition.md) and
-[params-and-animation.md](params-and-animation.md).
+The build function's `ctx` argument carries `get()` (read a declared
+input) and `invoke()` — see [inputs.md](inputs.md) and
+[composition.md](composition.md).

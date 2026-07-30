@@ -8,9 +8,19 @@
 //! Consistency invariant: every published result is byte-equivalent to a
 //! from-scratch build of its generation.
 
+pub mod meta;
 mod registry;
+mod report;
 mod scheduler;
 mod sources;
 
-pub use scheduler::{BuildEngine, BuildFailure, FailureKind, Pass, PassResult, Stats, SyncResult};
-pub use sources::{Animation, Manifest, ProjectSnapshot, ScanError, scan_project};
+pub use meta::{ExtType, Input, Meta};
+pub use report::{InputReport, ReportEntry, check_set_names};
+pub use scheduler::{
+    BuildEngine, BuildFailure, DEFAULT_ROOT, FailureKind, Pass, PassResult, Stats, SyncResult,
+    View,
+};
+pub use sources::{
+    ENGINE_VERSION, ProjectMarker, ProjectSnapshot, ScanError, Source, read_marker, scan_project,
+    sync_marker,
+};

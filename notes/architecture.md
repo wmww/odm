@@ -5,16 +5,33 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 
 ## Project format
 
-- A project is a directory; every `*.js` under it (recursive, skipping
-  dot-dirs like `.odm`/`.git` and `node_modules`) is a doohickey, identified
-  by project-relative path. `main.js` is the root; its output is the scene.
-- Cross-doohickey invocation by path string: `ctx.invoke('parts/wheel.js',
-  args)`; args are JSON + Solids (as content-hash tags).
-- Optional `odm.json`: `params` (read via `ctx.param`), `animation.duration`
-  (seconds; absent = static scene, no timeline).
-- `.odm/` is engine-owned (socket `.odm/engine.sock`, `renders/`). Excluded
-  from generation hashing. CLI finds the project root by walking up (socket
-  first, then main.js/odm.json).
+- A project is a directory marked by `odm.toml` (`name` + `engine`, unknown
+  keys rejected; NOT part of generation identity). Every `*.js` under it
+  (recursive, skipping dot-dirs like `.odm`/`.git` and `node_modules`) is a
+  doohickey, identified by project-relative path. Any file is viewable;
+  `root.js` is pure convention — the default target when a query names no
+  path.
+- **Views**: a view = (path, args, provides), evaluated against the current
+  generation. Queries and viewer tabs each hold one. `t`/animation is not a
+  feature — just a ranged cascade input the viewer gives a transport.
+- **Inputs** (`docs/api/inputs.md` is the contract): `export const meta =
+  { inputs, presets }`; one map, name → profiled JSON Schema + ODM keys
+  (`cascade`). Read via `ctx.get(name)`; plain inputs come from the caller's
+  args (defaults merged into memo identity), cascade inputs from the nearest
+  provider up the invoke chain (view outermost, declarations auto-provide
+  their defaults for their subtree). `ctx.invoke(path, args?, provides?)`.
+  Extension types (solid/vector2/vector3/quaternion/matrix4/color) are
+  canonical JSON on the wire, hydrated to THREE instances by ctx.get.
+  Validation at every boundary via the `jsonschema` crate; unknown
+  args/schema keys/`--set` names are errors.
+- The `//!` comment block doubles as prose description (summary line +
+  body), parsed at sync time without evaluating the module.
+- `.odm/` is engine-owned (socket `.odm/engine.sock`, `renders/`,
+  `viewer.json` tab persistence). Excluded from generation hashing. CLI
+  finds the project root by walking up (socket first, then odm.toml).
+- `odm.toml` is the ONE project file the engine writes: it records its
+  `engine` version back on open (warning first if the file names a newer
+  engine).
 
 ## Crates
 
@@ -63,15 +80,26 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   driven by futures::executor::block_on (no tokio — nested block_on works).
 - `odm-build` — one `BuildEngine` per project; `sync()` rescans it and
   reuses the current generation while the source hashes match (retiring the
-  old one otherwise); pass = generation+context (t + params);
-  demand-driven `get_or_build` with Salsa-style validation and early cutoff;
-  in-flight registry (wait-for-in-flight + wait-graph cycle detection);
+  old one otherwise); pass = generation + view (path, args, provides).
+  Per-build environments: each invoke path derives its env (explicit
+  provides overwrite, declaration defaults fill), hashed for the in-flight
+  registry and cycle keys. `get_or_build` validates+merges args against the
+  file's meta (effective args are the memo identity), eagerly validates and
+  dep-records every declared cascade input (an unread declared input still
+  keys memoization — consistency), then runs. Salsa-style validation and
+  early cutoff; `Dep::Invoke` carries provides. `meta.rs` = schema-profile
+  allowlist walk + extension desugaring, cached by code hash
+  (`BuildEngine::meta`, extraction via `extract_export`); `report.rs` =
+  post-build fall-through report walked from memo entries (view-settable
+  cascade names, winning declarations, conflict lint) + the target's own
+  args/presets — the input panel's data source and `--set` typo check.
+  In-flight registry (wait-for-in-flight + wait-graph cycle detection);
   cancellation (token + TerminateExecution post-module-eval). Cycle check is
-  keyed on (path, args-hash) so bounded recursion works; memo entries carry
-  console logs and replay them on hits. NOTE: builds are currently
-  single-threaded (get_or_build recurses inline, engine serializes passes
-  behind cmd_lock); the registry's cross-thread machinery is speculative
-  infrastructure for future parallelism, exercised only by
+  keyed on (path, args-hash, env-hash) so bounded recursion works; memo
+  entries carry console logs and replay them on hits. NOTE: builds are
+  currently single-threaded (get_or_build recurses inline, engine serializes
+  passes behind cmd_lock); the registry's cross-thread machinery is
+  speculative infrastructure for future parallelism, exercised only by
   `concurrent_same_pass_dedups`.
 - `odm-render` — wgpu =29.0.4 (MUST track egui's pinned wgpu major);
   the single flattener `flatten_node` (color inheritance, world AABB, node
@@ -87,12 +115,18 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   every render/publish. `Renderer::with_device` for the shared eframe device.
 - `odm-engine` — library, entered via `odm run` (`run(project, headless)`).
   Headless: socket server only. Default: + eframe
-  viewer (menu bar, offscreen texture viewport via register_native_texture,
-  orbit/pan/zoom, tree panel, timeline when duration set, error panel with
+  viewer (menu bar, tab strip — one view per tab, persisted in
+  `.odm/viewer.json` —, offscreen texture viewport via
+  register_native_texture, orbit/pan/zoom, tree panel, generated input panel
+  (right side; controls from the tab's fall-through report: trackbars for
+  ranged numbers, toggles, choice buttons, JSON-ish text fields, presets), a
+  `t` transport when a ranged cascade number named t falls through
+  (scrub + play at 1 unit/sec looping), error panel with
   last-good scene, click-select via CPU raycast when shaded / nearest-wire
   screen-space pick when wireframe, shift-click to select several),
-  background build loop
-  (latest-wins, Pass::cancel on supersede), notify-based watcher (150ms
+  background build loop over the active view slots
+  (per-slot latest-wins, Pass::cancel on same-slot supersede; a new
+  generation re-queues every slot), notify-based watcher (150ms
   debounce; its dot-dir filter applies to the path *relative to the project*,
   since the project itself may live under one). The viewer never polls: it
   repaints when `EngineState::wake` fires (set by the viewer, unset when
@@ -100,11 +134,15 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
   Commands: status/sync/build/render/tree/inspect/raycast/
-  selection, and poll/say/ack (see "Talking to the agent"); every command
-  except those three syncs first. Protocol: ndjson over unix socket,
-  `{ok: bool, ...}` responses. Files: `state.rs` (published slot, build
-  queue, `build_at` — the one sync→build→publish path, shared by the
-  background loop and the command handlers — and `stop`, below),
+  selection/interface, and poll/say/ack (see "Talking to the agent"); every
+  command except those three syncs first. View-scoped queries take optional
+  path + `--set`/`--preset`, or adopt a viewer tab (`--view <slot>` /
+  `--viewer-state`); poll answers carry a snapshot of the user's active view
+  (path, inputs, selection). CLI one-off views build without publishing;
+  viewer slots publish into a per-slot map (all live roots pinned together
+  for GC). Protocol: ndjson over unix socket,
+  `{ok: bool, ...}` responses. Files: `state.rs` (slot-keyed published map,
+  active views + build queue, `build_slot`/`build_once`, and `stop`, below),
   `commands.rs` (the whole JSON
   layer: a serde-tagged `Request` enum with `deny_unknown_fields`, so a
   typo'd command *or* option is an error, plus `CmdError`→JSON),
@@ -176,7 +214,7 @@ engine is bound to one project's store, socket, build loop and watcher.
 
 `viewer/open.rs` is the directory chooser (no portal here, no dialog crate in
 the tree). Directories only, since a project *is* one; `session::is_project`
-(main.js or odm.json, the same rule as `odm_cli::find_project`) picks the icon
+(odm.toml, the same rule as `odm_cli::find_project`) picks the icon
 and gates Open. The path field is what Open acts on, so clicking a row and
 typing a path are the same gesture; double-clicking a plain folder browses into
 it, double-clicking a project opens it. `~` expands, nothing else does. Its row
@@ -354,6 +392,10 @@ notes/spike-findings.md "Snapshot count/concurrency".
 
 - Consistency: every published result is byte-equivalent to a from-scratch
   build of its generation (tested: `odm-build/tests/build.rs`).
+- The engine never writes ODM project files — with ONE exception: the
+  `engine` value in `odm.toml` (recorded on project open;
+  `odm_build::sync_marker`). odm.toml is not part of generation identity,
+  so the write-back cannot churn generations.
 - Engine queries on content-addressed handles are pure → never memo deps.
   Queries on transformed solids bake via op_transform_bake (cached per
   Solid) — exact, but costs a mesh copy per distinct transform.

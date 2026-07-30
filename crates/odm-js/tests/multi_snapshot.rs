@@ -40,6 +40,7 @@ fn build_box(env: &JsEnv) -> Result<(), String> {
             code: "export default function build() { return odm.box(1); }",
             api: odm_js::ApiVersion::Unstable,
             args: &json!({}),
+            decls: &json!({}),
             context: &HashMap::<String, Value>::new(),
             kernel,
             store,
@@ -89,7 +90,12 @@ fn snapshot_creation_inside_invoke() {
     let _lock = exclusive();
     struct SnapshottingInvoker;
     impl odm_js::Invoker for SnapshottingInvoker {
-        fn invoke(&mut self, _path: &str, _args: &Value) -> Result<odm_ir::Hash, String> {
+        fn invoke(
+            &mut self,
+            _path: &str,
+            _args: &Value,
+            _provides: &serde_json::Map<String, Value>,
+        ) -> Result<odm_ir::Hash, String> {
             let env2 = JsEnv::new().map_err(|e| format!("nested snapshot: {e}"))?;
             let store = odm_store::Store::new();
             let kernel = odm_kernel::Kernel::new(store.clone());
@@ -100,6 +106,7 @@ fn snapshot_creation_inside_invoke() {
                     code: "export default function build() { return odm.box(1); }",
                     api: odm_js::ApiVersion::Unstable,
                     args: &json!({}),
+                    decls: &json!({}),
                     context: &HashMap::<String, Value>::new(),
                     kernel,
                     store,
@@ -125,6 +132,7 @@ fn snapshot_creation_inside_invoke() {
             code: "export default function build(ctx) { ctx.invoke('inner.js'); return odm.box(2); }",
             api: odm_js::ApiVersion::Unstable,
             args: &json!({}),
+            decls: &json!({}),
             context: &HashMap::<String, Value>::new(),
             kernel,
             store,

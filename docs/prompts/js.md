@@ -54,27 +54,46 @@ const wheel = ctx.invoke('parts/wheel.js', { radius: 8 }); // → Instance
 return odm.group(wheel.translate(-20, 0, 0), wheel.translate(20, 0, 0));
 ```
 
-The invoked file sees the args as `ctx.args` (JSON values; Solids are
-allowed and cross as handles). Groups and Instances can be transformed,
-colored and named, but not used in CSG; a color on a group applies to the
-descendants that have none. Invokes are memoized — same file + same args
-is free.
+Args target the invoked file's declared inputs (JSON values; Solids are
+allowed and cross as handles); unknown names and schema mismatches are
+boundary errors. Groups and Instances can be transformed, colored and
+named, but not used in CSG; a color on a group applies to the
+descendants that have none. Invokes are memoized — same file + same
+inputs is free.
 
-## Parameters and animation
+## Inputs
 
-- `ctx.param('width', 40)` reads a project parameter, with a default.
-- `ctx.t` is the animation time in seconds (0 for static scenes). Model
-  motion as a pure function of it; only doohickeys that read `ctx.t`
-  rebuild when time changes.
+Declare everything a file can be given in `export const meta`; read
+with `ctx.get(name)` (reading an undeclared name is an error):
 
-Both come from the optional `odm.json` at the project root:
-
-```json
-{ "params": { "width": 60 }, "animation": { "duration": 4 } }
+```js
+//! odm unstable
+export const meta = {
+  inputs: {
+    width: { type: 'number', default: 40, minimum: 1 },   // caller/view arg
+    t: { type: 'number', cascade: true, default: 0, minimum: 0, maximum: 2 },
+  },
+  presets: { wide: { width: 90 } },
+};
+export default (ctx) => odm.box([ctx.get('width'), 10, 4]).rotateZ(ctx.get('t'));
 ```
 
-`animation.duration` (seconds) is what enables the viewer's timeline and
-`--t` renders.
+- Entries are strict-profile JSON Schemas (`type`, `enum`, `default`,
+  `description`, `minimum`/`maximum`, `items`, `properties`/`required`)
+  plus ODM types `solid`, `vector2/3`, `quaternion`, `matrix4`,
+  `color` (hydrated to real THREE values). No `default` = required.
+- **Plain inputs** come from the immediate caller (invoke args, or the
+  view's `--set`). **Cascade inputs** (`cascade: true`, default
+  mandatory) resolve up the invoke chain: nearest
+  `ctx.invoke(path, args, provides)` provide wins, the view is the
+  outermost provider, and a declaration auto-provides its default for
+  its own subtree.
+- **Time is just an input**: declare a ranged cascade `t` and the
+  viewer gives it a transport (scrub/play, looping over the range);
+  `odm render --set t=1.5` sets it like anything else. Only readers of
+  `t` rebuild when it changes.
+- `meta.presets` names input bundles; `--preset <name>` applies one.
+- `odm interface <path>` prints a file's description, inputs, presets.
 
 ## Colors
 

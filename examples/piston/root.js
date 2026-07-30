@@ -1,9 +1,17 @@
 //! odm unstable
-// piston: build(t) animation. The crank angle is a pure function of ctx.t;
-// scrub the timeline (or `odm render --t 1.25`) to see it move.
+//! A crank–rod–piston assembly; motion is a pure function of the cascade
+//! input `t`. Declaring t with range 0–2 makes the viewer loop it every
+//! two seconds (one crank revolution at the default rpm).
+export const meta = {
+  inputs: {
+    t: { type: 'number', cascade: true, default: 0, minimum: 0, maximum: 2 },
+    rpm: { type: 'number', default: 30, minimum: 1, description: 'crank speed' },
+  },
+};
+
 export default function build(ctx) {
-  const rpm = ctx.param('rpm', 30);
-  const a = ctx.t * 2 * Math.PI * (rpm / 60); // crank angle
+  const rpm = ctx.get('rpm');
+  const a = ctx.get('t') * 2 * Math.PI * (rpm / 60); // crank angle
   const R = 10; // crank radius
   const L = 30; // connecting rod length
 

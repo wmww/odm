@@ -11,7 +11,7 @@
 //! Blocks in the live tree run as `unstable`. When frozen `docs/vN/`
 //! snapshots exist, their blocks must run under version N instead.
 
-use odm_build::BuildEngine;
+use odm_build::{BuildEngine, View};
 use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::Store;
@@ -72,18 +72,80 @@ fn collect_blocks(dir: &Path, rel: &str, out: &mut Vec<Block>) {
     }
 }
 
-/// `invoke('path')` / `invoke("path")` targets mentioned in the code.
-fn invoked_paths(code: &str) -> Vec<String> {
-    let mut out = Vec::new();
+/// `invoke('path', {args...})` targets mentioned in the code, with the arg
+/// names their call sites pass (so stubs can declare matching inputs).
+fn invoked_paths(code: &str) -> Vec<(String, Vec<String>)> {
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
     for (i, _) in code.match_indices("invoke(") {
         let rest = &code[i + "invoke(".len()..];
-        if let Some(q) = rest.chars().next()
-            && (q == '\'' || q == '"')
-            && let Some(end) = rest[1..].find(q)
+        let Some(q) = rest.chars().next() else { continue };
+        if q != '\'' && q != '"' {
+            continue;
+        }
+        let Some(end) = rest[1..].find(q) else { continue };
+        let path = rest[1..1 + end].to_string();
+        // Arg keys from a literal `{ key: ..., key2: ... }` second argument;
+        // shorthand `{ width, depth }` counts too. Good enough for docs.
+        let mut keys = Vec::new();
+        let after = rest[1 + end + 1..].trim_start();
+        if let Some(obj) = after.strip_prefix(',')
+            && let Some(brace) = obj.trim_start().strip_prefix('{')
         {
-            out.push(rest[1..1 + end].to_string());
+            let mut depth = 0usize;
+            let body: String = brace
+                .chars()
+                .take_while(|&c| {
+                    if c == '{' || c == '[' || c == '(' {
+                        depth += 1;
+                    } else if c == '}' || c == ']' || c == ')' {
+                        if depth == 0 {
+                            return false;
+                        }
+                        depth -= 1;
+                    }
+                    true
+                })
+                .collect();
+            for part in split_top_level(&body) {
+                let name = part.split(':').next().unwrap_or("").trim();
+                if !name.is_empty()
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    keys.push(name.to_string());
+                }
+            }
+        }
+        match out.iter_mut().find(|(p, _)| *p == path) {
+            Some((_, existing)) => {
+                for k in keys {
+                    if !existing.contains(&k) {
+                        existing.push(k);
+                    }
+                }
+            }
+            None => out.push((path, keys)),
         }
     }
+    out
+}
+
+/// Split an object-literal body on top-level commas.
+fn split_top_level(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
     out
 }
 
@@ -98,14 +160,21 @@ fn run_block(block: &Block) -> Result<(), String> {
     };
 
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
-    std::fs::write(dir.path().join("main.js"), &code).map_err(|e| e.to_string())?;
-    for path in invoked_paths(&block.code) {
+    std::fs::write(dir.path().join("root.js"), &code).map_err(|e| e.to_string())?;
+    for (path, keys) in invoked_paths(&block.code) {
         let p = dir.path().join(&path);
-        if path.contains("..") || !path.ends_with(".js") || p.exists() {
+        if path.contains("..") || !path.ends_with(".js") || p.exists() || path == "root.js" {
             continue;
         }
         std::fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-        let stub = "//! odm unstable\nexport default function build() { return odm.box(1); }\n";
+        // The stub accepts whatever the example passes: each seen arg name
+        // becomes an any-value input with a null default.
+        let inputs: String =
+            keys.iter().map(|k| format!("{k}: {{ default: null }}, ")).collect();
+        let stub = format!(
+            "//! odm unstable\nexport const meta = {{ inputs: {{ {inputs} }} }};\n\
+             export default function build() {{ return odm.box(1); }}\n"
+        );
         std::fs::write(p, stub).map_err(|e| e.to_string())?;
     }
 
@@ -113,7 +182,7 @@ fn run_block(block: &Block) -> Result<(), String> {
     let kernel = Kernel::new(store.clone());
     let engine = BuildEngine::new(store, kernel, env(), dir.path().to_path_buf());
     let sync = engine.sync().map_err(|e| format!("scan: {e}"))?;
-    let result = engine.build_root(&engine.start_pass(&sync, 0.0));
+    let result = engine.build_view(&engine.start_pass(&sync, View::of("root.js")));
 
     let expect_error = block
         .info

@@ -3,40 +3,49 @@
 
 use crate::commands::CmdError;
 use crate::server::Peer;
-use odm_build::{BuildEngine, FailureKind, PassResult, SyncResult};
+use odm_build::{BuildEngine, FailureKind, InputReport, PassResult, SyncResult, View};
 use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_render::Renderer;
 use odm_store::{Object, Store};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-/// Last published build: what the viewer shows. Last-good semantics — a
+/// The slot the viewer's (sole, until tabs exist per-tab) default view and
+/// the background loop publish into.
+pub const DEFAULT_SLOT: &str = "default";
+
+/// Last published build of one active view slot. Last-good semantics — a
 /// failed build updates `error` but keeps the previous root.
 #[derive(Clone, Default)]
 pub struct Published {
     /// Bumped whenever anything here changes; the viewer polls it.
     pub revision: u64,
     pub generation: u64,
-    pub t: f64,
+    /// The view this result was built for.
+    pub view: View,
     /// Root hash plus the object itself: holding the `Arc` keeps the root
     /// alive across store GCs, so the viewer never reads an unrooted hash.
     pub root: Option<(odm_ir::Hash, Arc<Object>)>,
     pub error: Option<String>,
     pub building: bool,
-    /// animation.duration from the manifest, if any.
-    pub duration: Option<f64>,
+    /// Fall-through report of the last successful build: the view-settable
+    /// cascade inputs (the input panel's data source).
+    pub report: Arc<InputReport>,
 }
 
-/// Latest-wins build requests from the viewer (scrubs) and the file watcher.
+/// Per-slot latest-wins build requests from the viewer (input edits) and
+/// the file watcher.
 #[derive(Default)]
 struct BuildQueue {
-    latest: Mutex<Option<f64>>,
+    /// Slots waiting to be (re)built, oldest first, deduplicated.
+    pending: Mutex<Vec<String>>,
     cv: Condvar,
-    /// Pass currently being built by the background loop (cancellable).
-    active: Mutex<Option<Arc<odm_build::Pass>>>,
+    /// Slot + pass currently built by the background loop (cancellable).
+    active: Mutex<Option<(String, Arc<odm_build::Pass>)>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -100,7 +109,16 @@ pub struct EngineState {
     /// semantics simple. Revisit if concurrent agent queries matter.
     pub(crate) cmd_lock: Mutex<()>,
     pub(crate) render_counter: AtomicU64,
-    published: Mutex<Published>,
+    /// slot → last published build.
+    published: Mutex<HashMap<String, Published>>,
+    /// slot → the view the background loop keeps built.
+    views: Mutex<HashMap<String, View>>,
+    /// Generation of the last sync seen by `build_once`; a change makes
+    /// every active slot stale.
+    last_generation: Mutex<Option<u64>>,
+    /// The viewer tab the user is looking at (None when headless): what
+    /// `--viewer-state` queries adopt and poll snapshots describe.
+    active_slot: Mutex<Option<String>>,
     queue: BuildQueue,
     /// Viewer selection, in the order it was picked: (node id, name).
     pub(crate) selection: Mutex<Vec<(String, Option<String>)>>,
@@ -120,12 +138,17 @@ impl EngineState {
         let store = Store::new();
         let kernel = Kernel::new(store.clone());
         let build = BuildEngine::new(store, kernel, env, project);
+        let mut views = HashMap::new();
+        views.insert(DEFAULT_SLOT.to_string(), View::of(odm_build::DEFAULT_ROOT));
         Ok(Arc::new(EngineState {
             build,
             renderer: Mutex::new(None),
             cmd_lock: Mutex::new(()),
             render_counter: AtomicU64::new(0),
-            published: Mutex::new(Published::default()),
+            published: Mutex::new(HashMap::new()),
+            views: Mutex::new(views),
+            last_generation: Mutex::new(None),
+            active_slot: Mutex::new(None),
             queue: BuildQueue::default(),
             selection: Mutex::new(Vec::new()),
             chat: Chat::default(),
@@ -140,7 +163,7 @@ impl EngineState {
     /// go. Only the viewer calls this, when opening another project.
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
-        if let Some(pass) = self.queue.active.lock().unwrap().as_ref() {
+        if let Some((_, pass)) = self.queue.active.lock().unwrap().as_ref() {
             pass.cancel();
         }
         self.queue.cv.notify_all();
@@ -175,8 +198,77 @@ impl EngineState {
         &self.build
     }
 
-    pub fn published(&self) -> Published {
-        self.published.lock().unwrap().clone()
+    /// The last published build of a slot (viewer tabs read their own).
+    pub fn published(&self, slot: &str) -> Published {
+        self.published.lock().unwrap().get(slot).cloned().unwrap_or_default()
+    }
+
+    /// The view a slot is showing.
+    pub fn view_of(&self, slot: &str) -> Option<View> {
+        self.views.lock().unwrap().get(slot).cloned()
+    }
+
+    /// Every active slot and its view, sorted by slot.
+    pub fn views(&self) -> Vec<(String, View)> {
+        let mut v: Vec<(String, View)> =
+            self.views.lock().unwrap().iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
+    /// The viewer marks which tab the user is looking at.
+    pub fn set_active_slot(&self, slot: Option<String>) {
+        *self.active_slot.lock().unwrap() = slot;
+    }
+
+    /// The user's active view, if a viewer is showing one.
+    pub fn active_view(&self) -> Option<(String, View)> {
+        let slot = self.active_slot.lock().unwrap().clone()?;
+        let view = self.view_of(&slot)?;
+        Some((slot, view))
+    }
+
+    /// Point a slot at a view (registering the slot if new) and queue its
+    /// rebuild — latest-wins: an in-flight build of the same slot is
+    /// cancelled and superseded.
+    pub fn set_view(&self, slot: &str, view: View) {
+        self.views.lock().unwrap().insert(slot.to_string(), view);
+        if let Some((active_slot, pass)) = self.queue.active.lock().unwrap().as_ref()
+            && active_slot == slot
+        {
+            pass.cancel();
+        }
+        self.enqueue(slot);
+        // Same rationale as the pre-views code: no revision bump, no wake —
+        // "Building…" only appears for builds slow enough to overlap.
+        if let Some(p) = self.published.lock().unwrap().get_mut(slot) {
+            p.building = true;
+        }
+    }
+
+    /// Drop a slot (a closed viewer tab). Its published root stays alive
+    /// only through anyone still holding the `Published` clone.
+    pub fn remove_view(&self, slot: &str) {
+        self.views.lock().unwrap().remove(slot);
+        self.published.lock().unwrap().remove(slot);
+        self.queue.pending.lock().unwrap().retain(|s| s != slot);
+    }
+
+    /// Queue every active slot for rebuild (file change, new generation).
+    pub fn rebuild_active(&self) {
+        let slots: Vec<String> = self.views.lock().unwrap().keys().cloned().collect();
+        for slot in slots {
+            self.enqueue(&slot);
+        }
+    }
+
+    fn enqueue(&self, slot: &str) {
+        let mut pending = self.queue.pending.lock().unwrap();
+        if !pending.iter().any(|s| s == slot) {
+            pending.push(slot.to_string());
+        }
+        drop(pending);
+        self.queue.cv.notify_all();
     }
 
     /// Register the viewer's repaint hook: called whenever `published` changes,
@@ -308,110 +400,142 @@ impl EngineState {
         self.chat.listeners.load(Ordering::SeqCst)
     }
 
-    /// Request a (re)build at time t: latest-wins, cancels the in-flight
-    /// background build. Consumed by `run_build_loop`.
-    pub fn request_build(&self, t: f64) {
-        *self.queue.latest.lock().unwrap() = Some(t);
-        if let Some(pass) = self.queue.active.lock().unwrap().as_ref() {
-            pass.cancel();
-        }
-        self.queue.cv.notify_all();
-        // No `revision` bump, and no wake: a build that finishes in a few ms
-        // would flash "Building…" and take the status row's layout with it.
-        // The indicator is for builds slow enough that a publish lands while
-        // the next one is already queued.
-        self.published.lock().unwrap().building = true;
-    }
-
-    /// Background build loop: blocks on requests, builds, publishes.
+    /// Background build loop: blocks on queued slots, builds, publishes.
     /// Run on a dedicated thread; returns only once the session is stopped.
     pub fn run_build_loop(self: &Arc<Self>) {
         loop {
-            let t = {
-                let mut latest = self.queue.latest.lock().unwrap();
+            let slot = {
+                let mut pending = self.queue.pending.lock().unwrap();
                 loop {
                     if self.stopping() {
                         return;
                     }
-                    match latest.take() {
-                        Some(t) => break t,
-                        None => latest = self.queue.cv.wait(latest).unwrap(),
+                    if !pending.is_empty() {
+                        break pending.remove(0);
                     }
+                    pending = self.queue.cv.wait(pending).unwrap();
                 }
             };
+            // A slot may have been removed while queued.
+            let Some(view) = self.view_of(&slot) else { continue };
             let _guard = self.cmd_lock.lock().unwrap();
-            // Failures are already published; a cancelled one just means a
-            // newer request is (or will be) queued.
-            let _ = self.build_at(t, true);
+            // Failures are already published; a cancelled build means a
+            // newer request for this slot is (or will be) queued.
+            let _ = self.build_slot(&slot, view);
         }
     }
 
-    /// Sync + build the root at time `t`, publishing the outcome to the viewer
-    /// slot. `as_active` registers the pass as the cancellable in-flight build
-    /// (the background loop; command builds run to completion).
-    /// Callers must hold `cmd_lock`.
-    pub(crate) fn build_at(
-        &self,
-        t: f64,
-        as_active: bool,
-    ) -> Result<(SyncResult, PassResult), CmdError> {
+    /// Sync + build one slot's view, publishing the outcome (success or
+    /// failure, not cancellation) into the slot. The pass is registered as
+    /// the cancellable in-flight build. Callers must hold `cmd_lock`.
+    pub(crate) fn build_slot(&self, slot: &str, view: View) -> Result<(), CmdError> {
         let sync = match self.build.sync() {
             Ok(s) => s,
             Err(e) => {
-                self.publish_failure(None, t, e.to_string());
+                self.publish_failure(slot, None, &view, e.to_string());
                 return Err(CmdError::new("scan", e.to_string()));
             }
         };
-        let pass = self.build.start_pass(&sync, t);
-        if as_active {
-            *self.queue.active.lock().unwrap() = Some(pass.clone());
-        }
-        let result = self.build.build_root(&pass);
-        if as_active {
-            *self.queue.active.lock().unwrap() = None;
-        }
+        self.note_generation(&sync, Some(slot));
+        let pass = self.build.start_pass(&sync, view.clone());
+        *self.queue.active.lock().unwrap() = Some((slot.to_string(), pass.clone()));
+        let result = self.build.build_view(&pass);
+        *self.queue.active.lock().unwrap() = None;
         match result {
             Ok(res) => {
-                self.build.publish(&pass, res.root);
-                self.publish_success(&sync, t, res.root);
-                Ok((sync, res))
+                let report = self.build.input_report(&pass);
+                self.publish_success(slot, &sync, &view, res.root, report);
+                Ok(())
             }
             Err(f) => {
                 if f.kind != FailureKind::Cancelled {
-                    self.publish_failure(Some(sync.generation.0), t, f.message.clone());
+                    self.publish_failure(slot, Some(sync.generation.0), &view, f.message.clone());
                 }
                 Err(CmdError::from_failure(&f, pass.take_logs()))
             }
         }
     }
 
-    fn publish_success(&self, sync: &SyncResult, t: f64, root: odm_ir::Hash) {
-        // The root was just set as a GC root in `publish`, so it is alive;
-        // the Arc keeps it that way for the viewer even after later GCs.
+    /// One-off build of an arbitrary view, for CLI queries: nothing is
+    /// published — the viewer hears about a new generation through
+    /// `note_generation` queueing the active slots. Callers hold `cmd_lock`.
+    pub(crate) fn build_once(
+        &self,
+        view: &View,
+    ) -> Result<(SyncResult, PassResult, InputReport), CmdError> {
+        let sync = self.build.sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
+        self.note_generation(&sync, None);
+        let pass = self.build.start_pass(&sync, view.clone());
+        match self.build.build_view(&pass) {
+            Ok(res) => {
+                let report = self.build.input_report(&pass);
+                Ok((sync, res, report))
+            }
+            Err(f) => Err(CmdError::from_failure(&f, pass.take_logs())),
+        }
+    }
+
+    /// A new generation makes every active slot stale: queue rebuilds
+    /// (except `building`, the slot already being built from it).
+    fn note_generation(&self, sync: &SyncResult, building: Option<&str>) {
+        {
+            let mut last = self.last_generation.lock().unwrap();
+            if *last == Some(sync.generation.0) {
+                return;
+            }
+            *last = Some(sync.generation.0);
+        }
+        let slots: Vec<String> = self.views.lock().unwrap().keys().cloned().collect();
+        for slot in slots {
+            if Some(slot.as_str()) != building {
+                self.enqueue(&slot);
+            }
+        }
+    }
+
+    fn publish_success(
+        &self,
+        slot: &str,
+        sync: &SyncResult,
+        view: &View,
+        root: odm_ir::Hash,
+        report: InputReport,
+    ) {
+        // Fetch the object first so the Arc keeps the root alive for the
+        // viewer across later GCs.
         let obj = self.build.store.get(root);
-        let mut p = self.published.lock().unwrap();
-        p.revision += 1;
-        p.generation = sync.generation.0;
-        p.t = t;
-        p.root = obj.map(|o| (root, o));
-        p.error = None;
-        p.building = self.queue.latest.lock().unwrap().is_some();
-        p.duration = sync.snapshot.manifest.animation.as_ref().map(|a| a.duration);
-        drop(p);
+        let mut published = self.published.lock().unwrap();
+        let entry = published.entry(slot.to_string()).or_default();
+        entry.revision += 1;
+        entry.generation = sync.generation.0;
+        entry.view = view.clone();
+        entry.root = obj.map(|o| (root, o));
+        entry.error = None;
+        entry.building = self.queue.pending.lock().unwrap().iter().any(|s| s == slot);
+        entry.report = Arc::new(report);
+        // Every active slot's current-generation root stays pinned; then GC.
+        let roots: Vec<odm_ir::Hash> = published
+            .values()
+            .filter(|p| p.generation == sync.generation.0)
+            .filter_map(|p| p.root.as_ref().map(|(h, _)| *h))
+            .collect();
+        drop(published);
+        self.build.publish(sync.generation, roots);
         self.wake();
     }
 
     /// `generation: None` (e.g. scan errors) keeps the last known generation.
-    fn publish_failure(&self, generation: Option<u64>, t: f64, message: String) {
-        let mut p = self.published.lock().unwrap();
-        p.revision += 1;
+    fn publish_failure(&self, slot: &str, generation: Option<u64>, view: &View, message: String) {
+        let mut published = self.published.lock().unwrap();
+        let entry = published.entry(slot.to_string()).or_default();
+        entry.revision += 1;
         if let Some(g) = generation {
-            p.generation = g;
+            entry.generation = g;
         }
-        p.t = t;
-        p.error = Some(message);
-        p.building = self.queue.latest.lock().unwrap().is_some();
-        drop(p);
+        entry.view = view.clone();
+        entry.error = Some(message);
+        entry.building = self.queue.pending.lock().unwrap().iter().any(|s| s == slot);
+        drop(published);
         self.wake();
     }
 }
@@ -569,7 +693,10 @@ pub(crate) mod tests {
                 (polled, state.handle(json!({"cmd": "say", "text": "ok"}), &mut conn))
             }
         });
-        assert_eq!(replies.0, json!({"ok": true, "messages": [{"text": "hi"}]}));
+        assert_eq!(
+            replies.0,
+            json!({"ok": true, "messages": [{"text": "hi"}], "view": null})
+        );
         assert_eq!(replies.1, json!({"ok": true}));
         state.with_transcript(|t| assert_eq!(t.len(), 2));
     }

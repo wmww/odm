@@ -50,8 +50,7 @@ impl EngineState {
             if self.stopping() {
                 return;
             }
-            let t = self.published().t;
-            self.request_build(t);
+            self.rebuild_active();
         }
     }
 }

@@ -1,16 +1,103 @@
+use crate::meta::Meta;
 use crate::registry::{Acquire, RKey, Registry};
-use crate::sources::{ProjectSnapshot, ScanError, scan_project};
+use crate::sources::{ProjectSnapshot, ScanError, Source, scan_project};
 use odm_ir::{Hash, Hasher, hash_json};
 use odm_js::{ApiVersion, BuildError, BuildInput, Invoker, JsEnv, LogLine, run_build};
 use odm_kernel::{CancelToken, Kernel};
 use odm_store::{Dep, GenerationId, MemoEntry, MemoKey, Store};
-use serde_json::Value;
-use std::collections::HashMap;
+use serde_json::{Map, Value};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub const ROOT_DOOHICKEY: &str = "main.js";
+/// The entry-file name the CLI/viewer try when no path is given — pure
+/// convention, like `index.html`: used if present, nothing structural.
+pub const DEFAULT_ROOT: &str = "root.js";
+
+/// What a query or viewer tab evaluates: one doohickey against one set of
+/// inputs, against the current generation. `args` go to the target's
+/// declared inputs; `provides` are the view-level cascade values (the
+/// outermost provider).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct View {
+    pub path: String,
+    pub args: Map<String, Value>,
+    pub provides: Map<String, Value>,
+}
+
+impl View {
+    /// The default view of `path`: declared defaults, nothing set.
+    pub fn of(path: impl Into<String>) -> View {
+        View { path: path.into(), args: Map::new(), provides: Map::new() }
+    }
+
+    /// Canonical identity: same key ⇔ same (path, args, provides).
+    pub fn key(&self) -> Hash {
+        let mut h = Hasher::new();
+        h.str(&self.path);
+        h.hash(&hash_json(&Value::Object(self.args.clone())));
+        h.hash(&hash_json(&Value::Object(self.provides.clone())));
+        h.finish()
+    }
+}
+
+/// A build's environment: the cascade values visible to one invoke path —
+/// explicit provides (nearest wins) overlaid with auto-provided declaration
+/// defaults (shallowest wins). Immutable; extended on the way down.
+#[derive(Clone)]
+struct Env {
+    values: Arc<HashMap<String, Value>>,
+    hash: Hash,
+}
+
+impl Env {
+    fn new(values: HashMap<String, Value>) -> Env {
+        let sorted: BTreeMap<&String, &Value> = values.iter().collect();
+        let mut h = Hasher::new();
+        h.len(sorted.len());
+        for (k, v) in sorted {
+            h.str(k);
+            h.hash(&hash_json(v));
+        }
+        Env { hash: h.finish(), values: Arc::new(values) }
+    }
+
+    fn from_provides(provides: &Map<String, Value>) -> Env {
+        Env::new(provides.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+    }
+
+    /// Explicit provides overwrite (nearest provider wins).
+    fn with_provides(&self, provides: &Map<String, Value>) -> Env {
+        if provides.is_empty() {
+            return self.clone();
+        }
+        let mut values = (*self.values).clone();
+        for (k, v) in provides {
+            values.insert(k.clone(), v.clone());
+        }
+        Env::new(values)
+    }
+
+    /// Declaration defaults fill only what nothing above covered
+    /// (shallowest declaration wins).
+    fn with_defaults<'a>(&self, defaults: impl Iterator<Item = (&'a String, &'a Value)>) -> Env {
+        let mut values: Option<HashMap<String, Value>> = None;
+        for (k, v) in defaults {
+            if !self.values.contains_key(k) {
+                values.get_or_insert_with(|| (*self.values).clone()).insert(k.clone(), v.clone());
+            }
+        }
+        match values {
+            Some(values) => Env::new(values),
+            None => self.clone(),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&Value> {
+        self.values.get(key)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuildFailure {
@@ -30,6 +117,11 @@ pub enum FailureKind {
     BadOutput,
     /// Bad or unsupported `//! odm <version>` pragma.
     Version,
+    /// `export const meta` failed to extract or validate.
+    Meta,
+    /// An input value rejected at an invoke or view boundary (unknown name,
+    /// missing required input, schema mismatch).
+    Input,
     Internal,
 }
 
@@ -46,13 +138,13 @@ pub struct SyncResult {
     pub snapshot: Arc<ProjectSnapshot>,
 }
 
-/// A build pass: one generation + one context (t, params). All builds within
-/// a pass see identical context, so (code, args) identifies a build.
+/// A build pass: one generation + one view (root path, args, view-level
+/// provides). Each build's environment is derived per invoke path, so
+/// (code, effective args, environment) identifies a build.
 pub struct Pass {
     pub generation: GenerationId,
     snapshot: Arc<ProjectSnapshot>,
-    context: HashMap<String, Value>,
-    context_hash: Hash,
+    view: View,
     cancel: CancelToken,
     cancelled: AtomicBool,
     isolates: Mutex<Vec<odm_js::IsolateHandle>>,
@@ -77,6 +169,14 @@ impl Pass {
     /// Console output collected from all builds in this pass, in build order.
     pub fn take_logs(&self) -> Vec<(String, LogLine)> {
         std::mem::take(&mut self.logs.lock().unwrap())
+    }
+
+    pub fn view(&self) -> &View {
+        &self.view
+    }
+
+    pub fn snapshot(&self) -> &Arc<ProjectSnapshot> {
+        &self.snapshot
     }
 }
 
@@ -104,6 +204,9 @@ pub struct BuildEngine {
     project: PathBuf,
     /// Latest sync; reused as long as the sources hash the same.
     current: Mutex<Option<SyncResult>>,
+    /// Parsed `export const meta` per code hash. Extraction evaluates the
+    /// module (no build), so cache hard: code unchanged → meta unchanged.
+    metas: Mutex<HashMap<Hash, Arc<Result<Meta, String>>>>,
 }
 
 impl BuildEngine {
@@ -121,7 +224,39 @@ impl BuildEngine {
             stats: Stats::default(),
             project,
             current: Mutex::new(None),
+            metas: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The parsed `export const meta` for one source, cached by code hash.
+    /// A missing export is an empty `Meta`; a module that fails to evaluate
+    /// (or a meta that fails validation) is the error, also cached.
+    pub fn meta(&self, path: &str, source: &Source) -> Arc<Result<Meta, String>> {
+        if let Some(hit) = self.metas.lock().unwrap().get(&source.hash) {
+            return hit.clone();
+        }
+        let result = self.extract_meta(path, source);
+        let result = Arc::new(result);
+        self.metas.lock().unwrap().insert(source.hash, result.clone());
+        result
+    }
+
+    fn extract_meta(&self, path: &str, source: &Source) -> Result<Meta, String> {
+        let api = source.api.clone().map_err(|e| format!("{path}: {e}"))?;
+        let raw = odm_js::extract_export(
+            &self.env,
+            path,
+            &source.code,
+            api,
+            "meta",
+            self.kernel.clone(),
+            self.store.clone(),
+        )
+        .map_err(|e| format!("{path}: reading meta: {e}"))?;
+        match raw {
+            None => Ok(Meta::default()),
+            Some(v) => Meta::parse(&v).map_err(|e| format!("{path}: meta: {e}")),
+        }
     }
 
     pub fn project(&self) -> &Path {
@@ -147,26 +282,12 @@ impl BuildEngine {
         Ok(sync)
     }
 
-    /// Start a pass at time `t` with the manifest's params as context.
-    pub fn start_pass(&self, sync: &SyncResult, t: f64) -> Arc<Pass> {
-        let mut context = HashMap::new();
-        context.insert("t".to_string(), Value::from(t));
-        for (k, v) in &sync.snapshot.manifest.params {
-            context.insert(format!("params.{k}"), v.clone());
-        }
-        let mut ch = Hasher::new();
-        let mut keys: Vec<_> = context.keys().collect();
-        keys.sort();
-        ch.len(keys.len());
-        for k in keys {
-            ch.str(k);
-            ch.hash(&hash_json(&context[k]));
-        }
+    /// Start a pass evaluating `view` against this sync's generation.
+    pub fn start_pass(&self, sync: &SyncResult, view: View) -> Arc<Pass> {
         Arc::new(Pass {
             generation: sync.generation,
             snapshot: sync.snapshot.clone(),
-            context_hash: ch.finish(),
-            context,
+            view,
             cancel: CancelToken::new(),
             cancelled: AtomicBool::new(false),
             isolates: Mutex::new(Vec::new()),
@@ -174,27 +295,35 @@ impl BuildEngine {
         })
     }
 
-    /// Build the root doohickey (`main.js`) for a pass.
-    pub fn build_root(self: &Arc<Self>, pass: &Arc<Pass>) -> Result<PassResult, BuildFailure> {
-        let root =
-            self.get_or_build(pass, &[], ROOT_DOOHICKEY, &Value::Object(Default::default()))?;
+    /// Build a pass's view: its target doohickey with the view's args,
+    /// under the view's provides (the outermost cascade provider).
+    pub fn build_view(self: &Arc<Self>, pass: &Arc<Pass>) -> Result<PassResult, BuildFailure> {
+        let env = Env::from_provides(&pass.view.provides);
+        let path = pass.view.path.clone();
+        let args = Value::Object(pass.view.args.clone());
+        let root = self.get_or_build(pass, &[], &path, &args, &env)?;
         Ok(PassResult { root, logs: pass.take_logs() })
     }
 
-    /// Publish a built root: pin it as the generation's GC root and collect
-    /// unreachable objects. Only call at build quiescence.
-    pub fn publish(&self, pass: &Pass, root: Hash) {
-        self.store.set_roots(pass.generation, vec![root]);
+    /// Publish built roots: pin them as the generation's GC roots and
+    /// collect unreachable objects. Only call at build quiescence. With
+    /// several views alive, pass every root that must survive.
+    pub fn publish(&self, generation: GenerationId, roots: Vec<Hash>) {
+        self.store.set_roots(generation, roots);
         self.store.gc();
         self.kernel.prune_cache();
     }
 
+    /// Build one doohickey. `env_base` is the caller's environment plus the
+    /// invoke's explicit provides; this file's own cascade declaration
+    /// defaults fill in whatever nothing above covered.
     fn get_or_build(
         self: &Arc<Self>,
         pass: &Arc<Pass>,
-        chain: &[(String, Hash)],
+        chain: &[ChainLink],
         path: &str,
         args: &Value,
+        env_base: &Env,
     ) -> Result<Hash, BuildFailure> {
         if pass.is_cancelled() {
             return Err(fail(path, FailureKind::Cancelled, "build cancelled"));
@@ -215,28 +344,66 @@ impl BuildEngine {
             Ok(v) => *v,
             Err(e) => return Err(fail(path, FailureKind::Version, format!("{path}: {e}"))),
         };
-        let args_hash = hash_json(args);
-        // Cycle = same (path, args) already building in this chain. Keying on
-        // args allows legitimate bounded recursion (invoke self with a
-        // smaller depth); identical args can never terminate.
-        if chain.iter().any(|(p, a)| p == path && *a == args_hash) {
-            let paths: Vec<&str> = chain.iter().map(|(p, _)| p.as_str()).collect();
+        let meta = self.meta(path, source);
+        let meta = match meta.as_ref() {
+            Ok(m) => m,
+            Err(e) => return Err(fail(path, FailureKind::Meta, e.clone())),
+        };
+
+        // Boundary validation: every arg must name a declared (non-cascade)
+        // input and pass its schema; declared defaults fill the rest. The
+        // merged "effective args" are what the build sees and memoizes on.
+        let effective = effective_args(path, meta, args)
+            .map_err(|msg| fail(path, FailureKind::Input, msg))?;
+        let args = Value::Object(effective);
+        let args_hash = hash_json(&args);
+
+        let env = env_base
+            .with_defaults(meta.inputs.iter().filter_map(|(name, input)| {
+                input.cascade.then(|| (name, input.default.as_ref().expect("cascade has default")))
+            }));
+
+        // Validate this file's cascade inputs against its declarations, and
+        // record them as context deps up front — an unread declared input
+        // still keys memoization, or a memo hit under a different
+        // environment could diverge from a from-scratch build.
+        let mut pre_deps: Vec<Dep> = Vec::with_capacity(meta.inputs.len());
+        for (name, input) in &meta.inputs {
+            if !input.cascade {
+                continue;
+            }
+            let value = env.get(name).expect("declared cascade input is auto-provided");
+            input
+                .accept(name, value)
+                .map_err(|msg| fail(path, FailureKind::Input, format!("{path}: cascade {msg}")))?;
+            pre_deps.push(Dep::Context {
+                key: name.clone(),
+                value: odm_js::context_value_hash(Some(value)),
+            });
+        }
+
+        // Cycle = same (path, effective args, environment) already building
+        // in this chain. Keying on args+env allows legitimate bounded
+        // recursion (invoke self with a smaller depth); an identical build
+        // can never terminate.
+        if chain.iter().any(|l| l.path == path && l.args == args_hash && l.env == env.hash) {
+            let paths: Vec<&str> = chain.iter().map(|l| l.path.as_str()).collect();
             return Err(fail(
                 path,
                 FailureKind::Cycle,
                 format!(
-                    "dependency cycle (same doohickey, same args): {} -> {path}",
+                    "dependency cycle (same doohickey, same inputs): {} -> {path}",
                     paths.join(" -> ")
                 ),
             ));
         }
 
         let key = MemoKey { code: source.hash, args: args_hash };
-        let rkey = RKey { context: pass.context_hash, code: key.code, args: key.args };
+        let rkey = RKey { context: env.hash, code: key.code, args: key.args };
 
         loop {
             if let Some(entry) = self.store.memo_get(&key)
-                && self.validate(pass, chain, path, args_hash, &entry)
+                && self.validate(pass, chain, path, args_hash, &env, &entry)
             {
                 self.stats.memo_hits.fetch_add(1, Ordering::Relaxed);
                 // Replay the original run's console output so logs don't
@@ -257,7 +424,7 @@ impl BuildEngine {
                         format!(
                             "dependency cycle detected across builds at {path} \
                              (chain here: {})",
-                            chain.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>().join(" -> ")
+                            chain.iter().map(|l| l.path.as_str()).collect::<Vec<_>>().join(" -> ")
                         ),
                     ));
                 }
@@ -268,25 +435,36 @@ impl BuildEngine {
         }
 
         let code = source.code.clone();
-        let result = self.run_one(pass, chain, path, &code, api, args, key);
+        let decls = decls_json(meta);
+        let result =
+            self.run_one(pass, chain, path, &code, api, &args, &decls, &env, key, pre_deps);
         self.registry.release(rkey);
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_one(
         self: &Arc<Self>,
         pass: &Arc<Pass>,
-        chain: &[(String, Hash)],
+        chain: &[ChainLink],
         path: &str,
         code: &str,
         api: ApiVersion,
         args: &Value,
+        decls: &Value,
+        env: &Env,
         key: MemoKey,
+        pre_deps: Vec<Dep>,
     ) -> Result<Hash, BuildFailure> {
         self.stats.builds.fetch_add(1, Ordering::Relaxed);
-        let mut chain2: Vec<(String, Hash)> = chain.to_vec();
-        chain2.push((path.to_string(), key.args));
-        let invoker = EngineInvoker { engine: self.clone(), pass: pass.clone(), chain: chain2 };
+        let mut chain2: Vec<ChainLink> = chain.to_vec();
+        chain2.push(ChainLink { path: path.to_string(), args: key.args, env: env.hash });
+        let invoker = EngineInvoker {
+            engine: self.clone(),
+            pass: pass.clone(),
+            chain: chain2,
+            env: env.clone(),
+        };
 
         let pass_for_isolate = pass.clone();
         let pushed = Arc::new(AtomicBool::new(false));
@@ -298,7 +476,8 @@ impl BuildEngine {
                 code,
                 api,
                 args,
-                context: &pass.context,
+                decls,
+                context: &env.values,
                 kernel: self.kernel.clone(),
                 store: self.store.clone(),
                 cancel: Some(pass.cancel.clone()),
@@ -320,9 +499,21 @@ impl BuildEngine {
                 let mut logs = pass.logs.lock().unwrap();
                 logs.extend(out.logs.iter().map(|l| (path.to_string(), l.clone())));
                 drop(logs);
+                // The pre-recorded declaration deps subsume the ops' own
+                // records of the same keys.
+                let mut deps = pre_deps;
+                for d in out.deps {
+                    match &d {
+                        Dep::Context { key, .. }
+                            if deps.iter().any(
+                                |p| matches!(p, Dep::Context { key: k, .. } if k == key),
+                            ) => {}
+                        _ => deps.push(d),
+                    }
+                }
                 self.store.memo_insert(
                     key,
-                    MemoEntry { deps: out.deps, output: out.output, logs: out.logs },
+                    MemoEntry { deps, output: out.output, logs: out.logs },
                 );
                 Ok(out.output)
             }
@@ -341,23 +532,29 @@ impl BuildEngine {
     fn validate(
         self: &Arc<Self>,
         pass: &Arc<Pass>,
-        chain: &[(String, Hash)],
+        chain: &[ChainLink],
         path: &str,
         args_hash: Hash,
+        env: &Env,
         entry: &MemoEntry,
     ) -> bool {
         for dep in &entry.deps {
             match dep {
                 Dep::Context { key, value } => {
-                    let current = odm_js::context_value_hash(pass.context.get(key));
+                    let current = odm_js::context_value_hash(env.get(key));
                     if current != *value {
                         return false;
                     }
                 }
-                Dep::Invoke { path: dep_path, args, output } => {
-                    let mut chain2: Vec<(String, Hash)> = chain.to_vec();
-                    chain2.push((path.to_string(), args_hash));
-                    match self.get_or_build(pass, &chain2, dep_path, args) {
+                Dep::Invoke { path: dep_path, args, provides, output } => {
+                    let mut chain2: Vec<ChainLink> = chain.to_vec();
+                    chain2.push(ChainLink {
+                        path: path.to_string(),
+                        args: args_hash,
+                        env: env.hash,
+                    });
+                    let child_env = env.with_provides(provides);
+                    match self.get_or_build(pass, &chain2, dep_path, args, &child_env) {
                         Ok(out) if out == *output => {}
                         _ => return false,
                     }
@@ -368,15 +565,101 @@ impl BuildEngine {
     }
 }
 
+/// One frame of the in-progress build chain, for cycle detection.
+#[derive(Clone)]
+struct ChainLink {
+    path: String,
+    args: Hash,
+    env: Hash,
+}
+
+/// Validate caller args against the declared inputs and merge in defaults.
+pub(crate) fn effective_args(
+    path: &str,
+    meta: &Meta,
+    args: &Value,
+) -> Result<Map<String, Value>, String> {
+    let empty = Map::new();
+    let args = match args {
+        Value::Object(m) => m,
+        Value::Null => &empty,
+        _ => return Err(format!("{path}: args must be an object")),
+    };
+    let mut effective = Map::new();
+    for (name, value) in args {
+        let Some(input) = meta.inputs.get(name) else {
+            let declared: Vec<&str> = meta
+                .inputs
+                .iter()
+                .filter(|(_, i)| !i.cascade)
+                .map(|(n, _)| n.as_str())
+                .collect();
+            return Err(format!(
+                "{path}: unknown input {name:?} in args; declared args: {}",
+                if declared.is_empty() { "(none)".into() } else { declared.join(", ") }
+            ));
+        };
+        if input.cascade {
+            return Err(format!(
+                "{path}: {name:?} is a cascade input — set it via provides, not args"
+            ));
+        }
+        let v = input.accept(name, value).map_err(|msg| format!("{path}: {msg}"))?;
+        effective.insert(name.clone(), v);
+    }
+    for (name, input) in &meta.inputs {
+        if input.cascade || effective.contains_key(name) {
+            continue;
+        }
+        match &input.default {
+            Some(d) => {
+                effective.insert(name.clone(), d.clone());
+            }
+            None => {
+                return Err(format!(
+                    "{path}: required input {name:?} was not passed (and has no default)"
+                ));
+            }
+        }
+    }
+    Ok(effective)
+}
+
+/// The declaration table `ctx.get` routes and hydrates with:
+/// `{ name: { cascade, type } }`.
+fn decls_json(meta: &Meta) -> Value {
+    let mut m = Map::new();
+    for (name, input) in &meta.inputs {
+        let mut entry = Map::new();
+        entry.insert("cascade".into(), Value::Bool(input.cascade));
+        entry.insert(
+            "type".into(),
+            input.type_name().map(|t| Value::String(t.into())).unwrap_or(Value::Null),
+        );
+        m.insert(name.clone(), Value::Object(entry));
+    }
+    Value::Object(m)
+}
+
 struct EngineInvoker {
     engine: Arc<BuildEngine>,
     pass: Arc<Pass>,
-    chain: Vec<(String, Hash)>,
+    chain: Vec<ChainLink>,
+    /// The invoking build's environment; children extend it.
+    env: Env,
 }
 
 impl Invoker for EngineInvoker {
-    fn invoke(&mut self, path: &str, args: &Value) -> Result<Hash, String> {
-        self.engine.get_or_build(&self.pass, &self.chain, path, args).map_err(|f| f.message)
+    fn invoke(
+        &mut self,
+        path: &str,
+        args: &Value,
+        provides: &Map<String, Value>,
+    ) -> Result<Hash, String> {
+        let child_env = self.env.with_provides(provides);
+        self.engine
+            .get_or_build(&self.pass, &self.chain, path, args, &child_env)
+            .map_err(|f| f.message)
     }
 }
 

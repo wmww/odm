@@ -1,6 +1,6 @@
 //! odm unstable
-// assembly: doohickey composition. One wheel geometry, four placements —
-// content addressing stores the wheel mesh once.
+//! Doohickey composition: one wheel geometry, four placements — content
+//! addressing stores the wheel mesh once.
 export default function build(ctx) {
   const wheel = ctx.invoke('parts/wheel.js', { radius: 8 });
   const chassis = odm.box([70, 30, 10]).translate(0, 0, 16).color('crimson').name('chassis');

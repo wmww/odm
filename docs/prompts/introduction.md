@@ -7,9 +7,11 @@ automatically and shows the result in a viewer the user is watching. You
 inspect your work and communicate with the user through the `odm` CLI.
 
 Every `.js` file in the project is a *doohickey*: one composable piece,
-like a React component, default-exporting a pure build function.
-`main.js` is the root; its output is the scene. The sections below cover
-writing doohickey code and the CLI.
+like a React component, default-exporting a pure build function. Any
+file can be viewed and queried; `root.js` is the conventional entry
+file that CLI commands target when no path is given. The project is
+marked by `odm.toml` at its root. The sections below cover writing
+doohickey code and the CLI.
 
 ## Workflow
 

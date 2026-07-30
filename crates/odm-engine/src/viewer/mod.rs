@@ -1,15 +1,18 @@
-//! eframe/egui viewer: viewport (shared render path with headless renders),
-//! scene tree, timeline, error panel. Never blocks on builds — shows the
-//! last published scene with a building indicator.
+//! eframe/egui viewer: tabs (one view each), viewport (shared render path
+//! with headless renders), scene tree, generated input panel with a `t`
+//! transport, error panel. Never blocks on builds — shows each tab's last
+//! published scene with a building indicator.
 
 mod idle;
+mod inputs;
 mod menu;
 mod open;
+mod tabs;
 mod tree;
 
 use crate::scene;
 use crate::session::Sessions;
-use crate::state::{Delivery, EngineState, Published, Who};
+use crate::state::{Delivery, EngineState, Who};
 use crate::theme;
 use eframe::egui;
 use odm_render::math::{cross, normalize};
@@ -18,19 +21,21 @@ use odm_render::{
     Camera, Instance, Projection, RenderOptions, RenderScene, Renderer, flatten_node,
 };
 use odm_store::Object;
+use serde_json::Value;
 use std::sync::Arc;
 
 use idle::Quit;
-use tree::{TreeNode, TreeState, TreeUi, click_selection, selection_covers, tree_node_ui};
+use tabs::{Section, Tab};
+use tree::{TreeNode, TreeUi, click_selection, selection_covers, tree_node_ui};
 
 pub use idle::run_viewer;
 
 /// Orbit camera: spherical eye around a target, Z-up.
-struct Orbit {
-    target: [f64; 3],
-    distance: f64,
-    yaw: f64,
-    pitch: f64,
+pub(crate) struct Orbit {
+    pub target: [f64; 3],
+    pub distance: f64,
+    pub yaw: f64,
+    pub pitch: f64,
 }
 
 const FOV_Y_DEG: f64 = 45.0;
@@ -47,7 +52,7 @@ const ERROR_HEIGHT: f32 = 140.0;
 const CHAT_HEIGHT: f32 = 92.0;
 
 impl Orbit {
-    fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
+    pub(crate) fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
         let (center, radius) = match bounds {
             Some((min, max)) => {
                 let c = [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0, (min[2] + max[2]) / 2.0];
@@ -109,10 +114,10 @@ struct ViewportTex {
     registered: bool,
 }
 
-struct SceneCache {
+pub(crate) struct SceneCache {
     /// Materialized tree snapshot for the tree panel (IR children are hashes).
-    root: TreeNode,
-    scene: RenderScene,
+    pub root: TreeNode,
+    pub scene: RenderScene,
 }
 
 pub struct ViewerApp {
@@ -120,23 +125,19 @@ pub struct ViewerApp {
     /// The project being viewed. Swapped wholesale by File ▸ Open.
     state: Arc<EngineState>,
     renderer: Renderer,
-    published: Published,
-    scene: Option<SceneCache>,
+    /// One view each; `active` is what the viewport shows.
+    tabs: Vec<Tab>,
+    active: usize,
+    tab_counter: u64,
     tex: Option<ViewportTex>,
-    orbit: Orbit,
-    framed: bool,
     wireframe: bool,
     grid: bool,
-    t: f64,
-    scrubbing_t: f64,
-    /// Selected nodes, in pick order: (node id, name).
-    selected: Vec<(String, Option<String>)>,
-    tree: TreeState,
     needs_render: bool,
-    error_open: bool,
     /// The chat input line. The transcript itself lives in `EngineState`.
     chat_input: String,
     open_dialog: Option<open::OpenDialog>,
+    /// The new-tab file picker: Some(list of viewable files).
+    add_tab: Option<Vec<String>>,
     /// File ▸ Exit; acted on by the event loop (see `idle.rs`).
     quit: Quit,
 }
@@ -149,66 +150,101 @@ impl ViewerApp {
         // Repaint on publish instead of polling: an idle viewer must not wake up.
         let ctx = cc.egui_ctx.clone();
         sessions.set_wake(Arc::new(move || ctx.request_repaint()));
-        ViewerApp {
+        let mut app = ViewerApp {
             state: sessions.current(),
             sessions,
             renderer,
-            published: Published::default(),
-            scene: None,
+            tabs: Vec::new(),
+            active: 0,
+            tab_counter: 0,
             tex: None,
-            orbit: Orbit::framed(None),
-            framed: false,
             wireframe: false,
             grid: true,
-            t: 0.0,
-            scrubbing_t: 0.0,
-            selected: Vec::new(),
-            tree: TreeState::default(),
             needs_render: true,
-            error_open: true,
             chat_input: String::new(),
             open_dialog: None,
+            add_tab: None,
             quit,
+        };
+        app.init_tabs();
+        app
+    }
+
+    /// Restore tabs from `.odm/viewer.json`, or start with one default-view
+    /// tab, and register them as the engine's active views (replacing the
+    /// headless default slot).
+    fn init_tabs(&mut self) {
+        let project = self.state.project().to_path_buf();
+        let mut counter = self.tab_counter;
+        let mut next_slot = || {
+            counter += 1;
+            format!("tab-{counter}")
+        };
+        let (tabs, active) = tabs::load(&project, &mut next_slot).unwrap_or_else(|| {
+            (vec![Tab::new(next_slot(), odm_build::DEFAULT_ROOT.to_string())], 0)
+        });
+        drop(next_slot);
+        self.tab_counter = counter;
+        self.tabs = tabs;
+        self.active = active;
+        // The tabs are the active views now; the engine's own default slot
+        // would just double-build tab 0.
+        self.state.remove_view(crate::state::DEFAULT_SLOT);
+        for tab in &self.tabs {
+            self.state.set_view(&tab.slot, tab.view());
         }
+        self.state.set_active_slot(Some(self.tab().slot.clone()));
+    }
+
+    fn tab(&self) -> &Tab {
+        &self.tabs[self.active]
+    }
+
+    fn tab_mut(&mut self) -> &mut Tab {
+        &mut self.tabs[self.active]
+    }
+
+    fn save_tabs(&self) {
+        tabs::save(self.state.project(), &self.tabs, self.active);
     }
 
     /// Point the whole viewer at another project: new engine, blank slate. The
     /// camera reframes on the first build, as it does at startup.
     fn open_project(&mut self, project: &std::path::Path, ctx: &egui::Context) -> Result<(), String> {
         self.state = self.sessions.open(project)?;
-        self.published = Published::default();
-        self.scene = None;
-        self.framed = false;
-        self.t = 0.0;
-        self.scrubbing_t = 0.0;
-        self.tree = TreeState::default();
-        self.error_open = true;
+        self.tabs.clear();
+        self.tab_counter = 0;
+        self.init_tabs();
         // The new session has its own (empty) transcript; the half-typed line
         // was meant for the old one.
         self.chat_input.clear();
-        self.set_selection(Vec::new());
+        self.state.set_selection(Vec::new());
         // Nothing of the old project should still be resident, or on screen.
         self.renderer.prune_cache(&|_| false);
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.state.project())));
+        self.needs_render = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(&self.state)));
         Ok(())
     }
 
     fn frame_scene(&mut self) {
-        if let Some(scene) = &self.scene {
-            self.orbit = Orbit::framed(scene.scene.bounds);
+        let tab = self.tab_mut();
+        if let Some(scene) = &tab.scene {
+            tab.orbit = Orbit::framed(scene.scene.bounds);
             self.needs_render = true;
         }
     }
 
-    /// Pull the latest published build; re-flatten on change.
+    /// Pull the active tab's latest published build; re-flatten on change.
     fn poll_published(&mut self, ctx: &egui::Context) {
-        let p = self.state.published();
-        if p.revision == self.published.revision {
+        let tab = &mut self.tabs[self.active];
+        let p = self.state.published(&tab.slot);
+        if p.revision == tab.published.revision {
             return;
         }
         let engine = self.state.build_engine();
+        let mut selection_reset = false;
         if let Some((root_hash, root_obj)) = &p.root
-            && self.published.root.as_ref().map(|(h, _)| h) != Some(root_hash)
+            && tab.published.root.as_ref().map(|(h, _)| h) != Some(root_hash)
             && let Object::Node(root) = &**root_obj
         {
             // The root object is kept alive by the Arc in Published, but its
@@ -227,21 +263,210 @@ impl ViewerApp {
             let Some(tree) = TreeNode::from_node(&engine.store, root) else {
                 return retry("tree materialize", ctx);
             };
-            if !self.framed && scene.bounds.is_some() {
-                self.orbit = Orbit::framed(scene.bounds);
-                self.framed = true;
+            if !tab.framed && scene.bounds.is_some() {
+                tab.orbit = Orbit::framed(scene.bounds);
+                tab.framed = true;
             }
-            // Drop GPU buffers for meshes no longer shown (unbounded otherwise,
-            // e.g. while scrubbing the timeline).
+            // Drop GPU buffers for meshes no longer shown (unbounded
+            // otherwise, e.g. while scrubbing t).
             self.renderer.prune_cache(&|h| scene.meshes.contains_key(h));
-            self.scene = Some(SceneCache { root: tree, scene });
+            tab.scene = Some(SceneCache { root: tree, scene });
+            selection_reset = true;
+            self.needs_render = true;
+        }
+        tab.published = p;
+        if selection_reset {
             self.set_selection(Vec::new());
         }
-        if !scrub_eq(self.t, p.t) && !p.building {
-            self.t = p.t;
-            self.scrubbing_t = p.t;
+    }
+
+    /// Advance the `t` transport while playing: 1 unit/second, looping over
+    /// the declared range.
+    fn advance_transport(&mut self, ctx: &egui::Context) {
+        if !self.tab().playing {
+            return;
         }
-        self.published = p;
+        let Some(entry) = inputs::transport_entry(self.tab()) else {
+            self.tab_mut().playing = false;
+            return;
+        };
+        let dt = ctx.input(|i| i.stable_dt).min(0.25) as f64;
+        let (min, max) = (entry.minimum.unwrap_or(0.0), entry.maximum.unwrap_or(1.0));
+        let span = (max - min).max(1e-9);
+        let current = self
+            .tab()
+            .shown_value(Section::Cascade, &entry)
+            .as_f64()
+            .unwrap_or(min);
+        let next = min + (current - min + dt).rem_euclid(span);
+        self.apply_input_events(vec![inputs::Event::Set(
+            Section::Cascade,
+            entry.name,
+            serde_json::Number::from_f64(next).map(Value::Number).unwrap_or(Value::Null),
+        )]);
+        ctx.request_repaint();
+    }
+
+    /// Turn panel interactions into the tab's new view, and hand it to the
+    /// engine (latest-wins per slot).
+    fn apply_input_events(&mut self, events: Vec<inputs::Event>) {
+        if events.is_empty() {
+            return;
+        }
+        let report = self.tab().published.report.clone();
+        let tab = self.tab_mut();
+        for event in events {
+            match event {
+                inputs::Event::Set(section, name, value) => {
+                    match section {
+                        Section::Arg => tab.set_args.insert(name, value),
+                        Section::Cascade => tab.set_provides.insert(name, value),
+                    };
+                }
+                inputs::Event::Clear(section, name) => {
+                    match section {
+                        Section::Arg => tab.set_args.remove(&name),
+                        Section::Cascade => tab.set_provides.remove(&name),
+                    };
+                }
+                inputs::Event::Preset(name) => {
+                    if let Some((_, bundle)) = report.presets.iter().find(|(n, _)| *n == name) {
+                        for (input, value) in bundle {
+                            // Split by which section of the report the name
+                            // lives in (presets only name declared inputs).
+                            if report.args.iter().any(|e| &e.name == input) {
+                                tab.set_args.insert(input.clone(), value.clone());
+                            } else {
+                                tab.set_provides.insert(input.clone(), value.clone());
+                            }
+                        }
+                    }
+                }
+                inputs::Event::Play(on) => tab.playing = on,
+            }
+        }
+        let (slot, view) = (tab.slot.clone(), tab.view());
+        self.state.set_view(&slot, view);
+        self.save_tabs();
+    }
+
+    // --- tabs ---
+
+    fn next_slot(&mut self) -> String {
+        self.tab_counter += 1;
+        format!("tab-{}", self.tab_counter)
+    }
+
+    fn switch_tab(&mut self, index: usize) {
+        if index == self.active || index >= self.tabs.len() {
+            return;
+        }
+        self.active = index;
+        self.needs_render = true;
+        // The CLI's `odm selection` and `--viewer-state` follow the tab the
+        // user is looking at.
+        self.state.set_selection(self.tab().selected.clone());
+        self.state.set_active_slot(Some(self.tab().slot.clone()));
+        self.save_tabs();
+    }
+
+    fn add_tab(&mut self, path: String) {
+        let slot = self.next_slot();
+        let tab = Tab::new(slot.clone(), path);
+        self.state.set_view(&slot, tab.view());
+        self.tabs.push(tab);
+        self.active = self.tabs.len() - 1;
+        self.needs_render = true;
+        self.state.set_selection(Vec::new());
+        self.state.set_active_slot(Some(self.tab().slot.clone()));
+        self.save_tabs();
+    }
+
+    fn close_tab(&mut self, index: usize) {
+        if self.tabs.len() <= 1 || index >= self.tabs.len() {
+            return; // the last tab stays
+        }
+        let tab = self.tabs.remove(index);
+        self.state.remove_view(&tab.slot);
+        if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        }
+        self.needs_render = true;
+        self.state.set_selection(self.tab().selected.clone());
+        self.state.set_active_slot(Some(self.tab().slot.clone()));
+        self.save_tabs();
+    }
+
+    /// The tab strip: one button per tab, × closes the active one, + opens
+    /// the file picker.
+    fn tab_bar(&mut self, ui: &mut egui::Ui) {
+        let mut switch: Option<usize> = None;
+        let mut close: Option<usize> = None;
+        let mut add = false;
+        ui.horizontal(|ui| {
+            for (i, tab) in self.tabs.iter().enumerate() {
+                let current = i == self.active;
+                let label =
+                    if current { format!("[{}]", tab.label()) } else { tab.label().to_string() };
+                let button = theme::button(ui, label);
+                let button = match &tab.published.error {
+                    Some(_) => button.on_hover_text("build error"),
+                    None => button.on_hover_text(&tab.path),
+                };
+                if button.clicked() {
+                    switch = Some(i);
+                }
+            }
+            if self.tabs.len() > 1 && theme::button(ui, "×").on_hover_text("close tab").clicked()
+            {
+                close = Some(self.active);
+            }
+            if theme::button(ui, "+").on_hover_text("new tab").clicked() {
+                add = true;
+            }
+        });
+        if let Some(i) = switch {
+            self.switch_tab(i);
+        }
+        if let Some(i) = close {
+            self.close_tab(i);
+        }
+        if add {
+            // A fresh scan so the picker lists what is on disk right now.
+            let files = match self.state.build_engine().sync() {
+                Ok(sync) => sync.snapshot.sources.keys().cloned().collect(),
+                Err(_) => Vec::new(),
+            };
+            self.add_tab = Some(files);
+        }
+    }
+
+    /// The new-tab picker: a modal list of every viewable file.
+    fn add_tab_ui(&mut self, ctx: &egui::Context) {
+        let Some(files) = self.add_tab.clone() else { return };
+        let mut picked: Option<String> = None;
+        let response = theme::dialog(ctx, "add-tab", "New tab", 300.0, |ui| {
+            let size = egui::vec2(ui.available_width(), 180.0);
+            theme::list_box(ui, "add-tab-list", size, egui::Vec2b::new(false, true), |ui| {
+                if files.is_empty() {
+                    ui.label(
+                        egui::RichText::new("no .js files in this project")
+                            .color(theme::WEAK_TEXT),
+                    );
+                }
+                for f in &files {
+                    if theme::list_row(ui, crate::icons::Icon::Project, f, false).clicked() {
+                        picked = Some(f.clone());
+                    }
+                }
+            });
+        });
+        if let Some(path) = picked {
+            self.add_tab = None;
+            self.add_tab(path);
+        } else if response.dismissed {
+            self.add_tab = None;
+        }
     }
 
     fn ensure_viewport(&mut self, frame: &mut eframe::Frame, size: [u32; 2]) {
@@ -321,7 +546,7 @@ impl ViewerApp {
     /// with, so clicks land on exactly what was drawn.
     fn view_opts(&self, size: [u32; 2]) -> RenderOptions {
         let mut opts = RenderOptions::default_with(size[0], size[1]);
-        opts.camera = self.orbit.camera();
+        opts.camera = self.tab().orbit.camera();
         opts.wireframe = self.wireframe;
         opts.grid = self.grid;
         opts
@@ -330,10 +555,11 @@ impl ViewerApp {
     fn render_viewport(&mut self) {
         let Some(tex) = &self.tex else { return };
         let opts = self.view_opts(tex.size);
+        let tab = &self.tabs[self.active];
         // No build yet (startup, or a project just opened): draw the empty
         // scene, so the previous project isn't left on screen.
         let empty;
-        let Some(scene) = &self.scene else {
+        let Some(scene) = &tab.scene else {
             empty = RenderScene { instances: Vec::new(), meshes: Default::default(), bounds: None };
             if let Err(e) = self.renderer.render_to_views(
                 &empty,
@@ -350,7 +576,7 @@ impl ViewerApp {
 
         // Highlight the selected instances by brightening their color.
         let highlighted;
-        let render_scene = if self.selected.is_empty() {
+        let render_scene = if tab.selected.is_empty() {
             &scene.scene
         } else {
             let instances = scene
@@ -359,7 +585,7 @@ impl ViewerApp {
                 .iter()
                 .map(|inst| {
                     let mut color = inst.color;
-                    if self.selected.iter().any(|(sel, _)| selection_covers(sel, &inst.id)) {
+                    if tab.selected.iter().any(|(sel, _)| selection_covers(sel, &inst.id)) {
                         color = [
                             color[0] * 0.4 + 0.6,
                             color[1] * 0.4 + 0.45,
@@ -398,7 +624,8 @@ impl ViewerApp {
 
     /// Ray through a viewport pixel (uv in 0..1, y down).
     fn pick_ray(&self, uv: [f32; 2], aspect: f64) -> ([f64; 3], [f64; 3]) {
-        let (s, u, f) = self.orbit.basis();
+        let orbit = &self.tab().orbit;
+        let (s, u, f) = orbit.basis();
         let tan_y = (FOV_Y_DEG / 2.0).to_radians().tan();
         let tan_x = tan_y * aspect;
         let x = (uv[0] as f64 * 2.0 - 1.0) * tan_x;
@@ -408,7 +635,7 @@ impl ViewerApp {
             f[1] + x * s[1] + y * u[1],
             f[2] + x * s[2] + y * u[2],
         ]);
-        (self.orbit.eye(), dir)
+        (orbit.eye(), dir)
     }
 
     fn viewport_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -429,34 +656,36 @@ impl ViewerApp {
             || (response.dragged_by(egui::PointerButton::Primary) && modifiers.shift)
         {
             let d = response.drag_delta();
-            let (s, u, _f) = self.orbit.basis();
-            let k = self.orbit.distance
+            let orbit = &mut self.tab_mut().orbit;
+            let (s, u, _f) = orbit.basis();
+            let k = orbit.distance
                 * (FOV_Y_DEG / 2.0).to_radians().tan()
                 * 2.0
                 / rect.height() as f64;
             for i in 0..3 {
-                self.orbit.target[i] -= d.x as f64 * k * s[i];
-                self.orbit.target[i] += d.y as f64 * k * u[i];
+                orbit.target[i] -= d.x as f64 * k * s[i];
+                orbit.target[i] += d.y as f64 * k * u[i];
             }
             self.needs_render = true;
         } else if response.dragged_by(egui::PointerButton::Primary) {
             let d = response.drag_delta();
-            self.orbit.yaw -= d.x as f64 * 0.008;
-            self.orbit.pitch = (self.orbit.pitch + d.y as f64 * 0.008)
-                .clamp(-1.55, 1.55);
+            let orbit = &mut self.tab_mut().orbit;
+            orbit.yaw -= d.x as f64 * 0.008;
+            orbit.pitch = (orbit.pitch + d.y as f64 * 0.008).clamp(-1.55, 1.55);
             self.needs_render = true;
         }
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.0 {
-                self.orbit.distance =
-                    (self.orbit.distance * (-scroll as f64 * 0.002).exp()).max(1e-3);
+                let orbit = &mut self.tab_mut().orbit;
+                orbit.distance = (orbit.distance * (-scroll as f64 * 0.002).exp()).max(1e-3);
                 self.needs_render = true;
             }
         }
         // Not while a dialog is up or a field has the caret — "F" is a letter
         // in a path before it is a shortcut.
         if self.open_dialog.is_none()
+            && self.add_tab.is_none()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|i| i.key_pressed(egui::Key::F))
         {
@@ -503,7 +732,7 @@ impl ViewerApp {
 
     /// Nearest solid surface along the ray (shaded mode).
     fn pick_solid(&self, origin: [f64; 3], dir: [f64; 3]) -> Option<(String, Option<String>)> {
-        let scene = self.scene.as_ref()?;
+        let scene = self.tab().scene.as_ref()?;
         let kernel = &self.state.build_engine().kernel;
         let hit = scene::raycast(kernel, &scene.scene.instances, origin, dir)?;
         Some((
@@ -519,7 +748,7 @@ impl ViewerApp {
         point_px: [f64; 2],
         pixels_per_point: f32,
     ) -> Option<(String, Option<String>)> {
-        let (scene, tex) = (self.scene.as_ref()?, self.tex.as_ref()?);
+        let (scene, tex) = (self.tab().scene.as_ref()?, self.tex.as_ref()?);
         let radius = PICK_RADIUS_PT * pixels_per_point as f64;
         let hit = odm_render::pick_wire(&scene.scene, &self.view_opts(tex.size), point_px, radius)?;
         let inst = scene.scene.instances.get(hit.instance)?;
@@ -527,19 +756,21 @@ impl ViewerApp {
     }
 
     fn set_selection(&mut self, sel: Vec<(String, Option<String>)>) {
-        self.selected = sel;
-        self.tree.reveal(&self.selected);
-        self.state.set_selection(self.selected.clone());
+        let tab = &mut self.tabs[self.active];
+        tab.selected = sel;
+        tab.tree.reveal(&tab.selected);
+        self.state.set_selection(tab.selected.clone());
         self.needs_render = true;
     }
 
     fn click_select(&mut self, hit: Option<(String, Option<String>)>, additive: bool) {
-        let sel = click_selection(std::mem::take(&mut self.selected), hit, additive);
+        let selected = std::mem::take(&mut self.tab_mut().selected);
+        let sel = click_selection(selected, hit, additive);
         self.set_selection(sel);
     }
 
     fn tree_ui(&mut self, ui: &mut egui::Ui) {
-        let ViewerApp { scene, tree, selected, .. } = self;
+        let Tab { scene, tree, selected, .. } = &mut self.tabs[self.active];
         let Some(scene) = scene.as_ref() else {
             ui.label("no build yet");
             return;
@@ -595,8 +826,8 @@ impl ViewerApp {
 
     fn bottom_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            theme::status_field(ui, format!("gen {}", self.published.generation));
-            if self.published.building {
+            theme::status_field(ui, format!("gen {}", self.tab().published.generation));
+            if self.tab().published.building {
                 theme::status_field(ui, "Building…");
             }
             // The user's cue to go prod the agent in its own terminal.
@@ -607,7 +838,7 @@ impl ViewerApp {
                     _ => "agent is listening",
                 },
             );
-            match self.selected.as_slice() {
+            match self.tab().selected.as_slice() {
                 [] => {}
                 [(id, _)] => theme::status_field(
                     ui,
@@ -617,22 +848,17 @@ impl ViewerApp {
             }
         });
 
-        if let Some(duration) = self.published.duration {
-            ui.horizontal(|ui| {
-                ui.label("t");
-                if theme::trackbar(ui, &mut self.scrubbing_t, 0.0..=duration).changed()
-                    && !scrub_eq(self.scrubbing_t, self.t)
-                {
-                    self.t = self.scrubbing_t;
-                    self.state.request_build(self.t);
-                }
-                theme::status_field(ui, format!("{:.2} s", self.scrubbing_t));
-            });
+        // The t transport: a ranged fall-through number named `t` becomes a
+        // timeline (scrub + play at 1 unit/sec, looping over its range).
+        if let Some(entry) = inputs::transport_entry(self.tab()) {
+            let events = inputs::transport_ui(ui, self.tab(), &entry);
+            self.apply_input_events(events);
         }
 
-        if let Some(err) = &self.published.error {
+        if let Some(err) = &self.tab().published.error {
             let err = err.clone();
-            theme::collapsing(ui, "build-error", &mut self.error_open, "Build error", theme::ERROR, |ui| {
+            let error_open = &mut self.tabs[self.active].error_open;
+            theme::collapsing(ui, "build-error", error_open, "Build error", theme::ERROR, |ui| {
                 let size = egui::vec2(ui.available_width(), ERROR_HEIGHT);
                 theme::list_box(ui, "error", size, egui::Vec2b::new(false, true), |ui| {
                     ui.label(egui::RichText::new(err).monospace());
@@ -645,11 +871,16 @@ impl ViewerApp {
 impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.poll_published(ui.ctx());
+        self.advance_transport(ui.ctx());
 
         let menu = egui::Panel::top("menubar")
             .frame(egui::Frame::new().fill(theme::FACE).inner_margin(egui::Margin::symmetric(2, 1)))
             .show(ui, |ui| menu::bar(self, ui));
         theme::band(ui, menu.response.rect);
+        let tab_bar = egui::Panel::top("tabs")
+            .frame(theme::panel_frame())
+            .show(ui, |ui| self.tab_bar(ui));
+        theme::band(ui, tab_bar.response.rect);
         let left = egui::Panel::left("tree")
             .resizable(true)
             .default_size(240.0)
@@ -659,6 +890,19 @@ impl eframe::App for ViewerApp {
                 theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| self.tree_ui(ui));
             });
         theme::band(ui, left.response.rect);
+        let right = egui::Panel::right("inputs")
+            .resizable(true)
+            .default_size(230.0)
+            .frame(theme::panel_frame())
+            .show(ui, |ui| {
+                let size = ui.available_size();
+                let mut events = Vec::new();
+                theme::list_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
+                    events = inputs::panel_ui(ui, &mut self.tabs[self.active], true);
+                });
+                self.apply_input_events(events);
+            });
+        theme::band(ui, right.response.rect);
         let bottom = egui::Panel::bottom("timeline")
             .frame(theme::panel_frame())
             .show(ui, |ui| self.bottom_ui(ui));
@@ -671,6 +915,8 @@ impl eframe::App for ViewerApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| self.viewport_ui(ui, frame));
+
+        self.add_tab_ui(ui.ctx());
 
         // Last, so the modal's backdrop covers everything above. Taken out of
         // `self` for the call, since opening a project touches all of it.
@@ -695,12 +941,16 @@ impl eframe::App for ViewerApp {
     }
 }
 
-fn scrub_eq(a: f64, b: f64) -> bool {
-    (a - b).abs() < 1e-9
-}
-
-/// Window title for a project. Re-applied whenever File ▸ Open swaps one in.
-fn window_title(project: &std::path::Path) -> String {
-    let name = project.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+/// Window title for a project: the odm.toml name when there is one, else
+/// the directory name. Re-applied whenever File ▸ Open swaps a project in.
+fn window_title(state: &EngineState) -> String {
+    let project = state.project();
+    let name = odm_build::read_marker(project)
+        .ok()
+        .flatten()
+        .map(|m| m.name)
+        .unwrap_or_else(|| {
+            project.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+        });
     format!("ODM — {name}")
 }

@@ -8,12 +8,13 @@ a single JSON object. Exit code 0 = ok, nonzero = error. (`prompt` and
 `docs` are the exceptions: no engine, and markdown rather than JSON.)
 
 ```
-odm status                    # files, generation, animation duration
-odm build [--t 1.5]           # build only; errors + console logs
-odm tree [--t] [--depth N]    # node ids, names, meshes, world bounds
-odm inspect <node-id> [--t]   # volume, area, bounds, world matrix
-odm raycast --origin 0,0,50 --dir 0,0,-1 [--t]
-odm render [options]          # PNG → prints path
+odm status                    # files, generation, project name
+odm build [<path>] [--set name=value ...] [--preset <name>]
+odm tree [<path>] [--set ...] [--depth N]
+odm inspect <node-id> [--path <p>] [--set ...]
+odm raycast --origin 0,0,50 --dir 0,0,-1 [--path <p>] [--set ...]
+odm render [<path>] [--set ...] [options]    # PNG → prints path
+odm interface [<path>]        # a file's description, input schemas, presets
 odm selection                 # what the user selected in the viewer
 odm poll [--timeout <sec>]    # wait for messages from the user
 odm say <text>                # send a message to the user
@@ -22,12 +23,20 @@ odm docs [<topic>]            # full API reference (list topics when bare)
 odm docs search <pattern>     # grep the reference, whole sections out
 ```
 
+Every scene query targets a **view**: a doohickey (default `root.js`)
+built with its declared input defaults. `--set name=value` sets any
+input — values parse as JSON, falling back to plain strings (`--set
+t=1.5`, `--set finish=painted`, `--set 'size=[10,20,5]'`); a typo'd
+name is an error listing the settable inputs. `--preset <name>`
+applies a preset from the target's meta first. The `inputs` field of a
+build response lists what is settable (the fall-through report).
+
 Node ids are child-index paths from the root (`""`, `0`, `0/2`); get
 them from `odm tree`.
 
 ## Rendering
 
-Options: `--t sec`, `--width/--height px` (default 1024×768),
+Options: `--width/--height px` (default 1024×768),
 `--out file.png` (default under `.odm/renders/`), `--wireframe` (edges
 only, in each object's own color — surfaces are not drawn), `--no-grid`,
 `--ortho`, `--direction x,y,z` (auto-framed view from that direction;
@@ -39,7 +48,8 @@ odm render                                   # framed isometric
 odm render --direction 0,0,-1 --ortho        # top view (plan)
 odm render --direction -1,0,0 --ortho        # side elevation
 odm render --wireframe --width 1600          # inspect topology
-odm render --t 2.5 --out /tmp/frame.png      # animation frame
+odm render --set t=2.5 --out /tmp/frame.png  # one moment of an animation
+odm render parts/wheel.js --set radius=12    # view one part alone
 ```
 
 Don't read dimensions off pixels — `tree`/`inspect`/`raycast` are exact.
@@ -51,7 +61,10 @@ you collect them with `odm poll`:
 
 - `odm poll` blocks until at least one message is queued, then prints
   them all — `{"ok": true, "messages": [{"text": "..."}, ...]}` — and
-  exits. If messages are already waiting it returns immediately.
+  exits. If messages are already waiting it returns immediately. The
+  response's `view` field is a snapshot of what the user was looking at
+  (viewer tab path, its input values, their selection) — context for
+  the words next to it.
 - It also exits (nonzero) if the engine goes away, so it never hangs
   forever. `--timeout <sec>` additionally bounds the wait, exiting with
   `"messages": []` — use it if your harness limits how long a command
@@ -76,6 +89,8 @@ the user's own messages. Use it to answer questions and report what you
 did — the rebuilt scene speaks for itself, so keep it short. Don't use
 `say` for progress narration on every edit.
 
-When the user refers to a part ("make *this* one longer"), check
-`odm selection` — clicked parts appear there as `{node, name}`, in pick
-order (shift-click selects several).
+When the user refers to a part ("make *this* one longer"), the poll's
+`view.selection` (or `odm selection`) has it — clicked parts appear as
+`{node, name}`, in pick order (shift-click selects several). To query
+exactly what the user is seeing (their tab, their input values), add
+`--viewer-state` to any scene query.

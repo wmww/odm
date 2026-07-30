@@ -106,6 +106,7 @@ fn memo_round_trip() {
         deps: vec![Dep::Invoke {
             path: "parts/wheel.js".into(),
             args: serde_json::json!({"r": 2}),
+            provides: serde_json::Map::new(),
             output: Hash::of_bytes(b"o"),
         }],
         output: Hash::of_bytes(b"out"),

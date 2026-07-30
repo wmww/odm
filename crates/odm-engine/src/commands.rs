@@ -4,18 +4,18 @@
 use crate::scene;
 use crate::server::Conn;
 use crate::state::{EngineState, PollOutcome};
-use odm_build::{BuildFailure, FailureKind, PassResult};
+use odm_build::{BuildFailure, FailureKind, PassResult, SyncResult, View, check_set_names};
 use odm_ir::Node;
 use odm_js::LogLine;
 use odm_render::{Camera, Projection, RenderOptions, flatten_scene};
 use odm_store::Object;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 const COMMANDS: &str =
-    "status, sync, build, render, tree, inspect, raycast, selection, poll, say";
+    "status, sync, build, render, tree, inspect, raycast, selection, interface, poll, say";
 
 /// One socket request. Unknown commands *and* unknown fields are errors, so
 /// agents hear about typos instead of silently getting a default.
@@ -25,30 +25,56 @@ enum Request {
     // Braces (not unit variants) so `deny_unknown_fields` applies here too.
     Status {},
     Sync {},
+    // The (path, set, preset) trio is spelled out per variant instead of a
+    // #[serde(flatten)] ViewReq: flatten silently disables
+    // deny_unknown_fields, and a typo'd option must stay an error.
     Build {
+        path: Option<String>,
         #[serde(default)]
-        t: f64,
+        set: Map<String, Value>,
+        preset: Option<String>,
+        view: Option<String>,
+        #[serde(default)]
+        viewer_state: bool,
     },
     Render(RenderReq),
     Tree {
+        path: Option<String>,
         #[serde(default)]
-        t: f64,
+        set: Map<String, Value>,
+        preset: Option<String>,
+        view: Option<String>,
+        #[serde(default)]
+        viewer_state: bool,
         #[serde(default = "default_depth")]
         depth: f64,
     },
     Inspect {
+        path: Option<String>,
         #[serde(default)]
-        t: f64,
+        set: Map<String, Value>,
+        preset: Option<String>,
+        view: Option<String>,
+        #[serde(default)]
+        viewer_state: bool,
         #[serde(default)]
         node: String,
     },
     Raycast {
+        path: Option<String>,
         #[serde(default)]
-        t: f64,
+        set: Map<String, Value>,
+        preset: Option<String>,
+        view: Option<String>,
+        #[serde(default)]
+        viewer_state: bool,
         origin: Option<[f64; 3]>,
         dir: Option<[f64; 3]>,
     },
     Selection {},
+    Interface {
+        path: Option<String>,
+    },
     Poll {
         timeout: Option<f64>,
     },
@@ -61,11 +87,41 @@ enum Request {
     Ack {},
 }
 
+/// What a query targets: a doohickey path (default: `root.js`, when it
+/// exists) plus input values. `set` names any input — declared plain inputs
+/// become view args, everything else a view-level provide; `preset` applies
+/// a named bundle from the target's meta first.
+#[derive(Default)]
+struct ViewReq {
+    path: Option<String>,
+    set: Map<String, Value>,
+    preset: Option<String>,
+    /// Adopt a viewer tab's state as the base view: `view` names a slot
+    /// (see status.views), `viewer_state` takes the user's active tab.
+    view: Option<String>,
+    viewer_state: bool,
+}
+
+fn view_req(
+    path: Option<String>,
+    set: Map<String, Value>,
+    preset: Option<String>,
+    view: Option<String>,
+    viewer_state: bool,
+) -> ViewReq {
+    ViewReq { path, set, preset, view, viewer_state }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RenderReq {
+    path: Option<String>,
     #[serde(default)]
-    t: f64,
+    set: Map<String, Value>,
+    preset: Option<String>,
+    view: Option<String>,
+    #[serde(default)]
+    viewer_state: bool,
     // Sizes stay f64: the CLI sends JSON numbers that may carry a `.0`.
     #[serde(default = "default_width")]
     width: f64,
@@ -121,6 +177,8 @@ impl CmdError {
             FailureKind::MissingDoohickey => "missing-doohickey",
             FailureKind::BadOutput => "bad-output",
             FailureKind::Version => "bad-version",
+            FailureKind::Meta => "bad-meta",
+            FailureKind::Input => "bad-input",
             FailureKind::Internal => "internal",
         };
         CmdError {
@@ -178,12 +236,21 @@ impl EngineState {
         match req {
             // Every command syncs first, so `sync` is just `status`.
             Request::Status {} | Request::Sync {} => self.cmd_status(),
-            Request::Build { t } => self.cmd_build(t),
+            Request::Build { path, set, preset, view, viewer_state } => {
+                self.cmd_build(view_req(path, set, preset, view, viewer_state))
+            }
             Request::Render(r) => self.cmd_render(r),
-            Request::Tree { t, depth } => self.cmd_tree(t, depth as usize),
-            Request::Inspect { t, node } => self.cmd_inspect(t, &node),
-            Request::Raycast { t, origin, dir } => self.cmd_raycast(t, origin, dir),
+            Request::Tree { path, set, preset, view, viewer_state, depth } => {
+                self.cmd_tree(view_req(path, set, preset, view, viewer_state), depth as usize)
+            }
+            Request::Inspect { path, set, preset, view, viewer_state, node } => {
+                self.cmd_inspect(view_req(path, set, preset, view, viewer_state), &node)
+            }
+            Request::Raycast { path, set, preset, view, viewer_state, origin, dir } => {
+                self.cmd_raycast(view_req(path, set, preset, view, viewer_state), origin, dir)
+            }
             Request::Selection {} => self.cmd_selection(),
+            Request::Interface { path } => self.cmd_interface(path.as_deref()),
             Request::Poll { .. } | Request::Say { .. } | Request::Ack {} => {
                 unreachable!("handled above")
             }
@@ -193,21 +260,175 @@ impl EngineState {
     fn cmd_status(&self) -> Result<Value, CmdError> {
         let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
         let files: Vec<&String> = sync.snapshot.sources.keys().collect();
+        let active = self.active_view().map(|(slot, _)| slot);
+        let views: Vec<Value> = self
+            .views()
+            .into_iter()
+            .map(|(slot, view)| {
+                let mut set = view.args.clone();
+                set.extend(view.provides.clone());
+                json!({
+                    "slot": slot,
+                    "path": view.path,
+                    "set": set,
+                    "active": Some(&slot) == active.as_ref(),
+                })
+            })
+            .collect();
         Ok(json!({
             "project": self.project().display().to_string(),
+            "name": sync.snapshot.marker.as_ref().map(|m| m.name.clone()),
             "generation": sync.generation.0,
             "files": files,
-            "animation": sync.snapshot.manifest.animation.as_ref().map(|a| json!({ "duration": a.duration })),
-            "has_root": sync.snapshot.sources.contains_key("main.js"),
+            // The default view target (`root.js`) is a convention, not a
+            // requirement — queries can name any file.
+            "default_view": sync.snapshot.sources.contains_key(odm_build::DEFAULT_ROOT),
+            // Active view slots (viewer tabs, or the headless default);
+            // `--view <slot>` / `--viewer-state` adopt their state.
+            "views": views,
         }))
     }
 
-    fn cmd_build(&self, t: f64) -> Result<Value, CmdError> {
-        let (sync, result) = self.build_at(t, false)?;
+    /// Resolve a request's (path, set, preset) into a `View` against a
+    /// sync. `set`/preset values on declared plain inputs become view args;
+    /// everything else (declared cascade or aimed at descendants) becomes a
+    /// view-level provide.
+    fn resolve_view(&self, sync: &SyncResult, req: &ViewReq) -> Result<View, CmdError> {
+        // A viewer tab's state as the base: its path AND its input values;
+        // --set/--preset then override on top.
+        let base: Option<View> = if req.viewer_state {
+            match self.active_view() {
+                Some((_, view)) => Some(view),
+                None => {
+                    return Err(CmdError::bad_request(
+                        "no active viewer tab (is a viewer running?)",
+                    ));
+                }
+            }
+        } else if let Some(slot) = &req.view {
+            match self.view_of(slot) {
+                Some(view) => Some(view),
+                None => {
+                    let slots: Vec<String> =
+                        self.views().into_iter().map(|(s, v)| format!("{s} ({})", v.path)).collect();
+                    return Err(CmdError::bad_request(format!(
+                        "no view slot {slot:?}; active views: {}",
+                        if slots.is_empty() { "(none)".into() } else { slots.join(", ") }
+                    )));
+                }
+            }
+        } else {
+            None
+        };
+
+        let path = match (&req.path, &base) {
+            (Some(p), _) => p.clone(),
+            (None, Some(b)) => b.path.clone(),
+            (None, None) => {
+                if sync.snapshot.sources.contains_key(odm_build::DEFAULT_ROOT) {
+                    odm_build::DEFAULT_ROOT.to_string()
+                } else {
+                    let files: Vec<&str> =
+                        sync.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
+                    return Err(CmdError::bad_request(format!(
+                        "no {} in this project — name a doohickey to view; viewable files: {}",
+                        odm_build::DEFAULT_ROOT,
+                        if files.is_empty() { "(no .js files)".into() } else { files.join(", ") }
+                    )));
+                }
+            }
+        };
+        let Some(source) = sync.snapshot.sources.get(&path) else {
+            let files: Vec<&str> =
+                sync.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
+            return Err(CmdError::bad_request(format!(
+                "no doohickey at {path:?}; project has: {}",
+                if files.is_empty() { "(no .js files)".into() } else { files.join(", ") }
+            )));
+        };
+        let meta = self.build_engine().meta(&path, source);
+        let meta = match meta.as_ref() {
+            Ok(m) => m,
+            Err(e) => return Err(CmdError::new("bad-meta", e.clone())),
+        };
+
+        let mut values: Map<String, Value> = Map::new();
+        if let Some(preset) = &req.preset {
+            let Some(bundle) = meta.presets.get(preset) else {
+                let known: Vec<&str> = meta.presets.keys().map(|s| s.as_str()).collect();
+                return Err(CmdError::bad_request(format!(
+                    "{path} has no preset {preset:?}; presets: {}",
+                    if known.is_empty() { "(none)".into() } else { known.join(", ") }
+                )));
+            };
+            values.extend(bundle.clone());
+        }
+        // Explicit --set beats the preset.
+        values.extend(req.set.clone());
+
+        let mut view = match base {
+            // Adopting a tab whose target was overridden by --path makes the
+            // tab's args meaningless; keep only its provides then.
+            Some(b) if b.path == path => {
+                View { path, args: b.args, provides: b.provides }
+            }
+            Some(b) => View { path, args: Map::new(), provides: b.provides },
+            None => View::of(path),
+        };
+        for (name, value) in values {
+            match meta.inputs.get(&name) {
+                Some(input) if !input.cascade => {
+                    view.args.insert(name, value);
+                }
+                // Declared cascade, or undeclared here (aimed at a
+                // descendant): a view-level provide. Typos are caught after
+                // the build, against the fall-through report.
+                _ => {
+                    view.provides.insert(name, value);
+                }
+            }
+        }
+        Ok(view)
+    }
+
+    /// Build a one-off view and run the post-build `--set` typo check.
+    fn build_view_cmd(
+        &self,
+        sync: &SyncResult,
+        view: &View,
+    ) -> Result<(PassResult, odm_build::InputReport), CmdError> {
+        let (_sync2, result, report) = self.build_once(view)?;
+        // The report only exists after a successful build, which is also
+        // the first moment "does anything read this name?" is answerable.
+        let source = &sync.snapshot.sources[&view.path];
+        let meta = self.build_engine().meta(&view.path, source);
+        if let Ok(meta) = meta.as_ref()
+            && let Err(e) = check_set_names(&view.provides, meta, &report)
+        {
+            return Err(CmdError::bad_request(e));
+        }
+        Ok((result, report))
+    }
+
+    /// Sync + resolve + build in one step — the shape every view-scoped
+    /// query shares.
+    fn query_view(
+        &self,
+        req: &ViewReq,
+    ) -> Result<(SyncResult, View, PassResult, odm_build::InputReport), CmdError> {
+        let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
+        let view = self.resolve_view(&sync, req)?;
+        let (result, report) = self.build_view_cmd(&sync, &view)?;
+        Ok((sync, view, result, report))
+    }
+
+    fn cmd_build(&self, req: ViewReq) -> Result<Value, CmdError> {
+        let (sync, view, result, report) = self.query_view(&req)?;
         Ok(json!({
             "generation": sync.generation.0,
+            "path": view.path,
             "root": result.root.to_hex(),
-            "t": t,
+            "inputs": report.to_json(),
             "logs": logs_json(&result.logs),
         }))
     }
@@ -218,7 +439,14 @@ impl EngineState {
             return Err(CmdError::bad_request("width/height must be in 16..=8192"));
         }
 
-        let (_sync, result) = self.build_at(req.t, false)?;
+        let view_req = view_req(
+            req.path.clone(),
+            req.set.clone(),
+            req.preset.clone(),
+            req.view.clone(),
+            req.viewer_state,
+        );
+        let (_sync, view, result, _report) = self.query_view(&view_req)?;
         let store = &self.build_engine().store;
         let scene = flatten_scene(store, result.root)
             .map_err(|e| CmdError::new("render", e.to_string()))?;
@@ -265,7 +493,7 @@ impl EngineState {
             "path": out_path.display().to_string(),
             "width": width,
             "height": height,
-            "t": req.t,
+            "view": view.path,
             "root": result.root.to_hex(),
             "instances": scene.instances.len(),
             "logs": logs_json(&result.logs),
@@ -286,7 +514,7 @@ impl EngineState {
             .file_name()
             .map(|n| n.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        if inside_project && (name.ends_with(".js") || name == "odm.json") {
+        if inside_project && (name.ends_with(".js") || name == "odm.toml") {
             return Err(CmdError::bad_request(format!(
                 "refusing to write {} — the engine never writes project source files",
                 path.display()
@@ -295,8 +523,8 @@ impl EngineState {
         Ok(())
     }
 
-    fn cmd_tree(&self, t: f64, depth: usize) -> Result<Value, CmdError> {
-        let (_sync, result) = self.build_at(t, false)?;
+    fn cmd_tree(&self, req: ViewReq, depth: usize) -> Result<Value, CmdError> {
+        let (_sync, view, result, _report) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let tree = scene::tree_json(
             &self.build_engine().store,
@@ -306,11 +534,11 @@ impl EngineState {
             depth,
         )
         .ok_or_else(|| CmdError::new("internal", "scene node missing from store"))?;
-        Ok(json!({ "t": t, "tree": tree, "logs": logs_json(&result.logs) }))
+        Ok(json!({ "view": view.path, "tree": tree, "logs": logs_json(&result.logs) }))
     }
 
-    fn cmd_inspect(&self, t: f64, id: &str) -> Result<Value, CmdError> {
-        let (_sync, result) = self.build_at(t, false)?;
+    fn cmd_inspect(&self, req: ViewReq, id: &str) -> Result<Value, CmdError> {
+        let (_sync, _view, result, _report) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let engine = self.build_engine();
         let Some((node, world)) = scene::find_node_world(&engine.store, &root, id) else {
@@ -344,7 +572,6 @@ impl EngineState {
         };
 
         Ok(json!({
-            "t": t,
             "id": id,
             "name": node.name,
             "color": node.color.map(|c| [c.r, c.g, c.b, c.a]),
@@ -356,19 +583,69 @@ impl EngineState {
 
     fn cmd_raycast(
         &self,
-        t: f64,
+        req: ViewReq,
         origin: Option<[f64; 3]>,
         dir: Option<[f64; 3]>,
     ) -> Result<Value, CmdError> {
         let origin = origin.ok_or_else(|| CmdError::bad_request("origin must be [x,y,z]"))?;
         let dir = dir.ok_or_else(|| CmdError::bad_request("dir must be [x,y,z]"))?;
-        let (_sync, result) = self.build_at(t, false)?;
+        let (_sync, view, result, _report) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let engine = self.build_engine();
         let scene = odm_render::flatten_node(&engine.store, &root)
             .map_err(|e| CmdError::new("internal", e.to_string()))?;
         let hit = scene::raycast(&engine.kernel, &scene.instances, origin, dir);
-        Ok(json!({ "t": t, "hit": hit }))
+        Ok(json!({ "view": view.path, "hit": hit }))
+    }
+
+    /// A doohickey's declared interface: `//!` description, `meta.inputs`
+    /// schemas, presets. Reads metadata by evaluating the module (no build);
+    /// the result is cached by code hash.
+    fn cmd_interface(&self, path: Option<&str>) -> Result<Value, CmdError> {
+        let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
+        let path = match path {
+            Some(p) => p,
+            None if sync.snapshot.sources.contains_key(odm_build::DEFAULT_ROOT) => {
+                odm_build::DEFAULT_ROOT
+            }
+            None => return Err(CmdError::bad_request(format!(
+                "no {} in this project — name a doohickey: odm interface <path>",
+                odm_build::DEFAULT_ROOT
+            ))),
+        };
+        let Some(source) = sync.snapshot.sources.get(path) else {
+            let available: Vec<&str> =
+                sync.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
+            return Err(CmdError::bad_request(format!(
+                "no doohickey at {path:?}; project has: {}",
+                if available.is_empty() { "(no .js files)".into() } else { available.join(", ") }
+            )));
+        };
+        let meta = self.build_engine().meta(path, source);
+        let meta = match meta.as_ref() {
+            Ok(m) => m,
+            Err(e) => return Err(CmdError::new("meta", e.clone())),
+        };
+        let inputs: Value = meta
+            .inputs
+            .iter()
+            .map(|(name, input)| (name.clone(), Value::Object(input.authored.clone())))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        let presets: Value = meta
+            .presets
+            .iter()
+            .map(|(name, values)| (name.clone(), Value::Object(values.clone())))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        Ok(json!({
+            "path": path,
+            "api": source.api.as_ref().ok().map(|v| v.name()),
+            "summary": source.description.lines().next().unwrap_or(""),
+            "description": source.description,
+            "inputs": inputs,
+            "presets": presets,
+        }))
     }
 
     fn cmd_selection(&self) -> Result<Value, CmdError> {
@@ -411,7 +688,23 @@ impl EngineState {
         let messages: Vec<Value> =
             taken.iter().map(|(_, text)| json!({ "text": text })).collect();
         conn.hold(taken.into_iter().map(|(i, _)| i));
-        Ok(json!({ "messages": messages }))
+        // A snapshot of what the user is looking at travels with their
+        // words: the active view (path + set inputs) and their selection.
+        // Generalizes the selection query — "make this longer" arrives with
+        // "this" attached.
+        let view = self.active_view().map(|(slot, view)| {
+            let mut set = view.args.clone();
+            set.extend(view.provides.clone());
+            let selection: Vec<Value> = self
+                .selection
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(node, name)| json!({ "node": node, "name": name }))
+                .collect();
+            json!({ "slot": slot, "path": view.path, "set": set, "selection": selection })
+        });
+        Ok(json!({ "messages": messages, "view": view }))
     }
 
     fn cmd_say(&self, text: &str) -> Result<Value, CmdError> {
@@ -477,7 +770,17 @@ mod tests {
     #[test]
     fn defaults_and_typos() {
         assert!(matches!(parse(r#"{"cmd":"status"}"#), Ok(Request::Status {})));
-        assert!(matches!(parse(r#"{"cmd":"build"}"#), Ok(Request::Build { t }) if t == 0.0));
+        assert!(
+            matches!(parse(r#"{"cmd":"build"}"#), Ok(Request::Build { path: None, set, .. }) if set.is_empty())
+        );
+        match parse(r#"{"cmd":"build","path":"wheel.js","set":{"t":1.5},"preset":"big"}"#) {
+            Ok(Request::Build { path, set, preset, .. }) => {
+                assert_eq!(path.as_deref(), Some("wheel.js"));
+                assert_eq!(set["t"], 1.5);
+                assert_eq!(preset.as_deref(), Some("big"));
+            }
+            other => panic!("{:?}", other.err()),
+        }
         match parse(r#"{"cmd":"render","width":800}"#) {
             Ok(Request::Render(r)) => assert_eq!((r.width, r.height), (800.0, 768.0)),
             other => panic!("{:?}", other.err()),
@@ -489,12 +792,21 @@ mod tests {
         assert!(e.contains("status") && e.contains("selection"), "{e}");
         let e = parse(r#"{}"#).err().unwrap();
         assert!(e.contains("commands: "), "{e}");
-        let e = parse(r#"{"cmd":"build","typo":1}"#).err().unwrap();
-        assert!(e.contains("typo"), "{e}");
         let e = parse(r#"{"cmd":"status","typo":1}"#).err().unwrap();
+        assert!(e.contains("typo"), "{e}");
+        let e = parse(r#"{"cmd":"build","typo":1}"#).err().unwrap();
         assert!(e.contains("typo"), "{e}");
         let e = parse(r#"{"cmd":"render","typo":1}"#).err().unwrap();
         assert!(e.contains("typo"), "{e}");
+
+        assert!(matches!(
+            parse(r#"{"cmd":"interface","path":"wheel.js"}"#),
+            Ok(Request::Interface { path: Some(p) }) if p == "wheel.js"
+        ));
+        assert!(matches!(
+            parse(r#"{"cmd":"interface"}"#),
+            Ok(Request::Interface { path: None })
+        ));
     }
 
     #[test]

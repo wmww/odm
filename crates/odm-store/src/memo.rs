@@ -17,13 +17,19 @@ pub struct MemoKey {
 /// recorded: same input hash → same result, forever.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Dep {
-    /// A context value read (e.g. `t`, project params). Valid while the
-    /// current context value hashes the same.
+    /// A cascade input read from the build's environment. Valid while the
+    /// value in the reader's environment hashes the same.
     Context { key: String, value: Hash },
-    /// A nested `invoke(path, args)`. Valid while `path` resolves to the same
-    /// build output; validated recursively by the scheduler (which needs the
-    /// actual args value to re-run the invoked build if its memo is stale).
-    Invoke { path: String, args: serde_json::Value, output: Hash },
+    /// A nested `invoke(path, args, provides)`. Valid while `path` resolves
+    /// to the same build output; validated recursively by the scheduler
+    /// (which needs the actual args/provides values to re-run the invoked
+    /// build if its memo is stale).
+    Invoke {
+        path: String,
+        args: serde_json::Value,
+        provides: serde_json::Map<String, serde_json::Value>,
+        output: Hash,
+    },
 }
 
 /// One captured console line from a build. Lives here (not odm-js) so memo

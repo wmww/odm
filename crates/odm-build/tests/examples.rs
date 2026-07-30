@@ -2,7 +2,7 @@
 //! across engines, and behave (animation, composition) as documented.
 //! (Pixel goldens are CI/lavapipe-only and live with the render pipeline.)
 
-use odm_build::BuildEngine;
+use odm_build::{BuildEngine, View};
 use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::{Object, Store};
@@ -24,11 +24,17 @@ fn example(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name)
 }
 
+fn view_at(t: f64) -> View {
+    let mut provides = serde_json::Map::new();
+    provides.insert("t".into(), serde_json::json!(t));
+    View { path: "root.js".into(), args: serde_json::Map::new(), provides }
+}
+
 fn build_example(name: &str, t: f64) -> (Arc<BuildEngine>, odm_ir::Hash) {
     let e = engine(name);
     let sync = e.sync().unwrap_or_else(|err| panic!("{name}: {err}"));
     let result = e
-        .build_root(&e.start_pass(&sync, t))
+        .build_view(&e.start_pass(&sync, view_at(t)))
         .unwrap_or_else(|err| panic!("{name} failed to build: {err:?}"));
     (e, result.root)
 }
@@ -129,14 +135,14 @@ fn assembly_shares_wheel_geometry() {
 fn piston_animates_and_memoizes_static_parts() {
     let e = engine("piston");
     let sync = e.sync().unwrap();
-    let r0 = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
-    let r1 = e.build_root(&e.start_pass(&sync, 0.5)).unwrap();
+    let r0 = e.build_view(&e.start_pass(&sync, view_at(0.0))).unwrap();
+    let r1 = e.build_view(&e.start_pass(&sync, view_at(0.5))).unwrap();
     assert_ne!(r0.root, r1.root, "piston must move between t=0 and t=0.5");
 
     // Scrub back to t=0: same scene hash again (content addressing).
     // (Note t=2.0, one full revolution, is NOT bit-identical to t=0 —
     // sin(2π) ≈ -2.4e-16 and hashing is bit-exact.)
-    let r0b = e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
+    let r0b = e.build_view(&e.start_pass(&sync, view_at(0.0))).unwrap();
     assert_eq!(r0.root, r0b.root, "same t, same scene hash");
 }
 
@@ -144,7 +150,7 @@ fn piston_animates_and_memoizes_static_parts() {
 fn parametric_box_partial_rebuild() {
     let e = engine("parametric-box");
     let sync = e.sync().unwrap();
-    e.build_root(&e.start_pass(&sync, 0.0)).unwrap();
+    e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
     let builds_before = e.stats.builds.load(std::sync::atomic::Ordering::Relaxed);
-    assert_eq!(builds_before, 2, "main.js + lip.js");
+    assert_eq!(builds_before, 2, "root.js + lip.js");
 }

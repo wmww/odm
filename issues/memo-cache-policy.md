@@ -1,7 +1,7 @@
 # Memo cache policy: one entry per key, no eviction
 
 `odm-store`'s memo map holds a single `MemoEntry` per `MemoKey`. A doohickey
-that reads `ctx.t` gets its entry overwritten on every distinct t, so
+that reads the cascade input `t` gets its entry overwritten on every distinct t, so
 scrubbing the timeline back and forth re-runs every t-reading doohickey each
 time (content addressing still dedups the *outputs*, and non-t-readers stay
 cached — so this is wasted CPU, never wasted memory or incorrectness).

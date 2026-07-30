@@ -3,16 +3,21 @@
 //! Check format and semantics: tests/conformance/README.md.
 
 use crate::scene;
-use odm_build::BuildEngine;
+use odm_build::{BuildEngine, View};
 use odm_store::Object;
 use serde::Deserialize;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Check {
+    /// Shorthand for `set: { t: ... }`.
     #[serde(default)]
     t: f64,
+    /// View-level input values for this check (all become provides).
+    #[serde(default)]
+    set: serde_json::Map<String, Value>,
     volume: Option<[f64; 2]>,
     area: Option<[f64; 2]>,
     bounds: Option<BoundsCheck>,
@@ -69,7 +74,7 @@ fn unstable_suite() {
             project = entry.clone();
         } else if name.ends_with(".js") {
             let tmp = tempfile::tempdir().expect("tempdir");
-            std::fs::copy(&entry, tmp.path().join("main.js")).expect("copy test file");
+            std::fs::copy(&entry, tmp.path().join("root.js")).expect("copy test file");
             project = tmp.path().to_path_buf();
             _hold = tmp;
         } else {
@@ -100,12 +105,12 @@ fn run_test(project: &Path) -> Result<(), Vec<String>> {
     let main = sync
         .snapshot
         .sources
-        .get("main.js")
-        .ok_or_else(|| vec!["no main.js".to_string()])?;
+        .get("root.js")
+        .ok_or_else(|| vec!["no root.js".to_string()])?;
     let api = main.api.clone().map_err(|e| vec![format!("pragma: {e}")])?;
 
     let checks = odm_js::extract_export(
-        &env, "main.js", &main.code, api, "checks", kernel.clone(), store.clone(),
+        &env, "root.js", &main.code, api, "checks", kernel.clone(), store.clone(),
     )
     .map_err(|e| vec![format!("reading checks: {e}")])?
     .ok_or_else(|| vec!["conformance test must `export const checks = [...]`".to_string()])?;
@@ -134,8 +139,19 @@ fn run_check(
         || check.bounds.is_some()
         || check.raycast.is_some();
 
-    let pass = engine.start_pass(sync, check.t);
-    let result = engine.build_root(&pass);
+    // Split `set` like the command layer: declared plain inputs become view
+    // args, everything else view-level provides.
+    let mut view = View::of("root.js");
+    view.provides.insert("t".into(), serde_json::json!(check.t));
+    let meta = engine.meta("root.js", &sync.snapshot.sources["root.js"]);
+    for (name, value) in &check.set {
+        match meta.as_ref().as_ref().ok().and_then(|m| m.inputs.get(name)) {
+            Some(input) if !input.cascade => view.args.insert(name.clone(), value.clone()),
+            _ => view.provides.insert(name.clone(), value.clone()),
+        };
+    }
+    let pass = engine.start_pass(sync, view);
+    let result = engine.build_view(&pass);
 
     if let Some(want) = &check.error {
         if geometric || check.console.is_some() {

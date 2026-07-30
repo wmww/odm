@@ -12,9 +12,9 @@ The runner is `crates/odm-engine/src/conformance.rs`
 (`cargo test -p odm-engine conformance`). It treats each entry here as one
 test:
 
-- `name.js` — a single-file project (the file becomes its `main.js`).
-- `name/` — a whole project directory (`main.js`, parts, optional
-  `odm.json`), for invoke/params/animation tests.
+- `name.js` — a single-file project (the file becomes its `root.js`).
+- `name/` — a whole project directory (`root.js` plus parts), for
+  invoke/inputs tests.
 
 Every test file carries its `//! odm <version>` pragma and exports its
 assertions next to its geometry:
@@ -27,7 +27,8 @@ export const checks = [
   { volume: [1000, 1e-6], area: [600, 1e-6] },
   { bounds: { min: [-5, -5, -5], max: [5, 5, 5], eps: 1e-6 } },
   { raycast: { origin: [0, 0, 100], dir: [0, 0, -1], distance: [95, 1e-6], normal: [0, 0, 1] } },
-  { t: 2, volume: [3000, 1e-6] },        // any check can set its context
+  { t: 2, volume: [3000, 1e-6] },        // shorthand for set: { t: 2 }
+  { set: { width: 3 }, volume: [36, 1e-6] },  // view-level inputs for this check
   { error: 'must be Solids' },           // build must fail, message contains
   { console: ['made 4 wheels'] },        // each substring appears in the logs
 ];
@@ -46,11 +47,14 @@ triangulation):
 - `raycast: {origin, dir, ...}` — nearest world-space hit;
   `distance: [d, eps]`, `normal: [x,y,z]` (compared within `eps`, default
   1e-6), `name: 'node name'`, or `miss: true`.
-- `error: 'substring'` — the build at this check's `t` must fail and the
-  message must contain the substring. The module itself must still
-  evaluate (checks live in it), so this is for build()-time errors.
+- `error: 'substring'` — the build with this check's inputs must fail and
+  the message must contain the substring. The module itself must still
+  evaluate (checks live in it), so this is for build()-time and
+  input-boundary errors.
 - `console: ['substring', …]` — each must appear in that build's logs.
-- `t: seconds` — context for this check (default 0).
+- `set: { name: value }` — view-level inputs for this check; split into
+  args/provides against root.js's meta, like the CLI's `--set`.
+- `t: seconds` — shorthand for `set: { t: … }` (default 0).
 
 Values pinned by a check must be *derivable* (analytic, or exact CSG
 arithmetic), not pasted from whatever the engine printed — a suite seeded

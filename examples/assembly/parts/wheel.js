@@ -1,7 +1,13 @@
 //! odm unstable
-// A wheel: tire + hub + spokes, built along the Z axis.
+//! A wheel: tire + hub + spokes, built along the Z axis.
+export const meta = {
+  inputs: {
+    radius: { type: 'number', default: 8, minimum: 1, description: 'tire radius' },
+  },
+};
+
 export default function build(ctx) {
-  const r = ctx.args.radius ?? 8;
+  const r = ctx.get('radius');
   const tire = odm
     .cylinder({ r, h: 6 })
     .subtract(odm.cylinder({ r: r * 0.55, h: 8 }))

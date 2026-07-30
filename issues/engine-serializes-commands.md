@@ -17,6 +17,10 @@ Related interactions, same root cause:
 - `run_build_loop` holds `cmd_lock` for the duration of a background build,
   so a CLI query issued during a viewer scrub blocks for the full build and
   does not cancel it (loop-vs-CLI, not just CLI-vs-CLI).
+- Multiple views (2026-07-29) make this bite harder: every viewer tab is an
+  active view the loop rebuilds in turn, so a CLI query can now queue behind
+  several sequential builds, and a scrub on one tab delays queries about
+  another.
 - The CLI has no read timeout (`odm-cli/src/lib.rs`), so that blocking shows
   up as a silently hung terminal with nothing for an agent to interpret.
   Worth a progress line or generous timeout if command latency stays lumpy.

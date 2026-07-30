@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Does this directory look like an ODM project? Same rule the CLI's walk-up
-/// uses (`odm_cli::find_project`).
+/// uses (`odm_cli::find_project`): odm.toml is the project marker.
 pub fn is_project(dir: &Path) -> bool {
-    dir.join("main.js").exists() || dir.join("odm.json").exists()
+    dir.join("odm.toml").exists()
 }
 
 fn socket_of(project: &Path) -> PathBuf {
@@ -39,6 +39,7 @@ impl Sessions {
     pub fn start(project: PathBuf) -> anyhow::Result<Arc<Sessions>> {
         let env = Arc::new(JsEnv::new().map_err(|e| anyhow::anyhow!("js snapshot: {e}"))?);
         let listener = server::bind(&socket_of(&project))?;
+        sync_marker(&project);
         let state = EngineState::new(project, env.clone())?;
         let sessions = Arc::new(Sessions {
             env,
@@ -46,7 +47,7 @@ impl Sessions {
             wake: Mutex::new(None),
         });
         spawn_threads(&state, listener);
-        state.request_build(0.0);
+        state.rebuild_active();
         Ok(sessions)
     }
 
@@ -71,7 +72,7 @@ impl Sessions {
         }
         if !is_project(&project) {
             return Err(format!(
-                "{} is not an ODM project (no main.js or odm.json)",
+                "{} is not an ODM project (no odm.toml)",
                 project.display()
             ));
         }
@@ -83,6 +84,7 @@ impl Sessions {
         // Claim the new socket before retiring the old session: this is the
         // step that fails when another engine already has the project.
         let listener = server::bind(&socket_of(&project)).map_err(|e| e.to_string())?;
+        sync_marker(&project);
         let state = EngineState::new(project, self.env.clone()).map_err(|e| e.to_string())?;
         if let Some(wake) = self.wake.lock().unwrap().clone() {
             state.set_wake(wake);
@@ -91,8 +93,20 @@ impl Sessions {
         *self.current.lock().unwrap() = state.clone();
         old.stop();
         spawn_threads(&state, listener);
-        state.request_build(0.0);
+        state.rebuild_active();
         Ok(state)
+    }
+}
+
+/// Record this engine's version in the project marker — the ONE exception
+/// to "the engine never writes project files" — and surface (not fail on)
+/// a newer-engine warning: an unreadable marker already fails loudly at
+/// scan time, and an unwritable one shouldn't block opening.
+fn sync_marker(project: &Path) {
+    match odm_build::sync_marker(project) {
+        Ok(Some(warning)) => eprintln!("warning: {warning}"),
+        Ok(None) => {}
+        Err(e) => eprintln!("warning: could not update odm.toml: {e}"),
     }
 }
 

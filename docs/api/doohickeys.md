@@ -1,20 +1,46 @@
 # Doohickeys and build()
 
 Every `.js` file in the project (dot-directories like `.odm` excluded)
-is a doohickey: one composable piece, like a React component. `main.js`
-is the root; its output is the scene.
+is a doohickey: one composable piece, like a React component. Any file
+can be viewed, queried, or invoked; `root.js` is pure convention — the
+entry file the CLI and viewer try when no path is given, like
+`index.html`. Projects are free to name entry files meaningfully
+instead.
+
+The project is marked by `odm.toml` at its root (what the CLI's
+walk-up looks for):
+
+```toml
+name = "flange-demo"   # shown in the window title / status
+engine = 0             # last-used engine version, engine-maintained
+```
+
+Unknown keys are errors. The engine rewrites the `engine` value when
+it differs from its own — the one project file it ever writes — and
+warns when the project was last touched by a newer engine.
 
 ```js
 //! odm unstable
+//! A steel plate, for the doohickeys chapter.
 export default function build(ctx) {
   return odm.box([40, 20, 5]).color('steelblue');
 }
 ```
 
 The default export must be a function; it is called with a context
-object (`ctx.args`, `ctx.t`, `ctx.param()`, `ctx.invoke()` — see
-[composition.md](composition.md) and
-[params-and-animation.md](params-and-animation.md)).
+object carrying `ctx.get()` (declared inputs — see
+[inputs.md](inputs.md)) and `ctx.invoke()`
+([composition.md](composition.md)).
+
+## Description and metadata
+
+The leading `//!` comment block doubles as the file's prose
+description (the `odm <version>` pragma line is excluded): first line =
+one-sentence summary, the rest is the body. It is parsed without
+running the file, so it survives broken builds and is greppable.
+Structured metadata — input declarations, presets — lives in
+`export const meta` ([inputs.md](inputs.md)). `odm interface <path>`
+prints both.
 
 ## The API version pragma
 
@@ -44,12 +70,11 @@ build error.
 Each doohickey runs in its own V8 isolate with the framework preloaded.
 There are no `import`s, no file or network access, no timers, and no
 shared state with other doohickeys — communication happens only through
-`ctx.args` / `ctx.invoke`. `Date` is frozen and `Math.random` is a
-seeded PRNG ([determinism.md](determinism.md)).
+declared inputs and `ctx.invoke`. `Date` is frozen and `Math.random`
+is a seeded PRNG ([determinism.md](determinism.md)).
 
-`build()` must be pure: same file + same args + same context reads →
-same output. The engine relies on this to memoize and to rebuild only
-what changed.
+`build()` must be pure: same file + same inputs → same output. The
+engine relies on this to memoize and to rebuild only what changed.
 
 ## Console
 

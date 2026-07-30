@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 /// The scene tree as the UI needs it: IR children are content hashes, so the
 /// viewer materializes one snapshot per published build instead of walking
 /// the store every frame.
-pub(super) struct TreeNode {
+pub(crate) struct TreeNode {
     pub(super) name: Option<String>,
     pub(super) has_mesh: bool,
     pub(super) children: Vec<TreeNode>,

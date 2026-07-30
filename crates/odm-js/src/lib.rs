@@ -14,7 +14,7 @@ mod version;
 pub use ir_json::node_from_json;
 pub use session::{Invoker, LogLine, SessionState};
 pub use snapshot::JsEnv;
-pub use version::{ApiVersion, SUPPORTED, parse_pragma};
+pub use version::{ApiVersion, SUPPORTED, parse_doc, parse_pragma};
 
 /// Re-export so downstream crates can hold isolate handles without a direct
 /// deno_core dependency.
@@ -59,8 +59,13 @@ pub struct BuildInput<'a> {
     /// API version from the file's `//! odm <version>` pragma; picks the
     /// framework snapshot this build's isolate is created from.
     pub api: ApiVersion,
+    /// Effective args: caller args validated against the file's declared
+    /// inputs, with defaults merged in by the scheduler.
     pub args: &'a Value,
-    /// Full context map: `t`, `params.<name>`, ...
+    /// Input declarations for `ctx.get` routing/hydration, as JSON:
+    /// `{ name: { cascade: bool, type: string|null } }`.
+    pub decls: &'a Value,
+    /// The build's environment: cascade input values by name.
     pub context: &'a HashMap<String, Value>,
     pub kernel: Arc<odm_kernel::Kernel>,
     pub store: Arc<odm_store::Store>,
@@ -99,7 +104,8 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Buil
     rt.execute_script("odm:select-version", snapshot::select_version_script(input.api))
         .map_err(|e| BuildError::Internal(format!("select api version {}: {e}", input.api)))?;
 
-    let BuildInput { path, args, context, kernel, store, cancel, invoker, on_isolate, .. } = input;
+    let BuildInput { path, args, decls, context, kernel, store, cancel, invoker, on_isolate, .. } =
+        input;
     let session = SessionState {
         kernel,
         store: store.clone(),
@@ -163,10 +169,12 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Buil
         let ns = v8::Local::new(scope, ns_global);
         let args_v8 = serde_v8::to_v8(scope, args)
             .map_err(|e| BuildError::Internal(format!("args to v8: {e}")))?;
+        let decls_v8 = serde_v8::to_v8(scope, decls)
+            .map_err(|e| BuildError::Internal(format!("decls to v8: {e}")))?;
 
         v8::tc_scope!(let tc, scope);
         let recv = v8::undefined(tc);
-        let ret = run_build_fn.call(tc, recv.into(), &[ns.into(), args_v8]);
+        let ret = run_build_fn.call(tc, recv.into(), &[ns.into(), args_v8, decls_v8]);
         match ret {
             Some(v) => serde_v8::from_v8::<Value>(tc, v)
                 .map_err(|e| BuildError::BadOutput(format!("build() output not serializable: {e}"))),

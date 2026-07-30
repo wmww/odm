@@ -3,7 +3,7 @@
 //! test-only `test` version (odm-js `test-api-version` feature), whose one
 //! surface difference is `odm.apiProbe`.
 
-use odm_build::{BuildEngine, FailureKind};
+use odm_build::{BuildEngine, FailureKind, View};
 use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::Store;
@@ -30,7 +30,7 @@ fn write(dir: &Path, path: &str, content: &str) {
 fn build(dir: &Path) -> Result<(), odm_build::BuildFailure> {
     let e = engine(dir);
     let sync = e.sync().unwrap();
-    e.build_root(&e.start_pass(&sync, 0.0)).map(|_| ())
+    e.build_view(&e.start_pass(&sync, View::of("main.js"))).map(|_| ())
 }
 
 /// Throws unless the surface matches what the file's pragma selects.
@@ -103,11 +103,12 @@ export default function build(ctx) {
         "part.js",
         r#"
 //! odm test
+export const meta = { inputs: { r: { type: 'number' } } };
 export default function build(ctx) {
     if (odm.apiProbe() !== 'test') throw new Error('test file got the unstable surface');
     // And back across: invoke an unstable file from a test-version file.
     const inner = ctx.invoke('inner.js');
-    return odm.group(odm.sphere(ctx.args.r), inner);
+    return odm.group(odm.sphere(ctx.get('r')), inner);
 }
 "#,
     );

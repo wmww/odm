@@ -185,7 +185,7 @@ impl OpenDialog {
             return Err(format!("{} is not a directory", path.display()));
         }
         if !is_project(&path) {
-            return Err("not an ODM project: no main.js or odm.json here".to_owned());
+            return Err("not an ODM project: no odm.toml here".to_owned());
         }
         Ok(path)
     }

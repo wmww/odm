@@ -1,5 +1,5 @@
 //! odm unstable
-// hello-bracket: primitives + booleans. An L-bracket with four bolt holes.
+//! Primitives + booleans: an L-bracket with four bolt holes.
 export default function build(ctx) {
   // Base plate on the XY floor, upright wall along the -X edge. Units: mm.
   const base = odm.box({ size: [60, 40, 6], center: false });

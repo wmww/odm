@@ -417,6 +417,10 @@ export function deg(d) {
 
 const SOLID_TAG = '__odm_solid__';
 
+// THREE instances normalize to canonical wire JSON at every boundary
+// (invoke args, provides): vectors/quaternions via toArray, matrix4 = 16
+// numbers column-major, colors [r, g, b]. Hashing and memoization only ever
+// see the canonical form.
 function serializeValue(v) {
   if (v === undefined) return null;
   return JSON.parse(
@@ -433,6 +437,16 @@ function serializeValue(v) {
       }
       if (raw instanceof Group || raw instanceof Instance) {
         throw new TypeError('only Solids (not Groups/Instances) can be passed through invoke() args');
+      }
+      if (
+        raw instanceof THREE.Vector2 ||
+        raw instanceof THREE.Vector3 ||
+        raw instanceof THREE.Quaternion
+      ) {
+        return raw.toArray();
+      }
+      if (raw instanceof THREE.Matrix4) {
+        return raw.toArray();
       }
       return value;
     }),
@@ -459,30 +473,75 @@ function reviveValue(v) {
 
 // ---------- build context ----------
 
-function contextRead(key) {
-  const r = ops().op_context_read(key);
-  return r.present ? r.value : undefined;
+// Declaration-driven hydration: the wire carries canonical JSON; ctx.get
+// returns real THREE instances for the extension types. Colors stay in
+// their wire form (CSS string or [r, g, b]) — exactly what .color() takes.
+function hydrate(type, v) {
+  const nums = (v, n) => {
+    if (Array.isArray(v) && v.length === n) return v;
+    // Tolerate the {x, y, z} object form (e.g. hand-written provides).
+    if (v && typeof v === 'object') {
+      const parts = ['x', 'y', 'z', 'w'].slice(0, n).map((k) => v[k]);
+      if (parts.every((p) => typeof p === 'number')) return parts;
+    }
+    throw new TypeError(`expected ${n} numbers for a ${type}, got ${JSON.stringify(v)}`);
+  };
+  switch (type) {
+    case 'vector2':
+      return new THREE.Vector2(...nums(v, 2));
+    case 'vector3':
+      return new THREE.Vector3(...nums(v, 3));
+    case 'quaternion':
+      return new THREE.Quaternion(...nums(v, 4));
+    case 'matrix4':
+      return new THREE.Matrix4().fromArray(Array.isArray(v) ? v : v.elements);
+    default:
+      // 'solid' arrives as a tagged handle that reviveValue turns back into
+      // a Solid; plain JSON values may carry nested Solids too.
+      return reviveValue(v);
+  }
 }
 
-function makeCtx(argsJson) {
+function makeCtx(argsJson, decls) {
+  const args = argsJson ?? {};
   return {
-    /** Arguments this doohickey was invoked with (root build: {}). */
-    args: reviveValue(argsJson),
-    /** Animation time in seconds (0 for static scenes). */
-    get t() {
-      return contextRead('t') ?? 0;
-    },
-    /** Project-level parameter (odm.json `params`), with a default. */
-    param(name, def) {
-      const v = contextRead(`params.${String(name)}`);
-      return v === undefined ? def : v;
+    /**
+     * Read one declared input (see `export const meta`). Plain inputs come
+     * from the immediate caller's args (or the declared default); cascade
+     * inputs resolve up the invoke chain, view outermost.
+     */
+    get(name) {
+      name = String(name);
+      const decl = decls[name];
+      if (!decl) {
+        const known = Object.keys(decls);
+        throw new Error(
+          `ctx.get(${JSON.stringify(name)}): not declared in meta.inputs` +
+            (known.length ? ` (declared: ${known.join(', ')})` : ' (this file declares no inputs)'),
+        );
+      }
+      let raw;
+      if (decl.cascade) {
+        const r = ops().op_context_read(name);
+        if (!r.present) {
+          throw new Error(`internal: cascade input ${JSON.stringify(name)} missing from environment`);
+        }
+        raw = r.value;
+      } else {
+        raw = args[name];
+      }
+      return hydrate(decl.type, raw);
     },
     /**
      * Build another doohickey and get its output as an Instance.
-     * `path` is project-relative, e.g. 'parts/wheel.js'.
+     * `path` is project-relative, e.g. 'parts/wheel.js'. `args` go to that
+     * file's declared inputs; `provides` scope over its whole subtree
+     * (cascade values, no declaration needed here).
      */
-    invoke(path, args = {}) {
-      return new Instance(ops().op_invoke(String(path), serializeValue(args)));
+    invoke(path, args = {}, provides = {}) {
+      return new Instance(
+        ops().op_invoke(String(path), serializeValue(args), serializeValue(provides)),
+      );
     },
   };
 }
@@ -531,14 +590,14 @@ export function installGlobals(g) {
   };
 
   g.__odm = {
-    runBuild(ns, argsJson) {
+    runBuild(ns, argsJson, declsJson) {
       const fn = ns?.default;
       if (typeof fn !== 'function') {
         throw new TypeError(
           'doohickey must have a default export: `export default function build(ctx) { ... }`',
         );
       }
-      return toIRNode(fn(makeCtx(argsJson ?? {})));
+      return toIRNode(fn(makeCtx(argsJson ?? {}, declsJson ?? {})));
     },
   };
 }

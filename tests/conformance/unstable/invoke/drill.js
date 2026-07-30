@@ -1,7 +1,14 @@
 //! odm unstable
-// Helper for invoke/main.js: bores a hole through whatever Solid it is given.
+// Helper for invoke/root.js: bores a hole through whatever Solid it is given.
+export const meta = {
+  inputs: {
+    blank: { type: 'solid' },
+    r: { type: 'number', minimum: 0 },
+  },
+};
+
 export default function build(ctx) {
-  const { blank, r } = ctx.args;
+  const r = ctx.get('r');
   console.log(`drilling r=${r}`);
-  return blank.subtract(odm.cylinder({ r, h: 100 }));
+  return ctx.get('blank').subtract(odm.cylinder({ r, h: 100 }));
 }

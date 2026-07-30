@@ -1,8 +1,18 @@
 //! odm unstable
-// A separate doohickey so editing main.js alone shows partial rebuilds
-// (this one stays memoized).
+//! The box's stacking lip. A separate doohickey so editing root.js alone
+//! shows partial rebuilds (this one stays memoized).
+export const meta = {
+  inputs: {
+    width: { type: 'number', default: 60 },
+    depth: { type: 'number', default: 40 },
+    wall: { type: 'number', default: 3 },
+  },
+};
+
 export default function build(ctx) {
-  const { width = 60, depth = 40, wall = 3 } = ctx.args;
+  const width = ctx.get('width');
+  const depth = ctx.get('depth');
+  const wall = ctx.get('wall');
   const outline = [
     [0, 0],
     [width, 0],

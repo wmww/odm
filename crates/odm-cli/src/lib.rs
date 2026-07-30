@@ -13,24 +13,35 @@ use std::path::{Path, PathBuf};
 
 // No `\`-continuation after the quote: it would eat this block's first indent.
 /// The command list, for the binary's `--help`.
-pub const USAGE: &str = "  status                     project overview: files, generation, animation
+pub const USAGE: &str = "  status                     project overview: files, generation, inputs
   sync                       force a rescan (every command also syncs first)
-  build   [--t <sec>]        build the scene; reports errors + console logs
-  render  [--t] [--width N] [--height N] [--out FILE] [--wireframe]
-          [--no-grid] [--ortho] [--eye x,y,z] [--target x,y,z] [--up x,y,z]
-          [--direction x,y,z] [--fov deg] [--ortho-height h]
+  build   [<path>] [--set name=value ...] [--preset <name>]
+                             build a view; reports errors + console logs
+  render  [<path>] [--set ...] [--preset] [--width N] [--height N] [--out FILE]
+          [--wireframe] [--no-grid] [--ortho] [--eye x,y,z] [--target x,y,z]
+          [--up x,y,z] [--direction x,y,z] [--fov deg] [--ortho-height h]
                              render a PNG; prints its path
-  tree    [--t] [--depth N]  scene tree with node ids
-  inspect <node-id> [--t]    details for one node (volume, bounds, transform)
-  raycast --origin x,y,z --dir x,y,z [--t]
+  tree    [<path>] [--set ...] [--preset] [--depth N]
+                             scene tree with node ids
+  inspect <node-id> [--path <p>] [--set ...] [--preset]
+                             details for one node (volume, bounds, transform)
+  raycast --origin x,y,z --dir x,y,z [--path <p>] [--set ...] [--preset]
                              nearest hit in the scene
   selection                  viewer selection: list of {node, name}
+  interface [<path>]         a doohickey's description, input schemas, presets
   poll    [--timeout <sec>]  wait for messages the user typed in the viewer
   say     <text>             send a message to the user
   prompt                     print the agent instructions (markdown, no engine)
   docs    [<topic>]          the full API reference (markdown, no engine)
   docs    search <pattern>   grep the reference, whole sections out
   docs    changes <from> <to>  API migration guides, concatenated
+
+Queries target a view: <path> (default root.js) built with its declared
+input defaults; --set names any input (--set t=1.5, --set 'size=[10,20,5]',
+JSON or bare strings), --preset applies a named bundle from the target's
+meta first. --viewer-state adopts the user's active viewer tab (path +
+inputs) as the base instead; --view <slot> adopts a specific tab (slots:
+`odm status` → views).
 ";
 
 /// True if `args` asks for help rather than naming a command — including
@@ -73,39 +84,78 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         return docs::run(rest);
     }
 
+    const VIEW_OPTS: &[(&str, ArgKind)] = &[
+        ("set", ArgKind::Set),
+        ("preset", ArgKind::Str),
+        ("path", ArgKind::Str),
+        ("view", ArgKind::Str),
+        ("viewer-state", ArgKind::Flag),
+    ];
+    let with_view =
+        |extra: &'static [(&'static str, ArgKind)]| -> Vec<(&'static str, ArgKind)> {
+            VIEW_OPTS.iter().chain(extra).copied().collect()
+        };
     let request = match cmd.as_str() {
         "status" | "sync" | "selection" => parse_opts(&cmd, rest, &[])?,
-        "build" => parse_opts(&cmd, rest, &[("t", ArgKind::Num)])?,
-        "tree" => parse_opts(&cmd, rest, &[("t", ArgKind::Num), ("depth", ArgKind::Num)])?,
-        "render" => parse_opts(
-            &cmd,
-            rest,
-            &[
-                ("t", ArgKind::Num),
-                ("width", ArgKind::Num),
-                ("height", ArgKind::Num),
-                ("fov", ArgKind::Num),
-                ("ortho-height", ArgKind::Num),
-                ("out", ArgKind::Str),
-                ("eye", ArgKind::Vec3),
-                ("target", ArgKind::Vec3),
-                ("up", ArgKind::Vec3),
-                ("direction", ArgKind::Vec3),
-                ("wireframe", ArgKind::Flag),
-                ("no-grid", ArgKind::Flag),
-                ("ortho", ArgKind::Flag),
-            ],
-        )?,
+        "build" => {
+            let (path, rest) = optional_positional(rest);
+            let mut v = parse_opts(&cmd, rest, &with_view(&[]))?;
+            if let Some(p) = path {
+                v.insert("path".into(), json!(p));
+            }
+            v
+        }
+        "tree" => {
+            let (path, rest) = optional_positional(rest);
+            let mut v = parse_opts(&cmd, rest, &with_view(&[("depth", ArgKind::Num)]))?;
+            if let Some(p) = path {
+                v.insert("path".into(), json!(p));
+            }
+            v
+        }
+        "render" => {
+            let (path, rest) = optional_positional(rest);
+            let mut v = parse_opts(
+                &cmd,
+                rest,
+                &with_view(&[
+                    ("width", ArgKind::Num),
+                    ("height", ArgKind::Num),
+                    ("fov", ArgKind::Num),
+                    ("ortho-height", ArgKind::Num),
+                    ("out", ArgKind::Str),
+                    ("eye", ArgKind::Vec3),
+                    ("target", ArgKind::Vec3),
+                    ("up", ArgKind::Vec3),
+                    ("direction", ArgKind::Vec3),
+                    ("wireframe", ArgKind::Flag),
+                    ("no-grid", ArgKind::Flag),
+                    ("ortho", ArgKind::Flag),
+                ]),
+            )?;
+            if let Some(p) = path {
+                v.insert("path".into(), json!(p));
+            }
+            v
+        }
         "inspect" => {
             let (node, rest) = take_positional(rest, "node id (see `odm tree`)")?;
-            let mut v = parse_opts(&cmd, rest, &[("t", ArgKind::Num)])?;
+            let mut v = parse_opts(&cmd, rest, &with_view(&[]))?;
             v.insert("node".into(), json!(node));
+            v
+        }
+        "interface" => {
+            let (path, rest) = optional_positional(rest);
+            let mut v = parse_opts(&cmd, rest, &[])?;
+            if let Some(p) = path {
+                v.insert("path".into(), json!(p));
+            }
             v
         }
         "raycast" => parse_opts(
             &cmd,
             rest,
-            &[("t", ArgKind::Num), ("origin", ArgKind::Vec3), ("dir", ArgKind::Vec3)],
+            &with_view(&[("origin", ArgKind::Vec3), ("dir", ArgKind::Vec3)]),
         )?,
         "poll" => parse_opts(&cmd, rest, &[("timeout", ArgKind::Num)])?,
         // Everything after `say` is the message: no options, and no quoting
@@ -179,11 +229,16 @@ fn acknowledge(stream: &mut UnixStream, reader: &mut BufReader<UnixStream>) {
     let _ = reader.read_line(&mut String::new());
 }
 
+#[derive(Clone, Copy)]
 enum ArgKind {
     Num,
     Str,
     Vec3,
     Flag,
+    /// Repeatable `--set name=value`; values parse as JSON, falling back to
+    /// a bare string ("--set t=1.5", "--set finish=painted",
+    /// "--set 'size=[10,20,5]'"). Collected into one object.
+    Set,
 }
 
 fn parse_opts(
@@ -242,6 +297,26 @@ fn parse_opts(
                         }
                         json!(parts)
                     }
+                    ArgKind::Set => {
+                        let Some((input, raw)) = value.split_once('=') else {
+                            bail!("--set takes name=value, got {value:?}");
+                        };
+                        if input.is_empty() {
+                            bail!("--set takes name=value, got {value:?}");
+                        }
+                        // JSON when it parses, else a bare string — so
+                        // numbers/arrays/booleans work without quoting
+                        // gymnastics and strings without JSON quotes.
+                        let parsed: Value = serde_json::from_str(raw)
+                            .unwrap_or_else(|_| Value::String(raw.to_string()));
+                        let entry = out.entry(key).or_insert_with(|| json!({}));
+                        entry
+                            .as_object_mut()
+                            .expect("set collects into an object")
+                            .insert(input.to_string(), parsed);
+                        i += advance;
+                        continue;
+                    }
                     ArgKind::Flag => unreachable!(),
                 };
                 out.insert(key, parsed);
@@ -250,6 +325,14 @@ fn parse_opts(
         }
     }
     Ok(out)
+}
+
+/// A leading non-`--` argument, if any (an optional path).
+fn optional_positional(args: &[String]) -> (Option<&str>, &[String]) {
+    match args.first() {
+        Some(v) if !v.starts_with("--") => (Some(v.as_str()), &args[1..]),
+        _ => (None, args),
+    }
 }
 
 fn take_positional<'a>(
@@ -263,7 +346,7 @@ fn take_positional<'a>(
 }
 
 /// Walk up from `start` looking for `.odm/engine.sock` (like git); fall back
-/// to the first ancestor containing `main.js` or `odm.json`.
+/// to the first ancestor containing the `odm.toml` project marker.
 pub fn find_project(start: &Path) -> anyhow::Result<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
@@ -276,7 +359,7 @@ pub fn find_project(start: &Path) -> anyhow::Result<PathBuf> {
     }
     let mut dir = start.to_path_buf();
     loop {
-        if dir.join("main.js").exists() || dir.join("odm.json").exists() {
+        if dir.join("odm.toml").exists() {
             return Ok(dir);
         }
         if !dir.pop() {
@@ -284,7 +367,7 @@ pub fn find_project(start: &Path) -> anyhow::Result<PathBuf> {
         }
     }
     bail!(
-        "no ODM project found from {} upward (looked for .odm/engine.sock, then main.js/odm.json); \
+        "no ODM project found from {} upward (looked for .odm/engine.sock, then odm.toml); \
          name the project dir explicitly",
         start.display()
     )

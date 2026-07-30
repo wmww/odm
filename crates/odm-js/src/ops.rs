@@ -252,18 +252,24 @@ pub fn op_invoke(
     state: &mut OpState,
     #[string] path: String,
     #[serde] args: serde_json::Value,
+    #[serde] provides: serde_json::Value,
 ) -> Result<String, JsErrorBox> {
+    let provides = match provides {
+        serde_json::Value::Object(m) => m,
+        serde_json::Value::Null => serde_json::Map::new(),
+        _ => return Err(JsErrorBox::type_error("invoke provides must be an object")),
+    };
     let s = sess(state);
     let Some(mut invoker) = s.invoker.take() else {
         return Err(JsErrorBox::generic("ctx.invoke is not available in this build"));
     };
     // The nested build runs on this thread with its own isolate (LIFO).
-    let result = invoker.invoke(&path, &args);
+    let result = invoker.invoke(&path, &args, &provides);
     let s = sess(state);
     s.invoker = Some(invoker);
     match result {
         Ok(output) => {
-            s.deps.push(Dep::Invoke { path, args, output });
+            s.deps.push(Dep::Invoke { path, args, provides, output });
             Ok(output.to_hex())
         }
         Err(msg) => Err(JsErrorBox::generic(format!("invoke({path:?}) failed: {msg}"))),
