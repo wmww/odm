@@ -22,8 +22,8 @@ pub struct ReportEntry {
     pub name: String,
     /// What it resolved to at the view level this pass.
     pub value: Value,
-    /// Explicitly set by the view (vs. the winning declared default).
-    pub set: bool,
+    /// Where that value came from this pass.
+    pub source: ValueSource,
     /// From the winning (shallowest) declaration.
     pub ty: Option<String>,
     pub minimum: Option<f64>,
@@ -36,12 +36,33 @@ pub struct ReportEntry {
     pub declared_in: Vec<String>,
 }
 
+/// The origin of a reported value: set at the view, or the winning
+/// declared default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueSource {
+    View,
+    Default,
+}
+
+impl ValueSource {
+    fn of(set_at_view: bool) -> ValueSource {
+        if set_at_view { ValueSource::View } else { ValueSource::Default }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ValueSource::View => "view",
+            ValueSource::Default => "default",
+        }
+    }
+}
+
 impl ReportEntry {
     pub fn to_json(&self) -> Value {
         json!({
             "name": self.name,
             "value": self.value,
-            "set": self.set,
+            "source": self.source.as_str(),
             "type": self.ty,
             "minimum": self.minimum,
             "maximum": self.maximum,
@@ -100,7 +121,7 @@ impl BuildEngine {
         let view = pass.view();
         let mut sites: BTreeMap<String, Vec<Site>> = BTreeMap::new();
         let mut visited = HashSet::new();
-        let mut provide_warnings = BTreeSet::new();
+        let mut cascade_warnings = BTreeSet::new();
         self.walk(
             pass,
             &view.path,
@@ -109,11 +130,11 @@ impl BuildEngine {
             0,
             &mut sites,
             &mut visited,
-            &mut provide_warnings,
+            &mut cascade_warnings,
         );
 
         let mut report = InputReport::default();
-        report.warnings.extend(provide_warnings);
+        report.warnings.extend(cascade_warnings);
 
         // The target's own plain inputs and presets, for the panel.
         if let Some(source) = pass.snapshot().sources.get(&view.path)
@@ -123,12 +144,11 @@ impl BuildEngine {
                 if input.cascade {
                     continue;
                 }
-                let set = view.args.contains_key(name);
                 let default = input.default.clone().unwrap_or(Value::Null);
                 report.args.push(ReportEntry {
                     name: name.clone(),
                     value: view.args.get(name).cloned().unwrap_or_else(|| default.clone()),
-                    set,
+                    source: ValueSource::of(view.args.contains_key(name)),
                     ty: input.type_name().map(|t| t.to_string()),
                     minimum: input.minimum(),
                     maximum: input.maximum(),
@@ -180,9 +200,9 @@ impl BuildEngine {
                     ));
                 }
             }
-            let set = view.provides.contains_key(&name);
+            let source = ValueSource::of(view.cascade.contains_key(&name));
             let value =
-                view.provides.get(&name).cloned().unwrap_or_else(|| found[0].default.clone());
+                view.cascade.get(&name).cloned().unwrap_or_else(|| found[0].default.clone());
             let mut declared_in: Vec<String> = Vec::new();
             for s in &found {
                 if !declared_in.contains(&s.path) {
@@ -192,7 +212,7 @@ impl BuildEngine {
             report.entries.push(ReportEntry {
                 name,
                 value,
-                set,
+                source,
                 ty: found[0].ty.clone(),
                 minimum,
                 maximum,
@@ -215,7 +235,7 @@ impl BuildEngine {
         depth: usize,
         sites: &mut BTreeMap<String, Vec<Site>>,
         visited: &mut HashSet<(odm_ir::Hash, odm_ir::Hash, u64)>,
-        provide_warnings: &mut BTreeSet<String>,
+        cascade_warnings: &mut BTreeSet<String>,
     ) {
         let Some(source) = pass.snapshot().sources.get(path) else { return };
         let meta = self.meta(path, source);
@@ -263,16 +283,16 @@ impl BuildEngine {
         let key = MemoKey { code: source.hash, args: args_hash };
         let Some(entry) = self.store.memo_get(&key) else { return };
         for dep in &entry.deps {
-            if let Dep::Invoke { path: child, args, provides, .. } = dep {
-                for name in provides.keys() {
+            if let Dep::Invoke { path: child, args, cascade, .. } = dep {
+                for name in cascade.keys() {
                     if !self.subtree_declares(pass, child, args, name, &mut HashSet::new()) {
-                        provide_warnings.insert(unconsumed_provide_warning(
+                        cascade_warnings.insert(unread_cascade_warning(
                             self, pass, path, child, name,
                         ));
                     }
                 }
                 let mut child_covered = covered.clone();
-                child_covered.extend(provides.keys().cloned());
+                child_covered.extend(cascade.keys().cloned());
                 self.walk(
                     pass,
                     child,
@@ -281,7 +301,7 @@ impl BuildEngine {
                     depth + 1,
                     sites,
                     visited,
-                    provide_warnings,
+                    cascade_warnings,
                 );
             }
         }
@@ -317,7 +337,7 @@ impl BuildEngine {
             return true;
         };
         entry.deps.iter().any(|dep| match dep {
-            Dep::Invoke { path: child, args, provides, .. } if !provides.contains_key(name) => {
+            Dep::Invoke { path: child, args, cascade, .. } if !cascade.contains_key(name) => {
                 self.subtree_declares(pass, child, args, name, seen)
             }
             _ => false,
@@ -325,9 +345,9 @@ impl BuildEngine {
     }
 }
 
-/// The message for a provide no descendant can read: a misplaced plain
+/// The message for a cascaded value no descendant reads: a misplaced plain
 /// input gets a pointed channel hint, anything else is likely a typo.
-fn unconsumed_provide_warning(
+fn unread_cascade_warning(
     engine: &Arc<BuildEngine>,
     pass: &Pass,
     parent: &str,
@@ -347,7 +367,7 @@ fn unconsumed_provide_warning(
     if plain_input {
         format!(
             "{parent} provides {name:?} to {child}, but {name:?} is a plain input there — \
-             pass it in the invoke's args (second argument), not provides"
+             pass it in the invoke's args (second argument), not the cascade"
         )
     } else {
         format!(
@@ -357,16 +377,16 @@ fn unconsumed_provide_warning(
     }
 }
 
-/// A view `--set`/provide that nothing in the built tree can read is almost
+/// A view-set value that nothing in the built tree can read is almost
 /// certainly a typo; names must be view-settable (in the report) or the
 /// target's own declared inputs (which includes plain args, checked at the
 /// boundary).
 pub fn check_set_names(
-    provides: &Map<String, Value>,
+    cascade: &Map<String, Value>,
     target_meta: &Meta,
     report: &InputReport,
 ) -> Result<(), String> {
-    for name in provides.keys() {
+    for name in cascade.keys() {
         let declared_on_target = target_meta.inputs.contains_key(name);
         let in_report = report.entries.iter().any(|e| &e.name == name);
         if !declared_on_target && !in_report {

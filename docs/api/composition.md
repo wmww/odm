@@ -18,7 +18,7 @@ A Group can be transformed, colored, and named, but **not used in
 CSG**. Its color is a default: it applies to descendants that don't
 have a color of their own.
 
-## ctx.invoke(path, args?, provides?)
+## ctx.invoke(path, args?, cascade?)
 
 ```js
 const wheel = ctx.invoke('parts/wheel.js', { radius: 8 });
@@ -38,11 +38,11 @@ its `meta.inputs` schemas, with declared defaults merged in
   Groups and Instances are rejected; `undefined` becomes `null`.
 - **Unknown arg names are errors**, as are missing required inputs and
   schema mismatches — validated at the boundary.
-- **`provides` is the second, separate channel**: cascade values that
-  scope over the invoked file's whole subtree, no declaration needed at
-  the call site. Args cannot set cascade inputs and provides cannot set
-  plain ones. A provide that nothing in the subtree declares gets a
-  lint warning in the build report (it would otherwise silently do
+- **`cascade` is the second, separate channel**: values that cascade
+  over the invoked file's whole subtree, no declaration needed at the
+  call site. Args cannot set cascade inputs and the cascade cannot set
+  plain ones. A cascade value that nothing in the subtree declares gets
+  a lint warning in the build report (it would otherwise silently do
   nothing). See [inputs.md](inputs.md) for resolution.
 - **Memoized**: same file content + same effective inputs → the cached
   result, free. Invoking one file many times with different args is

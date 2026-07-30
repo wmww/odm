@@ -31,7 +31,7 @@ fn build_full(
     code: &str,
     args: &Value,
     decls: &Value,
-    context: &HashMap<String, Value>,
+    cascade: &HashMap<String, Value>,
     invoker: Option<Box<dyn Invoker>>,
 ) -> Result<BuildOutput, BuildError> {
     run_build(
@@ -42,7 +42,7 @@ fn build_full(
             api: odm_js::ApiVersion::Unstable,
             args,
             decls,
-            context,
+            cascade,
             kernel: w.kernel.clone(),
             store: w.store.clone(),
             cancel: None,
@@ -146,7 +146,7 @@ fn cascade_reads_recorded_as_deps() {
         .deps
         .iter()
         .map(|d| match d {
-            Dep::Context { key, .. } => key.as_str(),
+            Dep::Cascade { key, .. } => key.as_str(),
             other => panic!("unexpected dep {other:?}"),
         })
         .collect();
@@ -346,15 +346,15 @@ impl Invoker for NestedInvoker {
         &mut self,
         path: &str,
         args: &Value,
-        provides: &serde_json::Map<String, Value>,
+        cascade: &serde_json::Map<String, Value>,
     ) -> Result<Hash, String> {
         self.calls.push((path.to_string(), args.clone()));
         let (code, decls) =
             self.codes.get(path).ok_or_else(|| format!("no doohickey at {path}"))?.clone();
-        // Provides become the nested build's environment (the scheduler
-        // additionally overlays declaration defaults).
-        let context: HashMap<String, Value> =
-            provides.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        // The invoke's cascade values become the nested build's environment
+        // (the scheduler additionally overlays declaration defaults).
+        let child_env: HashMap<String, Value> =
+            cascade.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let out = run_build(
             env(),
             BuildInput {
@@ -363,7 +363,7 @@ impl Invoker for NestedInvoker {
                 api: odm_js::ApiVersion::Unstable,
                 args,
                 decls: &decls,
-                context: &context,
+                cascade: &child_env,
                 kernel: self.world.kernel.clone(),
                 store: self.world.store.clone(),
                 cancel: None,
@@ -526,10 +526,10 @@ fn solids_serialize_through_invoke_args() {
     assert!(node.mesh.is_some());
 }
 
-/// `ctx.invoke(path, args, provides)`: provides reach the child's
+/// `ctx.invoke(path, args, cascade)`: cascade values reach the child's
 /// environment and are recorded on the invoke dep.
 #[test]
-fn provides_flow_to_the_nested_build() {
+fn cascade_values_flow_to_the_nested_build() {
     let w = world();
     let mut codes = HashMap::new();
     codes.insert(
@@ -554,7 +554,7 @@ fn provides_flow_to_the_nested_build() {
     )
     .unwrap();
     let dep = out.deps.iter().find_map(|d| match d {
-        Dep::Invoke { path, provides, .. } if path == "spinner.js" => Some(provides.clone()),
+        Dep::Invoke { path, cascade, .. } if path == "spinner.js" => Some(cascade.clone()),
         _ => None,
     });
     assert_eq!(dep.unwrap().get("t"), Some(&json!(0.5)));

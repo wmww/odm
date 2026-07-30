@@ -115,7 +115,7 @@ fn control(
         }
         let is_set = match section {
             Section::Arg => tab.set_args.contains_key(&name),
-            Section::Cascade => tab.set_provides.contains_key(&name),
+            Section::Cascade => tab.set_cascade.contains_key(&name),
         };
         if is_set && theme::button(ui, "×").clicked() {
             events.push(Event::Clear(section, name.clone()));

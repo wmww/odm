@@ -102,8 +102,8 @@ impl ExtType {
 /// One declared input.
 #[derive(Debug)]
 pub struct Input {
-    /// `cascade: true`: resolved from the nearest provider up the invoke
-    /// chain (view outermost); `default` mandatory. Otherwise the value
+    /// `cascade: true`: resolved up the invoke chain — nearest explicitly
+    /// provided value, view outermost; `default` mandatory. Otherwise the value
     /// comes from the immediate caller's args, falling back to `default`
     /// (no default = required).
     pub cascade: bool,

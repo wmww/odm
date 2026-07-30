@@ -11,15 +11,16 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   doohickey, identified by project-relative path. Any file is viewable;
   `root.js` is pure convention — the default target when a query names no
   path.
-- **Views**: a view = (path, args, provides), evaluated against the current
+- **Views**: a view = (path, args, cascade), evaluated against the current
   generation. Queries and viewer tabs each hold one. `t`/animation is not a
   feature — just a ranged cascade input the viewer gives a transport.
 - **Inputs** (`docs/api/inputs.md` is the contract): `export const meta =
   { inputs, presets }`; one map, name → profiled JSON Schema + ODM keys
   (`cascade`). Read via `ctx.input(name)`; plain inputs come from the caller's
-  args (defaults merged into memo identity), cascade inputs from the nearest
-  provider up the invoke chain (view outermost, declarations auto-provide
-  their defaults for their subtree). `ctx.invoke(path, args?, provides?)`.
+  args (defaults merged into memo identity), cascade inputs resolve up the
+  invoke chain — nearest provided value wins, view outermost, declarations
+  auto-provide their defaults for their subtree. `ctx.invoke(path, args?,
+  cascade?)`.
   Extension types (solid/vector2/vector3/quaternion/matrix4/color) are
   canonical JSON on the wire, hydrated to THREE instances by ctx.input.
   Validation at every boundary via the `jsonschema` crate; unknown
@@ -66,8 +67,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   its whole subtree),
   memo cache (key = code+args hashes; entry = recorded deps + output;
   `Dep::Invoke` stores the actual args Value so validation can re-run
-  invokes, `Dep::Context` a value hash — missing keys hash a sentinel, use
-  `odm_js::context_value_hash`; eviction is whole-cache clear only, see
+  invokes, `Dep::Cascade` a value hash — missing keys hash a sentinel, use
+  `odm_js::cascade_value_hash`; eviction is whole-cache clear only, see
   issues/memo-cache-policy.md).
 - `odm-kernel` — manifold-csg wrapper: primitives (cylinder along Z),
   extrude/revolve (around Z), booleans/hull with per-operand transforms,
@@ -95,15 +96,15 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   driven by futures::executor::block_on (no tokio — nested block_on works).
 - `odm-build` — one `BuildEngine` per project; `sync()` rescans it and
   reuses the current generation while the source hashes match (retiring the
-  old one otherwise); pass = generation + view (path, args, provides).
-  Per-build environments: each invoke path derives its env (explicit
-  provides overwrite, declaration defaults fill), hashed for the in-flight
+  old one otherwise); pass = generation + view (path, args, cascade).
+  Per-build environments: each invoke path derives its env (invoke cascade
+  values overwrite, declaration defaults fill), hashed for the in-flight
   registry and cycle keys. `get_or_build` validates+merges args against the
   file's meta (effective args are the memo identity), eagerly validates and
   dep-records every declared cascade input (an unread declared input still
   keys memoization — consistency), then runs. Salsa-style validation and
-  early cutoff; `Dep::Invoke` carries provides. `meta.rs` = schema-profile
-  allowlist walk + extension desugaring, cached by code hash
+  early cutoff; `Dep::Invoke` carries its cascade map. `meta.rs` = schema-
+  profile allowlist walk + extension desugaring, cached by code hash
   (`BuildEngine::meta`, extraction via `extract_export`); `report.rs` =
   post-build fall-through report walked from memo entries (view-settable
   cascade names, winning declarations, conflict lint) + the target's own

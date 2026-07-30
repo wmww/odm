@@ -16,10 +16,10 @@ pub struct Tab {
     pub slot: String,
     pub path: String,
     /// Values the user set, already split by channel: plain inputs of the
-    /// target (args) vs cascade/fall-through values (provides). The split
+    /// target (args) vs cascade/fall-through values (cascade). The split
     /// comes from which section of the input report a control lives in.
     pub set_args: Map<String, Value>,
-    pub set_provides: Map<String, Value>,
+    pub set_cascade: Map<String, Value>,
     pub orbit: Orbit,
     pub framed: bool,
     pub selected: Vec<(String, Option<String>)>,
@@ -39,7 +39,7 @@ impl Tab {
             slot,
             path,
             set_args: Map::new(),
-            set_provides: Map::new(),
+            set_cascade: Map::new(),
             orbit: Orbit::framed(None),
             framed: false,
             selected: Vec::new(),
@@ -57,7 +57,7 @@ impl Tab {
         View {
             path: self.path.clone(),
             args: self.set_args.clone(),
-            provides: self.set_provides.clone(),
+            cascade: self.set_cascade.clone(),
         }
     }
 
@@ -71,7 +71,7 @@ impl Tab {
     pub fn shown_value<'a>(&'a self, section: Section, entry: &'a odm_build::ReportEntry) -> &'a Value {
         let set = match section {
             Section::Arg => &self.set_args,
-            Section::Cascade => &self.set_provides,
+            Section::Cascade => &self.set_cascade,
         };
         set.get(&entry.name).unwrap_or(&entry.value)
     }
@@ -100,8 +100,8 @@ struct SavedTab {
     path: String,
     #[serde(default)]
     args: Map<String, Value>,
-    #[serde(default)]
-    provides: Map<String, Value>,
+    #[serde(default, alias = "provides")]
+    cascade: Map<String, Value>,
     camera: Option<SavedCamera>,
 }
 
@@ -129,7 +129,7 @@ pub fn load(project: &Path, mut slot: impl FnMut() -> String) -> Option<(Vec<Tab
         .map(|s| {
             let mut tab = Tab::new(slot(), s.path);
             tab.set_args = s.args;
-            tab.set_provides = s.provides;
+            tab.set_cascade = s.cascade;
             if let Some(c) = s.camera {
                 tab.orbit =
                     Orbit { target: c.target, distance: c.distance, yaw: c.yaw, pitch: c.pitch };
@@ -151,7 +151,7 @@ pub fn save(project: &Path, tabs: &[Tab], active: usize) {
             .map(|t| SavedTab {
                 path: t.path.clone(),
                 args: t.set_args.clone(),
-                provides: t.set_provides.clone(),
+                cascade: t.set_cascade.clone(),
                 camera: Some(SavedCamera {
                     target: t.orbit.target,
                     distance: t.orbit.distance,

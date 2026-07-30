@@ -41,7 +41,7 @@ fn build_box(env: &JsEnv) -> Result<(), String> {
             api: odm_js::ApiVersion::Unstable,
             args: &json!({}),
             decls: &json!({}),
-            context: &HashMap::<String, Value>::new(),
+            cascade: &HashMap::<String, Value>::new(),
             kernel,
             store,
             cancel: None,
@@ -94,7 +94,7 @@ fn snapshot_creation_inside_invoke() {
             &mut self,
             _path: &str,
             _args: &Value,
-            _provides: &serde_json::Map<String, Value>,
+            _cascade: &serde_json::Map<String, Value>,
         ) -> Result<odm_ir::Hash, String> {
             let env2 = JsEnv::new().map_err(|e| format!("nested snapshot: {e}"))?;
             let store = odm_store::Store::new();
@@ -107,7 +107,7 @@ fn snapshot_creation_inside_invoke() {
                     api: odm_js::ApiVersion::Unstable,
                     args: &json!({}),
                     decls: &json!({}),
-                    context: &HashMap::<String, Value>::new(),
+                    cascade: &HashMap::<String, Value>::new(),
                     kernel,
                     store,
                     cancel: None,
@@ -133,7 +133,7 @@ fn snapshot_creation_inside_invoke() {
             api: odm_js::ApiVersion::Unstable,
             args: &json!({}),
             decls: &json!({}),
-            context: &HashMap::<String, Value>::new(),
+            cascade: &HashMap::<String, Value>::new(),
             kernel,
             store,
             cancel: None,

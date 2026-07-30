@@ -89,8 +89,8 @@ enum Request {
 
 /// What a query targets: a doohickey path (default: `root.js`, when it
 /// exists) plus input values. `set` names any input — declared plain inputs
-/// become view args, everything else a view-level provide; `preset` applies
-/// a named bundle from the target's meta first.
+/// become view args, everything else a view-level cascade value; `preset`
+/// applies a named bundle from the target's meta first.
 #[derive(Default)]
 struct ViewReq {
     path: Option<String>,
@@ -266,7 +266,7 @@ impl EngineState {
             .into_iter()
             .map(|(slot, view)| {
                 let mut set = view.args.clone();
-                set.extend(view.provides.clone());
+                set.extend(view.cascade.clone());
                 json!({
                     "slot": slot,
                     "path": view.path,
@@ -291,8 +291,8 @@ impl EngineState {
 
     /// Resolve a request's (path, set, preset) into a `View` against a
     /// sync. `set`/preset values on declared plain inputs become view args;
-    /// everything else (declared cascade or aimed at descendants) becomes a
-    /// view-level provide.
+    /// everything else (declared cascade or aimed at descendants) goes to
+    /// the view's cascade.
     fn resolve_view(&self, sync: &SyncResult, req: &ViewReq) -> Result<View, CmdError> {
         // A viewer tab's state as the base: its path AND its input values;
         // --set/--preset then override on top.
@@ -368,11 +368,11 @@ impl EngineState {
 
         let mut view = match base {
             // Adopting a tab whose target was overridden by --path makes the
-            // tab's args meaningless; keep only its provides then.
+            // tab's args meaningless; keep only its cascade values then.
             Some(b) if b.path == path => {
-                View { path, args: b.args, provides: b.provides }
+                View { path, args: b.args, cascade: b.cascade }
             }
-            Some(b) => View { path, args: Map::new(), provides: b.provides },
+            Some(b) => View { path, args: Map::new(), cascade: b.cascade },
             None => View::of(path),
         };
         for (name, value) in values {
@@ -381,10 +381,10 @@ impl EngineState {
                     view.args.insert(name, value);
                 }
                 // Declared cascade, or undeclared here (aimed at a
-                // descendant): a view-level provide. Typos are caught after
-                // the build, against the fall-through report.
+                // descendant): a view-level cascade value. Typos are caught
+                // after the build, against the fall-through report.
                 _ => {
-                    view.provides.insert(name, value);
+                    view.cascade.insert(name, value);
                 }
             }
         }
@@ -403,7 +403,7 @@ impl EngineState {
         let source = &sync.snapshot.sources[&view.path];
         let meta = self.build_engine().meta(&view.path, source);
         if let Ok(meta) = meta.as_ref()
-            && let Err(e) = check_set_names(&view.provides, meta, &report)
+            && let Err(e) = check_set_names(&view.cascade, meta, &report)
         {
             return Err(CmdError::bad_request(e));
         }
@@ -694,7 +694,7 @@ impl EngineState {
         // "this" attached.
         let view = self.active_view().map(|(slot, view)| {
             let mut set = view.args.clone();
-            set.extend(view.provides.clone());
+            set.extend(view.cascade.clone());
             let selection: Vec<Value> = self
                 .selection
                 .lock()

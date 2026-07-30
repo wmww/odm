@@ -19,15 +19,15 @@ pub struct MemoKey {
 pub enum Dep {
     /// A cascade input read from the build's environment. Valid while the
     /// value in the reader's environment hashes the same.
-    Context { key: String, value: Hash },
-    /// A nested `invoke(path, args, provides)`. Valid while `path` resolves
+    Cascade { key: String, value: Hash },
+    /// A nested `invoke(path, args, cascade)`. Valid while `path` resolves
     /// to the same build output; validated recursively by the scheduler
-    /// (which needs the actual args/provides values to re-run the invoked
+    /// (which needs the actual args/cascade values to re-run the invoked
     /// build if its memo is stale).
     Invoke {
         path: String,
         args: serde_json::Value,
-        provides: serde_json::Map<String, serde_json::Value>,
+        cascade: serde_json::Map<String, serde_json::Value>,
         output: Hash,
     },
 }

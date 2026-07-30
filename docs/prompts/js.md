@@ -95,9 +95,9 @@ export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('
   `color` (hydrated to real THREE values). No `default` = required.
 - **Plain inputs** come from the immediate caller (invoke args, or the
   view's `--set`). **Cascade inputs** (`cascade: true`, default
-  mandatory) resolve up the invoke chain: nearest
-  `ctx.invoke(path, args, provides)` provide wins, the view is the
-  outermost provider, and a declaration auto-provides its default for
+  mandatory) resolve up the invoke chain: the nearest
+  `ctx.invoke(path, args, cascade)` value wins, the view is the
+  outermost layer, and a declaration auto-provides its default for
   its own subtree.
 - **Time is just an input**: declare a ranged cascade `t` and the
   viewer gives it a transport (scrub/play, looping over the range);

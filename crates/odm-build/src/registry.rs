@@ -14,8 +14,8 @@ use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RKey {
-    /// (context hash, code hash, args hash) — packed into hashes upstream.
-    pub context: odm_ir::Hash,
+    /// (env hash, code hash, args hash) — packed into hashes upstream.
+    pub env: odm_ir::Hash,
     pub code: odm_ir::Hash,
     pub args: odm_ir::Hash,
 }

@@ -473,7 +473,7 @@ export function deg(d) {
 const SOLID_TAG = '__odm_solid__';
 
 // THREE instances normalize to canonical wire JSON at every boundary
-// (invoke args, provides): vectors/quaternions via toArray, matrix4 = 16
+// (invoke args and cascade): vectors/quaternions via toArray, matrix4 = 16
 // numbers column-major, colors [r, g, b]. Hashing and memoization only ever
 // see the canonical form.
 function serializeValue(v) {
@@ -534,7 +534,7 @@ function reviveValue(v) {
 function hydrate(type, v) {
   const nums = (v, n) => {
     if (Array.isArray(v) && v.length === n) return v;
-    // Tolerate the {x, y, z} object form (e.g. hand-written provides).
+    // Tolerate the {x, y, z} object form (e.g. hand-written cascade values).
     if (v && typeof v === 'object') {
       const parts = ['x', 'y', 'z', 'w'].slice(0, n).map((k) => v[k]);
       if (parts.every((p) => typeof p === 'number')) return parts;
@@ -577,7 +577,7 @@ function makeCtx(argsJson, decls) {
       }
       let raw;
       if (decl.cascade) {
-        const r = ops().op_context_read(name);
+        const r = ops().op_cascade_read(name);
         if (!r.present) {
           throw new Error(`internal: cascade input ${JSON.stringify(name)} missing from environment`);
         }
@@ -590,12 +590,12 @@ function makeCtx(argsJson, decls) {
     /**
      * Build another doohickey and get its output as an Instance.
      * `path` is project-relative, e.g. 'parts/wheel.js'. `args` go to that
-     * file's declared inputs; `provides` scope over its whole subtree
-     * (cascade values, no declaration needed here).
+     * file's declared inputs; `cascade` values scope over its whole
+     * subtree (no declaration needed here).
      */
-    invoke(path, args = {}, provides = {}) {
+    invoke(path, args = {}, cascade = {}) {
       return new Instance(
-        ops().op_invoke(String(path), serializeValue(args), serializeValue(provides)),
+        ops().op_invoke(String(path), serializeValue(args), serializeValue(cascade)),
       );
     },
   };

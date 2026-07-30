@@ -35,9 +35,9 @@ fn obj(v: Value) -> Map<String, Value> {
     }
 }
 
-/// The default view of root.js with `provides` set at the view level.
-fn view_with(provides: Value) -> View {
-    View { path: "root.js".into(), args: Map::new(), provides: obj(provides) }
+/// The default view of root.js with cascade values set at the view level.
+fn view_with(cascade: Value) -> View {
+    View { path: "root.js".into(), args: Map::new(), cascade: obj(cascade) }
 }
 
 const ROOT_WITH_WHEEL: &str = r#"
@@ -148,7 +148,7 @@ fn cascade_only_invalidates_readers() {
 }
 
 #[test]
-fn view_provides_override_declared_defaults() {
+fn view_cascade_values_override_declared_defaults() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
@@ -173,7 +173,7 @@ fn view_provides_override_declared_defaults() {
     let b = e.kernel.bounds(node.mesh.unwrap()).unwrap().unwrap();
     assert!((b.max[0] - 2.0).abs() < 1e-9, "width 4 centered: {b:?}");
 
-    // A view-level provide overrides the default.
+    // A view-level cascade value overrides the default.
     let r2 = e.build_view(&e.start_pass(&sync, view_with(json!({ "width": 6.0 })))).unwrap();
     assert_ne!(r.root, r2.root);
     assert_eq!(builds(&e), 2);
@@ -242,7 +242,7 @@ fn inputs_validate_at_boundaries() {
     write(dir.path(), "root.js", "export default (ctx) => ctx.invoke('wheel.js', { r: 1 })");
     let e = engine(dir.path());
     let sync = e.sync().unwrap();
-    let bad = View { path: "root.js".into(), args: obj(json!({ "nope": 1 })), provides: Map::new() };
+    let bad = View { path: "root.js".into(), args: obj(json!({ "nope": 1 })), cascade: Map::new() };
     let err = e.build_view(&e.start_pass(&sync, bad)).unwrap_err();
     assert_eq!(err.kind, FailureKind::Input);
     assert!(err.message.contains("unknown input \"nope\""), "{}", err.message);
@@ -256,7 +256,7 @@ fn inputs_validate_at_boundaries() {
 }
 
 #[test]
-fn cascade_resolution_nearest_provider_wins() {
+fn cascade_resolution_nearest_value_wins() {
     let dir = tempfile::tempdir().unwrap();
     // leaf reads `len`; mid provides it for its subtree; root provides a
     // different value only for the second (direct) invoke.
@@ -317,8 +317,8 @@ fn cascade_resolution_nearest_provider_wins() {
     let r = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
     assert_eq!(widths(&e, r.root), vec![5.0, 1.0]);
 
-    // View provides len=2: the direct leaf sees it; mid's explicit provide
-    // still wins for its subtree (nearest provider).
+    // View provides len=2: the direct leaf sees it; the value mid provides
+    // still wins for its subtree (nearest wins).
     let r2 = e.build_view(&e.start_pass(&sync, view_with(json!({ "len": 2.0 })))).unwrap();
     assert_eq!(widths(&e, r2.root), vec![5.0, 2.0]);
 }

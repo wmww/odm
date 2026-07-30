@@ -25,9 +25,9 @@ fn example(name: &str) -> PathBuf {
 }
 
 fn view_at(t: f64) -> View {
-    let mut provides = serde_json::Map::new();
-    provides.insert("t".into(), serde_json::json!(t));
-    View { path: "root.js".into(), args: serde_json::Map::new(), provides }
+    let mut cascade = serde_json::Map::new();
+    cascade.insert("t".into(), serde_json::json!(t));
+    View { path: "root.js".into(), args: serde_json::Map::new(), cascade }
 }
 
 fn build_example(name: &str, t: f64) -> (Arc<BuildEngine>, odm_ir::Hash) {

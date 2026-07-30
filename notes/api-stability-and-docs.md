@@ -21,7 +21,7 @@ Rules to preserve in future API work:
 - **Fail loud**: unknown option keys throw; every numeric arg
   validated; `translate`/`scale` require all three components
   (`scale(k)` uniform removed — matched three and killed the
-  translate(5)-vs-scale(5) asymmetry); unconsumed invoke `provides`
+  translate(5)-vs-scale(5) asymmetry); unread invoke cascade values
   are linted in the input report (report.rs `subtree_declares`).
 - **Align with THREE.BufferGeometry's transform family** (the right
   model — solids are geometry-like values, not Object3D):
@@ -80,7 +80,7 @@ Rules to preserve in future API work:
   declared inputs, `odm.toml` is the project marker, `root.js` the
   default-view convention. Doohickey `meta` (inputs/presets) IS part of
   the versioned API surface (`ctx.input`, `ctx.invoke(path, args,
-  provides)`).
+  cascade)`).
 
 ## Implementation map (all built, tested)
 

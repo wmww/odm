@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const MAX_LOG_LINES: usize = 1000;
-pub(crate) const MISSING_CONTEXT: &[u8] = b"__odm_missing__";
+pub(crate) const MISSING_CASCADE: &[u8] = b"__odm_missing__";
 
 fn sess(state: &mut OpState) -> &mut SessionState {
     state.borrow_mut::<SessionState>()
@@ -221,7 +221,7 @@ pub fn op_raycast(
     Ok(hit.map(|h| RayHitJson { distance: h.distance, position: h.position, normal: h.normal }))
 }
 
-// ---------- context / invoke / log ----------
+// ---------- cascade / invoke / log ----------
 
 #[derive(Serialize)]
 struct CtxRead {
@@ -231,13 +231,13 @@ struct CtxRead {
 
 #[op2]
 #[serde]
-pub fn op_context_read(state: &mut OpState, #[string] key: String) -> CtxRead {
+pub fn op_cascade_read(state: &mut OpState, #[string] key: String) -> CtxRead {
     let s = sess(state);
-    let value = s.context.get(&key).cloned();
-    let value_hash = crate::context_value_hash(value.as_ref());
+    let value = s.cascade.get(&key).cloned();
+    let value_hash = crate::cascade_value_hash(value.as_ref());
     // Record each key once; within a build the value cannot change.
-    if !s.deps.iter().any(|d| matches!(d, Dep::Context { key: k, .. } if *k == key)) {
-        s.deps.push(Dep::Context { key, value: value_hash });
+    if !s.deps.iter().any(|d| matches!(d, Dep::Cascade { key: k, .. } if *k == key)) {
+        s.deps.push(Dep::Cascade { key, value: value_hash });
     }
     match value {
         Some(v) => CtxRead { present: true, value: v },
@@ -252,24 +252,24 @@ pub fn op_invoke(
     state: &mut OpState,
     #[string] path: String,
     #[serde] args: serde_json::Value,
-    #[serde] provides: serde_json::Value,
+    #[serde] cascade: serde_json::Value,
 ) -> Result<String, JsErrorBox> {
-    let provides = match provides {
+    let cascade = match cascade {
         serde_json::Value::Object(m) => m,
         serde_json::Value::Null => serde_json::Map::new(),
-        _ => return Err(JsErrorBox::type_error("invoke provides must be an object")),
+        _ => return Err(JsErrorBox::type_error("invoke cascade must be an object")),
     };
     let s = sess(state);
     let Some(mut invoker) = s.invoker.take() else {
         return Err(JsErrorBox::generic("ctx.invoke is not available in this build"));
     };
     // The nested build runs on this thread with its own isolate (LIFO).
-    let result = invoker.invoke(&path, &args, &provides);
+    let result = invoker.invoke(&path, &args, &cascade);
     let s = sess(state);
     s.invoker = Some(invoker);
     match result {
         Ok(output) => {
-            s.deps.push(Dep::Invoke { path, args, provides, output });
+            s.deps.push(Dep::Invoke { path, args, cascade, output });
             Ok(output.to_hex())
         }
         Err(msg) => Err(JsErrorBox::generic(format!("invoke({path:?}) failed: {msg}"))),
@@ -308,7 +308,7 @@ deno_core::extension!(
         op_area,
         op_bounds,
         op_raycast,
-        op_context_read,
+        op_cascade_read,
         op_invoke,
         op_log,
     ],

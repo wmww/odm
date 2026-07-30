@@ -32,9 +32,9 @@ from:
   caller only — the invoking doohickey's args, or the view (viewer
   panel / CLI `--set`) when this file is the view target. No `default`
   means required.
-- **Cascade input** (`cascade: true`): the value comes from the nearest
-  provider up the invoke chain, with the view outermost; `default` is
-  mandatory. See "Cascade resolution" below.
+- **Cascade input** (`cascade: true`): the value cascades down the
+  invoke chain — the nearest value provided above wins, with the view
+  outermost; `default` is mandatory. See "Cascade resolution" below.
 
 Reading an undeclared name is an error, and so is passing an undeclared
 name in an invoke's args — typos fail loudly at the boundary, not
@@ -82,18 +82,19 @@ export default function build(ctx) {
 
 ## Cascade resolution
 
-`ctx.invoke(path, args, provides)` has two separate channels:
+`ctx.invoke(path, args, cascade)` has two separate channels:
 
 - **args** target the invoked file's plain inputs (validated, defaults
   merged; cascade inputs cannot be passed here);
-- **provides** need no declaration on either side and scope over the
-  whole subtree of the invoke — they may target descendants the
-  provider has never heard of.
+- **cascade** values need no declaration on either side and scope over
+  the whole subtree of the invoke — they may target descendants the
+  invoker has never heard of.
 
 A reader's cascade input resolves to, in order:
 
-1. the **nearest explicit provide** above it — an invoke's `provides`,
-   or the view's set values (the view is the outermost provider);
+1. the **nearest explicitly provided value** above it — an invoke's
+   `cascade` argument, or the view's set values (the view is the
+   outermost layer);
 2. otherwise, the default from the **shallowest declaration on the
    reader's own invoke path** (including the reader itself).
 
@@ -104,13 +105,14 @@ depends only on the reader's invoke path, so it memoizes like any
 other input.
 
 After each build the engine reports which cascade names *fell through*
-to the view level (nothing below provided them) — that report is what
-the viewer's input panel and CLI `--set` validation are generated
-from. Two unrelated subtrees falling through with conflicting defaults
-get a lint warning; conflicting *types* are an error. An invoke's
-provide that nothing in the invoked subtree declares is also a lint
-warning — a typo'd provide (or a plain-input value sent through the
-provides channel) must not silently do nothing.
+to the view level (nothing below provided them), each with the source
+of its resolved value (`view` or `default`) — that report is what the
+viewer's input panel and CLI `--set` validation are generated from.
+Two unrelated subtrees falling through with conflicting defaults get a
+lint warning; conflicting *types* are an error. A cascade value that
+nothing in the invoked subtree declares is also a lint warning — a
+typo'd name (or a plain-input value sent through the cascade channel)
+must not silently do nothing.
 
 ## Time is a convention, not a feature
 

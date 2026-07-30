@@ -1,7 +1,7 @@
 //! The post-build fall-through report: which cascade inputs are settable at
 //! the view level, with winning declarations and the conflict lint.
 
-use odm_build::{BuildEngine, View, check_set_names};
+use odm_build::{BuildEngine, ValueSource, View, check_set_names};
 use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::Store;
@@ -60,26 +60,26 @@ fn fall_through_names_reach_the_view() {
 
     let names: Vec<&str> = report.entries.iter().map(|e| e.name.as_str()).collect();
     // `t` falls through from the root; `speed` falls through from the FIRST
-    // arm invoke (the second is covered by an explicit provide).
+    // arm invoke (the second is covered by an invoke's cascade value).
     assert_eq!(names, vec!["speed", "t"]);
     let t = report.entries.iter().find(|e| e.name == "t").unwrap();
     assert_eq!((t.minimum, t.maximum), (Some(0.0), Some(2.0)));
     assert_eq!(t.value, json!(0));
-    assert!(!t.set);
+    assert_eq!(t.source, ValueSource::Default);
     assert!(report.warnings.is_empty() && report.errors.is_empty());
 
-    // Set at the view: value and `set` reflect it.
-    let mut provides = Map::new();
-    provides.insert("t".into(), json!(1.5));
-    let view = View { path: "root.js".into(), args: Map::new(), provides };
+    // Set at the view: value and source reflect it.
+    let mut cascade = Map::new();
+    cascade.insert("t".into(), json!(1.5));
+    let view = View { path: "root.js".into(), args: Map::new(), cascade };
     let pass = e.start_pass(&sync, view);
     e.build_view(&pass).unwrap();
     let report = e.input_report(&pass);
     let t = report.entries.iter().find(|e| e.name == "t").unwrap();
     assert_eq!(t.value, json!(1.5));
-    assert!(t.set);
+    assert_eq!(t.source, ValueSource::View);
 
-    // The typo check: a provide nothing reads is rejected with the list.
+    // The typo check: a set value nothing reads is rejected with the list.
     let meta = e.meta("root.js", &sync.snapshot.sources["root.js"]);
     let meta = meta.as_ref().as_ref().unwrap();
     let mut typo = Map::new();
@@ -92,7 +92,7 @@ fn fall_through_names_reach_the_view() {
 }
 
 #[test]
-fn unconsumed_provides_are_warned() {
+fn unread_cascade_values_are_warned() {
     let dir = tempfile::tempdir().unwrap();
     write(
         dir.path(),
@@ -136,7 +136,7 @@ fn unconsumed_provides_are_warned() {
     );
     assert!(
         !report.warnings.iter().any(|w| w.contains("\"lift\"")),
-        "consumed provide must not warn: {:?}",
+        "read cascade value must not warn: {:?}",
         report.warnings
     );
 }

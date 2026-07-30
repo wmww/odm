@@ -9,10 +9,10 @@ use std::sync::Arc;
 pub struct SessionState {
     pub kernel: Arc<Kernel>,
     pub store: Arc<Store>,
-    /// The build's environment: cascade input values by name (explicit
-    /// provides from the invoke chain plus auto-provided declaration
-    /// defaults), resolved by the scheduler for this exact invoke path.
-    pub context: HashMap<String, Value>,
+    /// The build's environment: cascade input values by name (values
+    /// provided along the invoke chain plus declaration defaults),
+    /// resolved by the scheduler for this exact invoke path.
+    pub cascade: HashMap<String, Value>,
     pub cancel: Option<CancelToken>,
     pub deps: Vec<Dep>,
     pub logs: Vec<LogLine>,
@@ -30,6 +30,6 @@ pub trait Invoker {
         &mut self,
         path: &str,
         args: &Value,
-        provides: &serde_json::Map<String, Value>,
+        cascade: &serde_json::Map<String, Value>,
     ) -> Result<Hash, String>;
 }

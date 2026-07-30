@@ -84,7 +84,7 @@ fn memo_output_survives_gc() {
     store.memo_insert(
         key,
         MemoEntry {
-            deps: vec![Dep::Context { key: "t".into(), value: Hash::of_bytes(b"0.0") }],
+            deps: vec![Dep::Cascade { key: "t".into(), value: Hash::of_bytes(b"0.0") }],
             output: out,
             logs: vec![],
         },
@@ -106,7 +106,7 @@ fn memo_round_trip() {
         deps: vec![Dep::Invoke {
             path: "parts/wheel.js".into(),
             args: serde_json::json!({"r": 2}),
-            provides: serde_json::Map::new(),
+            cascade: serde_json::Map::new(),
             output: Hash::of_bytes(b"o"),
         }],
         output: Hash::of_bytes(b"out"),

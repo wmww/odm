@@ -20,13 +20,13 @@ pub use version::{ApiVersion, SUPPORTED, parse_doc, parse_pragma};
 /// deno_core dependency.
 pub use deno_core::v8::IsolateHandle;
 
-/// Canonical hash of a context value as recorded in `Dep::Context`
+/// Canonical hash of a cascade value as recorded in `Dep::Cascade`
 /// (missing keys hash to a distinct sentinel). The scheduler must use this
 /// exact function when validating memo entries.
-pub fn context_value_hash(v: Option<&Value>) -> Hash {
+pub fn cascade_value_hash(v: Option<&Value>) -> Hash {
     match v {
         Some(v) => odm_ir::hash_json(v),
-        None => Hash::of_bytes(ops::MISSING_CONTEXT),
+        None => Hash::of_bytes(ops::MISSING_CASCADE),
     }
 }
 
@@ -66,7 +66,7 @@ pub struct BuildInput<'a> {
     /// `{ name: { cascade: bool, type: string|null } }`.
     pub decls: &'a Value,
     /// The build's environment: cascade input values by name.
-    pub context: &'a HashMap<String, Value>,
+    pub cascade: &'a HashMap<String, Value>,
     pub kernel: Arc<odm_kernel::Kernel>,
     pub store: Arc<odm_store::Store>,
     pub cancel: Option<odm_kernel::CancelToken>,
@@ -104,12 +104,12 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Buil
     rt.execute_script("odm:select-version", snapshot::select_version_script(input.api))
         .map_err(|e| BuildError::Internal(format!("select api version {}: {e}", input.api)))?;
 
-    let BuildInput { path, args, decls, context, kernel, store, cancel, invoker, on_isolate, .. } =
+    let BuildInput { path, args, decls, cascade, kernel, store, cancel, invoker, on_isolate, .. } =
         input;
     let session = SessionState {
         kernel,
         store: store.clone(),
-        context: context.clone(),
+        cascade: cascade.clone(),
         cancel: cancel.clone(),
         deps: Vec::new(),
         logs: Vec::new(),
@@ -239,7 +239,7 @@ pub fn extract_export(
     rt.op_state().borrow_mut().put(SessionState {
         kernel,
         store,
-        context: HashMap::new(),
+        cascade: HashMap::new(),
         cancel: None,
         deps: Vec::new(),
         logs: Vec::new(),

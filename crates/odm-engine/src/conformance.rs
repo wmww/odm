@@ -15,7 +15,8 @@ struct Check {
     /// Shorthand for `set: { t: ... }`.
     #[serde(default)]
     t: f64,
-    /// View-level input values for this check (all become provides).
+    /// View-level input values for this check (all become view args or
+    /// cascade values, split like the CLI's `--set`).
     #[serde(default)]
     set: serde_json::Map<String, Value>,
     volume: Option<[f64; 2]>,
@@ -140,14 +141,14 @@ fn run_check(
         || check.raycast.is_some();
 
     // Split `set` like the command layer: declared plain inputs become view
-    // args, everything else view-level provides.
+    // args, everything else view-level cascade values.
     let mut view = View::of("root.js");
-    view.provides.insert("t".into(), serde_json::json!(check.t));
+    view.cascade.insert("t".into(), serde_json::json!(check.t));
     let meta = engine.meta("root.js", &sync.snapshot.sources["root.js"]);
     for (name, value) in &check.set {
         match meta.as_ref().as_ref().ok().and_then(|m| m.inputs.get(name)) {
             Some(input) if !input.cascade => view.args.insert(name.clone(), value.clone()),
-            _ => view.provides.insert(name.clone(), value.clone()),
+            _ => view.cascade.insert(name.clone(), value.clone()),
         };
     }
     let pass = engine.start_pass(sync, view);

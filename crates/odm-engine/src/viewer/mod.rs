@@ -336,13 +336,13 @@ impl ViewerApp {
                 inputs::Event::Set(section, name, value) => {
                     match section {
                         Section::Arg => tab.set_args.insert(name, value),
-                        Section::Cascade => tab.set_provides.insert(name, value),
+                        Section::Cascade => tab.set_cascade.insert(name, value),
                     };
                 }
                 inputs::Event::Clear(section, name) => {
                     match section {
                         Section::Arg => tab.set_args.remove(&name),
-                        Section::Cascade => tab.set_provides.remove(&name),
+                        Section::Cascade => tab.set_cascade.remove(&name),
                     };
                 }
                 inputs::Event::Preset(name) => {
@@ -353,7 +353,7 @@ impl ViewerApp {
                             if report.args.iter().any(|e| &e.name == input) {
                                 tab.set_args.insert(input.clone(), value.clone());
                             } else {
-                                tab.set_provides.insert(input.clone(), value.clone());
+                                tab.set_cascade.insert(input.clone(), value.clone());
                             }
                         }
                     }

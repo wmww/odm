@@ -17,33 +17,33 @@ pub const DEFAULT_ROOT: &str = "root.js";
 
 /// What a query or viewer tab evaluates: one doohickey against one set of
 /// inputs, against the current generation. `args` go to the target's
-/// declared inputs; `provides` are the view-level cascade values (the
-/// outermost provider).
+/// declared inputs; `cascade` sets cascade values over the whole built
+/// tree (the view is the outermost layer).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct View {
     pub path: String,
     pub args: Map<String, Value>,
-    pub provides: Map<String, Value>,
+    pub cascade: Map<String, Value>,
 }
 
 impl View {
     /// The default view of `path`: declared defaults, nothing set.
     pub fn of(path: impl Into<String>) -> View {
-        View { path: path.into(), args: Map::new(), provides: Map::new() }
+        View { path: path.into(), args: Map::new(), cascade: Map::new() }
     }
 
-    /// Canonical identity: same key ⇔ same (path, args, provides).
+    /// Canonical identity: same key ⇔ same (path, args, cascade).
     pub fn key(&self) -> Hash {
         let mut h = Hasher::new();
         h.str(&self.path);
         h.hash(&hash_json(&Value::Object(self.args.clone())));
-        h.hash(&hash_json(&Value::Object(self.provides.clone())));
+        h.hash(&hash_json(&Value::Object(self.cascade.clone())));
         h.finish()
     }
 }
 
 /// A build's environment: the cascade values visible to one invoke path —
-/// explicit provides (nearest wins) overlaid with auto-provided declaration
+/// explicitly provided values (nearest wins) overlaid with declaration
 /// defaults (shallowest wins). Immutable; extended on the way down.
 #[derive(Clone)]
 struct Env {
@@ -63,17 +63,17 @@ impl Env {
         Env { hash: h.finish(), values: Arc::new(values) }
     }
 
-    fn from_provides(provides: &Map<String, Value>) -> Env {
-        Env::new(provides.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+    fn from_cascade(cascade: &Map<String, Value>) -> Env {
+        Env::new(cascade.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
     }
 
-    /// Explicit provides overwrite (nearest provider wins).
-    fn with_provides(&self, provides: &Map<String, Value>) -> Env {
-        if provides.is_empty() {
+    /// An invoke's cascade values overwrite (nearest wins).
+    fn with_cascade(&self, cascade: &Map<String, Value>) -> Env {
+        if cascade.is_empty() {
             return self.clone();
         }
         let mut values = (*self.values).clone();
-        for (k, v) in provides {
+        for (k, v) in cascade {
             values.insert(k.clone(), v.clone());
         }
         Env::new(values)
@@ -139,7 +139,7 @@ pub struct SyncResult {
 }
 
 /// A build pass: one generation + one view (root path, args, view-level
-/// provides). Each build's environment is derived per invoke path, so
+/// cascade values). Each build's environment is derived per invoke path, so
 /// (code, effective args, environment) identifies a build.
 pub struct Pass {
     pub generation: GenerationId,
@@ -296,9 +296,9 @@ impl BuildEngine {
     }
 
     /// Build a pass's view: its target doohickey with the view's args,
-    /// under the view's provides (the outermost cascade provider).
+    /// under the view's cascade values (the outermost layer).
     pub fn build_view(self: &Arc<Self>, pass: &Arc<Pass>) -> Result<PassResult, BuildFailure> {
-        let env = Env::from_provides(&pass.view.provides);
+        let env = Env::from_cascade(&pass.view.cascade);
         let path = pass.view.path.clone();
         let args = Value::Object(pass.view.args.clone());
         let root = self.get_or_build(pass, &[], &path, &args, &env)?;
@@ -315,7 +315,7 @@ impl BuildEngine {
     }
 
     /// Build one doohickey. `env_base` is the caller's environment plus the
-    /// invoke's explicit provides; this file's own cascade declaration
+    /// invoke's cascade values; this file's own cascade declaration
     /// defaults fill in whatever nothing above covered.
     fn get_or_build(
         self: &Arc<Self>,
@@ -364,7 +364,7 @@ impl BuildEngine {
             }));
 
         // Validate this file's cascade inputs against its declarations, and
-        // record them as context deps up front — an unread declared input
+        // record them as cascade deps up front — an unread declared input
         // still keys memoization, or a memo hit under a different
         // environment could diverge from a from-scratch build.
         let mut pre_deps: Vec<Dep> = Vec::with_capacity(meta.inputs.len());
@@ -376,9 +376,9 @@ impl BuildEngine {
             input
                 .accept(name, value)
                 .map_err(|msg| fail(path, FailureKind::Input, format!("{path}: cascade {msg}")))?;
-            pre_deps.push(Dep::Context {
+            pre_deps.push(Dep::Cascade {
                 key: name.clone(),
-                value: odm_js::context_value_hash(Some(value)),
+                value: odm_js::cascade_value_hash(Some(value)),
             });
         }
 
@@ -399,7 +399,7 @@ impl BuildEngine {
         }
 
         let key = MemoKey { code: source.hash, args: args_hash };
-        let rkey = RKey { context: env.hash, code: key.code, args: key.args };
+        let rkey = RKey { env: env.hash, code: key.code, args: key.args };
 
         loop {
             if let Some(entry) = self.store.memo_get(&key)
@@ -477,7 +477,7 @@ impl BuildEngine {
                 api,
                 args,
                 decls,
-                context: &env.values,
+                cascade: &env.values,
                 kernel: self.kernel.clone(),
                 store: self.store.clone(),
                 cancel: Some(pass.cancel.clone()),
@@ -504,9 +504,9 @@ impl BuildEngine {
                 let mut deps = pre_deps;
                 for d in out.deps {
                     match &d {
-                        Dep::Context { key, .. }
+                        Dep::Cascade { key, .. }
                             if deps.iter().any(
-                                |p| matches!(p, Dep::Context { key: k, .. } if k == key),
+                                |p| matches!(p, Dep::Cascade { key: k, .. } if k == key),
                             ) => {}
                         _ => deps.push(d),
                     }
@@ -540,20 +540,20 @@ impl BuildEngine {
     ) -> bool {
         for dep in &entry.deps {
             match dep {
-                Dep::Context { key, value } => {
-                    let current = odm_js::context_value_hash(env.get(key));
+                Dep::Cascade { key, value } => {
+                    let current = odm_js::cascade_value_hash(env.get(key));
                     if current != *value {
                         return false;
                     }
                 }
-                Dep::Invoke { path: dep_path, args, provides, output } => {
+                Dep::Invoke { path: dep_path, args, cascade, output } => {
                     let mut chain2: Vec<ChainLink> = chain.to_vec();
                     chain2.push(ChainLink {
                         path: path.to_string(),
                         args: args_hash,
                         env: env.hash,
                     });
-                    let child_env = env.with_provides(provides);
+                    let child_env = env.with_cascade(cascade);
                     match self.get_or_build(pass, &chain2, dep_path, args, &child_env) {
                         Ok(out) if out == *output => {}
                         _ => return false,
@@ -601,7 +601,8 @@ pub(crate) fn effective_args(
         };
         if input.cascade {
             return Err(format!(
-                "{path}: {name:?} is a cascade input — set it via provides, not args"
+                "{path}: {name:?} is a cascade input — it travels in the invoke's cascade \
+                 (third argument) or the view's set values, not args"
             ));
         }
         let v = input.accept(name, value).map_err(|msg| format!("{path}: {msg}"))?;
@@ -654,9 +655,9 @@ impl Invoker for EngineInvoker {
         &mut self,
         path: &str,
         args: &Value,
-        provides: &Map<String, Value>,
+        cascade: &Map<String, Value>,
     ) -> Result<Hash, String> {
-        let child_env = self.env.with_provides(provides);
+        let child_env = self.env.with_cascade(cascade);
         self.engine
             .get_or_build(&self.pass, &self.chain, path, args, &child_env)
             .map_err(|f| f.message)
