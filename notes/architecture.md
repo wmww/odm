@@ -27,8 +27,23 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - The `//!` comment block doubles as prose description (summary line +
   body), parsed at sync time without evaluating the module.
 - `.odm/` is engine-owned (socket `.odm/engine.sock`, `renders/`,
-  `viewer.json` tab persistence). Excluded from generation hashing. CLI
-  finds the project root by walking up (socket first, then odm.toml).
+  `viewer.json` tab persistence). Excluded from generation hashing.
+- **Project resolution** (`odm-cli`, reused by `run`): an explicitly named
+  dir — `odm run <dir>`, `--project <dir>` — is taken exactly as given and
+  must hold `odm.toml` (`project_dir`); **nothing ever walks up from a path
+  someone named**. Only the cwd fallback walks: client commands take the
+  nearest project at or above cwd, git-style, and talk to *its* socket
+  (`find_project`). Marker, not socket: a subdirectory of an unserved
+  project then says "no engine, start one" instead of reaching past it to
+  whichever project further up happens to be running. `run` does not walk
+  at all — it serves the dir named or cwd, which must be a project; the one
+  exception is the viewer with no dir, which asks (Open Project screen,
+  below) rather than failing.
+  `is_project` is only the marker's presence, not its contents: a malformed
+  `odm.toml` is scan's complaint to make, and refusing to open it would
+  leave no way to fix it in the viewer. Two copies of that one-liner
+  (`odm_build::is_project`, `odm_cli::is_project`) — odm-cli stays
+  dependency-light on purpose.
 - `odm.toml` is the ONE project file the engine writes: it records its
   `engine` version back on open (warning first if the file names a newer
   engine).
@@ -113,7 +128,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   perspective/ortho cameras; `render_png` and the viewer viewport share
   `render_to_views`; the GPU mesh cache is pruned to the live scene after
   every render/publish. `Renderer::with_device` for the shared eframe device.
-- `odm-engine` — library, entered via `odm run` (`run(project, headless)`).
+- `odm-engine` — library, entered via `odm run` (`run_headless(project)` /
+  `run_viewer(Option<project>)`).
   Headless: socket server only. Default: + eframe
   viewer (menu bar, tab strip — one view per tab, persisted in
   `.odm/viewer.json`; classic notebook tabs, each with its own close box, a
@@ -171,14 +187,16 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   from `theme::pixels`/`theme::arrow` as a `Mesh`. See "Scrollbars" below.
 - `odm-cli` — client commands: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
-  from `ok`. Also owns `find_project` (the walk-up), which `run` reuses, and
-  the two engine-less markdown commands: `prompt.rs` (`odm prompt`
+  from `ok`. Also owns project resolution — `find_project` (the cwd walk-up),
+  `project_dir`, `is_project`, all reused by `run` — and the two engine-less
+  markdown commands: `prompt.rs` (`odm prompt`
   `include_str!`s `docs/prompts/*.md`) and `docs.rs` (`odm docs`
   `include_dir!`s the whole `docs/` tree: topic dump, section-grepping
   `search`, `changes <from> <to>` migration concatenation, `--api N`
   rejected until frozen docs snapshots exist).
-- `odm` — the only binary. `odm run [<dir>] [--headless]` → `odm_engine::run`;
-  everything else → `odm_cli::run`. Top-level `--help` splices in
+- `odm` — the only binary. `odm run [<dir>] [--headless]` → the engine
+  (`odm_cli::project_dir`, per Project format above: the dir named or cwd,
+  never an ancestor); everything else → `odm_cli::run`. Top-level `--help` splices in
   `odm_cli::USAGE`. Splitting the two halves into libs behind one bin keeps
   the client's dependency-light layering and leaves room for a
   client-only build later, while shipping one binary: no CLI/engine version
@@ -208,7 +226,8 @@ the frame after — and a highlight that stops at the text looks broken.
 
 File ▸ Open opens **another engine**, it does not reconfigure this one: an
 engine is bound to one project's store, socket, build loop and watcher.
-`session.rs` holds the current `EngineState` and swaps it:
+`session.rs` holds the current `EngineState` (there may be none — see below)
+and swaps it:
 
 - The V8 snapshot (`Arc<JsEnv>`) is the one thing shared across sessions —
   `JsEnv::new` is a once-per-process job, and building a second one on the UI
@@ -225,10 +244,23 @@ engine is bound to one project's store, socket, build loop and watcher.
 - The viewer then blanks itself — scene, tree, selection, timeline, GPU mesh
   cache — and reframes on the first build, exactly as at startup.
 
+**No project open** is a real state, not just a moment during startup:
+`Sessions::empty()` builds the snapshot and serves nothing, and the viewer
+launched outside a project starts there (`ViewerApp::session: Option`). It
+draws the menu bar (File only — nothing to look at, so no View menu) over a
+"No project open." panel with an Open Project… button, with the dialog
+already up, browsing cwd. Cancel leaves the panel rather than trapping the
+user in a modal with nowhere to go. `ViewerApp::state()` expects a session,
+which holds because `ui` peels this case off first; everything downstream of
+it (tabs, `self.tabs[self.active]`) assumes a project. Open from here is the
+same `Sessions::open` path as a swap, minus the old session to retire —
+`Sessions::start` is now just `empty()` + `open()`.
+
 `viewer/open.rs` is the directory chooser (no portal here, no dialog crate in
-the tree). Directories only, since a project *is* one; `session::is_project`
-(odm.toml, the same rule as `odm_cli::find_project`) picks the icon
-and gates Open. The path field is what Open acts on, so clicking a row and
+the tree). Directories only, since a project *is* one; `is_project` (odm.toml)
+picks the icon and gates Open. `new(current)` browses the open project's parent with it
+selected; `browse(dir)` browses `dir` with nothing selected, for when there is
+no project to start from. The path field is what Open acts on, so clicking a row and
 typing a path are the same gesture; double-clicking a plain folder browses into
 it, double-clicking a project opens it. `~` expands, nothing else does. Its row
 list is a `theme::list_box`, so it gets the era's scrollbar for free.

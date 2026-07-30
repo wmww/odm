@@ -2,7 +2,7 @@
 //! the viewer unless `--headless`); every other command is the agent-facing
 //! client, which talks to a running engine over the project's socket.
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use std::path::PathBuf;
 
 fn usage() -> String {
@@ -13,8 +13,10 @@ odm — CAD/3D modelling for agents
 usage: odm run [<project-dir>] [--headless]        serve a project
        odm [--project <dir>] <command> [options]   query a running engine
 
-The project dir defaults to the nearest enclosing project (walking up from cwd,
-like git). `run` opens the viewer unless --headless.
+A project is a directory with an `odm.toml` in it. Client commands take the
+nearest one at or above cwd (walking up, like git) and talk to its engine. `run`
+does not walk up: it serves the dir named, or cwd, which must be a project —
+except with a viewer, which asks (its Open Project screen) instead of failing.
 
 commands:
 {}
@@ -69,13 +71,23 @@ fn run_engine(args: &[String]) -> anyhow::Result<i32> {
             other => bail!("unknown option {other} for run; run `odm --help`"),
         }
     }
-    let project = match project {
-        Some(p) => p,
-        None => odm_cli::find_project(&std::env::current_dir()?)?,
+    // A dir named, or cwd; never an ancestor. Where the two modes differ: with
+    // no project in cwd, headless has nothing to serve and says so, while the
+    // viewer opens its Open Project screen and asks.
+    let project = match (project, headless) {
+        (Some(p), _) => Some(odm_cli::project_dir(p)?),
+        (None, true) => Some(odm_cli::project_dir(std::env::current_dir()?)?),
+        (None, false) => {
+            let cwd = std::env::current_dir()?;
+            odm_cli::is_project(&cwd).then(|| odm_cli::project_dir(cwd)).transpose()?
+        }
     };
-    let project = project
-        .canonicalize()
-        .map_err(|e| anyhow!("cannot open project {}: {e}", project.display()))?;
-    odm_engine::run(project, headless)?;
+    match project {
+        Some(project) => match headless {
+            true => odm_engine::run_headless(project)?,
+            false => odm_engine::run_viewer(Some(project))?,
+        },
+        None => odm_engine::run_viewer(None)?,
+    }
     Ok(0)
 }

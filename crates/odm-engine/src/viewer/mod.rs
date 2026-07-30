@@ -122,8 +122,10 @@ pub(crate) struct SceneCache {
 
 pub struct ViewerApp {
     sessions: Arc<Sessions>,
-    /// The project being viewed. Swapped wholesale by File ▸ Open.
-    state: Arc<EngineState>,
+    /// The project being viewed, if one is: `None` means the viewer was
+    /// launched outside a project and is showing the Open Project screen.
+    /// Swapped wholesale by File ▸ Open.
+    session: Option<Arc<EngineState>>,
     renderer: Renderer,
     /// One view each; `active` is what the viewport shows.
     tabs: Vec<Tab>,
@@ -151,7 +153,7 @@ impl ViewerApp {
         let ctx = cc.egui_ctx.clone();
         sessions.set_wake(Arc::new(move || ctx.request_repaint()));
         let mut app = ViewerApp {
-            state: sessions.current(),
+            session: sessions.current(),
             sessions,
             renderer,
             tabs: Vec::new(),
@@ -166,15 +168,27 @@ impl ViewerApp {
             add_tab: None,
             quit,
         };
-        app.init_tabs();
+        match app.session.is_some() {
+            true => app.init_tabs(),
+            // Nothing to show but the question: which project? Browsing starts
+            // where we were launched, the likeliest place to find one.
+            false => app.open_dialog = Some(open::OpenDialog::browse(&cwd())),
+        }
         app
+    }
+
+    /// The open project's engine. Cloned, so callers can hold it across a
+    /// `&mut` borrow of the tabs. Every caller is on the with-project UI path;
+    /// `ui` peels off the no-project case before any of them run.
+    fn state(&self) -> Arc<EngineState> {
+        self.session.clone().expect("a project is open")
     }
 
     /// Restore tabs from `.odm/viewer.json`, or start with one default-view
     /// tab, and register them as the engine's active views (replacing the
     /// headless default slot).
     fn init_tabs(&mut self) {
-        let project = self.state.project().to_path_buf();
+        let project = self.state().project().to_path_buf();
         let mut counter = self.tab_counter;
         let mut next_slot = || {
             counter += 1;
@@ -189,11 +203,11 @@ impl ViewerApp {
         self.active = active;
         // The tabs are the active views now; the engine's own default slot
         // would just double-build tab 0.
-        self.state.remove_view(crate::state::DEFAULT_SLOT);
+        self.state().remove_view(crate::state::DEFAULT_SLOT);
         for tab in &self.tabs {
-            self.state.set_view(&tab.slot, tab.view());
+            self.state().set_view(&tab.slot, tab.view());
         }
-        self.state.set_active_slot(Some(self.tab().slot.clone()));
+        self.state().set_active_slot(Some(self.tab().slot.clone()));
     }
 
     fn tab(&self) -> &Tab {
@@ -205,24 +219,25 @@ impl ViewerApp {
     }
 
     fn save_tabs(&self) {
-        tabs::save(self.state.project(), &self.tabs, self.active);
+        tabs::save(self.state().project(), &self.tabs, self.active);
     }
 
-    /// Point the whole viewer at another project: new engine, blank slate. The
-    /// camera reframes on the first build, as it does at startup.
+    /// Point the whole viewer at a project — the first one, or another in place
+    /// of the current: new engine, blank slate. The camera reframes on the first
+    /// build, as it does at startup.
     fn open_project(&mut self, project: &std::path::Path, ctx: &egui::Context) -> Result<(), String> {
-        self.state = self.sessions.open(project)?;
+        self.session = Some(self.sessions.open(project)?);
         self.tabs.clear();
         self.tab_counter = 0;
         self.init_tabs();
         // The new session has its own (empty) transcript; the half-typed line
         // was meant for the old one.
         self.chat_input.clear();
-        self.state.set_selection(Vec::new());
+        self.state().set_selection(Vec::new());
         // Nothing of the old project should still be resident, or on screen.
         self.renderer.prune_cache(&|_| false);
         self.needs_render = true;
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(&self.state)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.session.as_deref())));
         Ok(())
     }
 
@@ -236,12 +251,13 @@ impl ViewerApp {
 
     /// Pull the active tab's latest published build; re-flatten on change.
     fn poll_published(&mut self, ctx: &egui::Context) {
+        let state = self.state();
         let tab = &mut self.tabs[self.active];
-        let p = self.state.published(&tab.slot);
+        let p = state.published(&tab.slot);
         if p.revision == tab.published.revision {
             return;
         }
-        let engine = self.state.build_engine();
+        let engine = state.build_engine();
         let mut selection_reset = false;
         if let Some((root_hash, root_obj)) = &p.root
             && tab.published.root.as_ref().map(|(h, _)| h) != Some(root_hash)
@@ -346,7 +362,7 @@ impl ViewerApp {
             }
         }
         let (slot, view) = (tab.slot.clone(), tab.view());
-        self.state.set_view(&slot, view);
+        self.state().set_view(&slot, view);
         self.save_tabs();
     }
 
@@ -365,20 +381,20 @@ impl ViewerApp {
         self.needs_render = true;
         // The CLI's `odm selection` and `--viewer-state` follow the tab the
         // user is looking at.
-        self.state.set_selection(self.tab().selected.clone());
-        self.state.set_active_slot(Some(self.tab().slot.clone()));
+        self.state().set_selection(self.tab().selected.clone());
+        self.state().set_active_slot(Some(self.tab().slot.clone()));
         self.save_tabs();
     }
 
     fn add_tab(&mut self, path: String) {
         let slot = self.next_slot();
         let tab = Tab::new(slot.clone(), path);
-        self.state.set_view(&slot, tab.view());
+        self.state().set_view(&slot, tab.view());
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         self.needs_render = true;
-        self.state.set_selection(Vec::new());
-        self.state.set_active_slot(Some(self.tab().slot.clone()));
+        self.state().set_selection(Vec::new());
+        self.state().set_active_slot(Some(self.tab().slot.clone()));
         self.save_tabs();
     }
 
@@ -387,13 +403,13 @@ impl ViewerApp {
             return; // the last tab stays
         }
         let tab = self.tabs.remove(index);
-        self.state.remove_view(&tab.slot);
+        self.state().remove_view(&tab.slot);
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len() - 1;
         }
         self.needs_render = true;
-        self.state.set_selection(self.tab().selected.clone());
-        self.state.set_active_slot(Some(self.tab().slot.clone()));
+        self.state().set_selection(self.tab().selected.clone());
+        self.state().set_active_slot(Some(self.tab().slot.clone()));
         self.save_tabs();
     }
 
@@ -553,7 +569,7 @@ impl ViewerApp {
         }
         if add {
             // A fresh scan so the picker lists what is on disk right now.
-            let files = match self.state.build_engine().sync() {
+            let files = match self.state().build_engine().sync() {
                 Ok(sync) => sync.snapshot.sources.keys().cloned().collect(),
                 Err(_) => Vec::new(),
             };
@@ -853,8 +869,9 @@ impl ViewerApp {
     /// Nearest solid surface along the ray (shaded mode).
     fn pick_solid(&self, origin: [f64; 3], dir: [f64; 3]) -> Option<(String, Option<String>)> {
         let scene = self.tab().scene.as_ref()?;
-        let kernel = &self.state.build_engine().kernel;
-        let hit = scene::raycast(kernel, &scene.scene.instances, origin, dir)?;
+        let state = self.state();
+        let hit =
+            scene::raycast(&state.build_engine().kernel, &scene.scene.instances, origin, dir)?;
         Some((
             hit.get("node")?.as_str()?.to_string(),
             hit.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()),
@@ -876,10 +893,11 @@ impl ViewerApp {
     }
 
     fn set_selection(&mut self, sel: Vec<(String, Option<String>)>) {
+        let state = self.state();
         let tab = &mut self.tabs[self.active];
         tab.selected = sel;
         tab.tree.reveal(&tab.selected);
-        self.state.set_selection(tab.selected.clone());
+        state.set_selection(tab.selected.clone());
         self.needs_render = true;
     }
 
@@ -907,7 +925,7 @@ impl ViewerApp {
     /// Messages to and from the agent: transcript above, one input line below.
     fn chat_ui(&mut self, ui: &mut egui::Ui) {
         let size = egui::vec2(ui.available_width(), CHAT_HEIGHT);
-        self.state.with_transcript(|transcript| {
+        self.state().with_transcript(|transcript| {
             theme::tail_box(ui, "chat", size, |ui| {
                 if transcript.is_empty() {
                     ui.label(
@@ -936,7 +954,7 @@ impl ViewerApp {
         if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             let text = self.chat_input.trim().to_owned();
             if !text.is_empty() {
-                self.state.send_message(text);
+                self.state().send_message(text);
             }
             self.chat_input.clear();
             // Enter sends *and* keeps the caret, so a reply can follow.
@@ -953,7 +971,7 @@ impl ViewerApp {
             // The user's cue to go prod the agent in its own terminal.
             theme::status_field(
                 ui,
-                match self.state.listeners() {
+                match self.state().listeners() {
                     0 => "agent is not listening",
                     _ => "agent is listening",
                 },
@@ -986,10 +1004,55 @@ impl ViewerApp {
             });
         }
     }
+
+    /// The whole window when no project is open: the menu bar, and the reason
+    /// there is nothing under it. The Open dialog is up already (see `new`);
+    /// dismissing it leaves this, and File ▸ Open Project… brings it back —
+    /// a modal with nowhere to go would be a trap.
+    fn no_project_ui(&mut self, ui: &mut egui::Ui) {
+        let menu = egui::Panel::top("menubar")
+            .frame(egui::Frame::new().fill(theme::FACE).inner_margin(egui::Margin::symmetric(2, 1)))
+            .show(ui, |ui| menu::bar(self, ui));
+        theme::band(ui, menu.response.rect);
+        egui::CentralPanel::default().frame(theme::panel_frame()).show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() / 2.0 - 24.0);
+                ui.label("No project open.");
+                ui.add_space(6.0);
+                if theme::button(ui, "Open Project…").clicked() {
+                    self.open_dialog = Some(open::OpenDialog::browse(&cwd()));
+                }
+            });
+        });
+        self.open_dialog_ui(ui.ctx());
+    }
+
+    /// The Open dialog, when one is up. Kept out of the two layouts that show
+    /// it, and drawn last by both: its backdrop covers everything above.
+    fn open_dialog_ui(&mut self, ctx: &egui::Context) {
+        // Taken out of `self` for the call, since opening a project touches
+        // all of it.
+        let Some(mut dialog) = self.open_dialog.take() else { return };
+        match dialog.ui(ctx) {
+            open::Outcome::Idle => self.open_dialog = Some(dialog),
+            open::Outcome::Cancelled => {}
+            open::Outcome::Open(project) => {
+                // A project the engine won't take leaves the dialog up, saying
+                // why, rather than closing over the failure.
+                if let Err(e) = self.open_project(&project, ctx) {
+                    dialog.report(e);
+                    self.open_dialog = Some(dialog);
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if self.session.is_none() {
+            return self.no_project_ui(ui);
+        }
         self.poll_published(ui.ctx());
         self.advance_transport(ui.ctx());
 
@@ -1037,23 +1100,7 @@ impl eframe::App for ViewerApp {
             .show(ui, |ui| self.viewport_ui(ui, frame));
 
         self.add_tab_ui(ui.ctx());
-
-        // Last, so the modal's backdrop covers everything above. Taken out of
-        // `self` for the call, since opening a project touches all of it.
-        if let Some(mut dialog) = self.open_dialog.take() {
-            match dialog.ui(ui.ctx()) {
-                open::Outcome::Idle => self.open_dialog = Some(dialog),
-                open::Outcome::Cancelled => {}
-                open::Outcome::Open(project) => {
-                    // A project the engine won't take leaves the dialog up,
-                    // saying why, rather than closing over the failure.
-                    if let Err(e) = self.open_project(&project, ui.ctx()) {
-                        dialog.report(e);
-                        self.open_dialog = Some(dialog);
-                    }
-                }
-            }
-        }
+        self.open_dialog_ui(ui.ctx());
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -1061,9 +1108,16 @@ impl eframe::App for ViewerApp {
     }
 }
 
+/// Where to start browsing when there is no project to browse from. `/` if
+/// even cwd is gone — the dialog can walk out of anywhere.
+fn cwd() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
+}
+
 /// Window title for a project: the odm.toml name when there is one, else
 /// the directory name. Re-applied whenever File ▸ Open swaps a project in.
-fn window_title(state: &EngineState) -> String {
+fn window_title(state: Option<&EngineState>) -> String {
+    let Some(state) = state else { return "ODM".to_owned() };
     let project = state.project();
     let name = odm_build::read_marker(project)
         .ok()

@@ -1,8 +1,9 @@
 # CLI reference
 
 The `odm` CLI talks to the running engine. Run it from anywhere inside
-the project (it walks up to find the engine socket), or pass
-`--project <dir>` first. Every command that looks at the scene **syncs
+the project — it walks up from cwd to the nearest `odm.toml` and talks to
+that project's engine — or pass `--project <dir>` first, which is taken
+exactly as given (no walking up from it). Every command that looks at the scene **syncs
 first** — rescans files, rebuilds what changed, then answers — and prints
 a single JSON object. Exit code 0 = ok, nonzero = error. (`prompt` and
 `docs` are the exceptions: no engine, and markdown rather than JSON.)

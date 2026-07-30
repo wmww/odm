@@ -2740,6 +2740,7 @@ dependencies = [
  "anyhow",
  "include_dir",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

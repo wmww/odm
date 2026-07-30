@@ -13,8 +13,9 @@ use std::path::Path;
 /// on-disk expectations change.
 pub const ENGINE_VERSION: i64 = 0;
 
-/// `odm.toml`: the project marker the walk-up looks for. Authored at
-/// project creation; the engine only ever rewrites the `engine` value.
+/// `odm.toml`: the project marker — what makes a directory a project, and all
+/// that `is_project` looks at. Authored at project creation; the engine only
+/// ever rewrites the `engine` value.
 /// Deliberately NOT part of generation identity — it never affects build
 /// output, and the engine writing it must not churn generations.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -71,6 +72,12 @@ pub fn scan_project(dir: &Path) -> Result<ProjectSnapshot, ScanError> {
     walk(dir, "", &mut sources, &mut generation_sources)?;
     let marker = read_marker(dir)?;
     Ok(ProjectSnapshot { sources, marker, generation_sources })
+}
+
+/// Is this directory an ODM project? Presence of the marker, nothing more —
+/// a malformed `odm.toml` is still a project, and says so at scan time.
+pub fn is_project(dir: &Path) -> bool {
+    dir.join("odm.toml").is_file()
 }
 
 /// Parse `dir/odm.toml` if present. Unknown keys are rejected.

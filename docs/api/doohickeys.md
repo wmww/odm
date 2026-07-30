@@ -7,8 +7,8 @@ entry file the CLI and viewer try when no path is given, like
 `index.html`. Projects are free to name entry files meaningfully
 instead.
 
-The project is marked by `odm.toml` at its root (what the CLI's
-walk-up looks for):
+The project is marked by `odm.toml` at its root — what the CLI and the
+engine require of the directory they are pointed at:
 
 ```toml
 name = "flange-demo"   # shown in the window title / status

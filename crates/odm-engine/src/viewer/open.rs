@@ -45,16 +45,23 @@ struct Entry {
 impl OpenDialog {
     /// Start browsing where `current` lives, with `current` picked out.
     pub fn new(current: &Path) -> OpenDialog {
-        let dir = current.parent().unwrap_or(current).to_path_buf();
+        let mut dialog = OpenDialog::browse(current.parent().unwrap_or(current));
+        dialog.path = current.display().to_string();
+        dialog.selected = dialog.entries.iter().position(|e| e.path == current);
+        dialog
+    }
+
+    /// Start browsing `dir` itself, nothing picked out — for when there is no
+    /// project to open from, only a place to look.
+    pub fn browse(dir: &Path) -> OpenDialog {
         let mut dialog = OpenDialog {
-            dir,
+            dir: dir.to_path_buf(),
             entries: Vec::new(),
             selected: None,
-            path: current.display().to_string(),
+            path: dir.display().to_string(),
             error: None,
         };
         dialog.rescan();
-        dialog.selected = dialog.entries.iter().position(|e| e.path == current);
         dialog
     }
 

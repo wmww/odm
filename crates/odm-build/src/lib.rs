@@ -21,6 +21,6 @@ pub use scheduler::{
     View,
 };
 pub use sources::{
-    ENGINE_VERSION, ProjectMarker, ProjectSnapshot, ScanError, Source, read_marker, scan_project,
-    sync_marker,
+    ENGINE_VERSION, ProjectMarker, ProjectSnapshot, ScanError, Source, is_project, read_marker,
+    scan_project, sync_marker,
 };

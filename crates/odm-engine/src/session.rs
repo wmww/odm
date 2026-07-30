@@ -9,55 +9,56 @@
 //! Nothing is torn down until the replacement is known to work: the new
 //! project's socket is claimed first, so a project that is already being
 //! served (or a directory that isn't one) leaves the current session running.
+//!
+//! There may also be no session at all: the viewer starts that way when it was
+//! launched outside a project, and Open is how it gets one.
 
 use crate::server;
 use crate::state::EngineState;
+pub use odm_build::is_project;
 use odm_js::JsEnv;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-
-/// Does this directory look like an ODM project? Same rule the CLI's walk-up
-/// uses (`odm_cli::find_project`): odm.toml is the project marker.
-pub fn is_project(dir: &Path) -> bool {
-    dir.join("odm.toml").exists()
-}
 
 fn socket_of(project: &Path) -> PathBuf {
     project.join(".odm/engine.sock")
 }
 
-/// The viewer's handle on the current project.
+/// The viewer's handle on the current project, if there is one.
 pub struct Sessions {
     env: Arc<JsEnv>,
-    current: Mutex<Arc<EngineState>>,
+    current: Mutex<Option<Arc<EngineState>>>,
     /// Re-registered on each new session, so the viewer keeps waking up.
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl Sessions {
+    /// Build the JS snapshot; serve nothing yet.
+    pub fn empty() -> anyhow::Result<Arc<Sessions>> {
+        let env = Arc::new(JsEnv::new().map_err(|e| anyhow::anyhow!("js snapshot: {e}"))?);
+        Ok(Arc::new(Sessions {
+            env,
+            current: Mutex::new(None),
+            wake: Mutex::new(None),
+        }))
+    }
+
     /// Build the JS snapshot, serve `project`, and start its threads.
     pub fn start(project: PathBuf) -> anyhow::Result<Arc<Sessions>> {
-        let env = Arc::new(JsEnv::new().map_err(|e| anyhow::anyhow!("js snapshot: {e}"))?);
-        let listener = server::bind(&socket_of(&project))?;
-        sync_marker(&project);
-        let state = EngineState::new(project, env.clone())?;
-        let sessions = Arc::new(Sessions {
-            env,
-            current: Mutex::new(state.clone()),
-            wake: Mutex::new(None),
-        });
-        spawn_threads(&state, listener);
-        state.rebuild_active();
+        let sessions = Sessions::empty()?;
+        sessions.open(&project).map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(sessions)
     }
 
-    pub fn current(&self) -> Arc<EngineState> {
+    pub fn current(&self) -> Option<Arc<EngineState>> {
         self.current.lock().unwrap().clone()
     }
 
     /// Register the viewer's repaint hook, now and for every project after.
     pub fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
-        self.current().set_wake(wake.clone());
+        if let Some(state) = self.current() {
+            state.set_wake(wake.clone());
+        }
         *self.wake.lock().unwrap() = Some(wake);
     }
 
@@ -77,8 +78,10 @@ impl Sessions {
             ));
         }
         let old = self.current();
-        if old.project() == project {
-            return Ok(old);
+        if let Some(old) = &old
+            && old.project() == project
+        {
+            return Ok(old.clone());
         }
 
         // Claim the new socket before retiring the old session: this is the
@@ -90,8 +93,10 @@ impl Sessions {
             state.set_wake(wake);
         }
 
-        *self.current.lock().unwrap() = state.clone();
-        old.stop();
+        *self.current.lock().unwrap() = Some(state.clone());
+        if let Some(old) = old {
+            old.stop();
+        }
         spawn_threads(&state, listener);
         state.rebuild_active();
         Ok(state)

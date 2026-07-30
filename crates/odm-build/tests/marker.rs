@@ -1,6 +1,22 @@
 //! odm.toml: the project marker, and the ONE file the engine writes back.
 
-use odm_build::{ENGINE_VERSION, read_marker, sync_marker};
+use odm_build::{ENGINE_VERSION, is_project, read_marker, sync_marker};
+
+#[test]
+fn a_project_is_a_dir_with_the_marker_in_it() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(!is_project(dir.path()));
+
+    // Broken contents still mark a project — that is scan's complaint to make,
+    // and `run` refusing to open it would leave no way to fix it in the viewer.
+    std::fs::write(dir.path().join("odm.toml"), "name = ").unwrap();
+    assert!(is_project(dir.path()));
+
+    // A directory of that name is not the marker.
+    let odd = tempfile::tempdir().unwrap();
+    std::fs::create_dir(odd.path().join("odm.toml")).unwrap();
+    assert!(!is_project(odd.path()));
+}
 
 #[test]
 fn marker_parses_and_rejects_unknown_keys() {

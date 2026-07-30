@@ -28,16 +28,19 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
                 MenuEntry::item(Action::Quit, "Exit"),
             ],
         ));
-        action = action.or(theme::menu(
-            ui,
-            "View",
-            &[
-                MenuEntry::item(Action::Frame, "Frame Scene").shortcut("F"),
-                MenuEntry::separator(),
-                MenuEntry::check(Action::Wireframe, "Wireframe", app.wireframe),
-                MenuEntry::check(Action::Grid, "Grid", app.grid),
-            ],
-        ));
+        // Nothing to look at without a project, so nothing to say about how.
+        if app.session.is_some() {
+            action = action.or(theme::menu(
+                ui,
+                "View",
+                &[
+                    MenuEntry::item(Action::Frame, "Frame Scene").shortcut("F"),
+                    MenuEntry::separator(),
+                    MenuEntry::check(Action::Wireframe, "Wireframe", app.wireframe),
+                    MenuEntry::check(Action::Grid, "Grid", app.grid),
+                ],
+            ));
+        }
     });
     if let Some(action) = action {
         apply(app, action);
@@ -46,7 +49,13 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
 
 fn apply(app: &mut ViewerApp, action: Action) {
     match action {
-        Action::Open => app.open_dialog = Some(OpenDialog::new(app.state.project())),
+        // Browse from the open project, or from wherever we were launched.
+        Action::Open => {
+            app.open_dialog = Some(match &app.session {
+                Some(state) => OpenDialog::new(state.project()),
+                None => OpenDialog::browse(&super::cwd()),
+            })
+        }
         Action::Quit => app.quit.request(),
         Action::Frame => app.frame_scene(),
         Action::Wireframe => {

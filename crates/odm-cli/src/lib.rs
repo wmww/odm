@@ -1,6 +1,7 @@
 //! Agent-facing CLI commands: a thin JSON pipe to a running engine over the
-//! project's unix socket (found by walking up from cwd, like git). `odm run`
-//! lives in the `odm` binary crate; everything else lands here.
+//! project's unix socket. The project is the nearest one at or above cwd
+//! (walking up like git), or `--project <dir>` said outright. `odm run` lives
+//! in the `odm` binary crate; everything else lands here.
 
 mod docs;
 mod prompt;
@@ -174,8 +175,8 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     };
 
     let project = match project {
-        Some(p) => p,
-        None => find_project(&std::env::current_dir()?)?,
+        Some(p) => project_dir(p)?,
+        None => find_project(std::env::current_dir()?)?,
     };
     let sock = project.join(".odm/engine.sock");
     let mut stream = UnixStream::connect(&sock).with_context(|| {
@@ -345,30 +346,46 @@ fn take_positional<'a>(
     }
 }
 
-/// Walk up from `start` looking for `.odm/engine.sock` (like git); fall back
-/// to the first ancestor containing the `odm.toml` project marker.
-pub fn find_project(start: &Path) -> anyhow::Result<PathBuf> {
-    let mut dir = start.to_path_buf();
+/// Is this directory an ODM project? The marker is the whole rule (same as
+/// `odm_build::is_project`, restated here to keep this crate dependency-light).
+pub fn is_project(dir: &Path) -> bool {
+    dir.join("odm.toml").is_file()
+}
+
+/// Which project a command targets when none was named: the nearest one at or
+/// above `start` (cwd), walking up like git. Its socket is then where the
+/// engine has to be — so a subdirectory of a project nobody is serving says
+/// "no engine, start one" instead of reaching past it to whichever project
+/// further up happens to be running.
+pub fn find_project(start: PathBuf) -> anyhow::Result<PathBuf> {
+    let start = start
+        .canonicalize()
+        .with_context(|| format!("cannot read {}", start.display()))?;
+    let mut dir = start.clone();
     loop {
-        if dir.join(".odm/engine.sock").exists() {
+        if is_project(&dir) {
             return Ok(dir);
         }
         if !dir.pop() {
-            break;
+            bail!(
+                "no ODM project at {} or above (looked for odm.toml); \
+                 name one with --project <dir>",
+                start.display()
+            );
         }
     }
-    let mut dir = start.to_path_buf();
-    loop {
-        if dir.join("odm.toml").exists() {
-            return Ok(dir);
-        }
-        if !dir.pop() {
-            break;
-        }
+}
+
+/// Canonical path to the project directory `path` names — exactly that dir, no
+/// walking: what `--project` and `odm run` are given is taken at face value.
+pub fn project_dir(path: PathBuf) -> anyhow::Result<PathBuf> {
+    let dir = path
+        .canonicalize()
+        .with_context(|| format!("cannot open project {}", path.display()))?;
+    if !is_project(&dir) {
+        // No hint about walking up: this is the path someone named, and naming
+        // one is already the hint the other resolution failure gives.
+        bail!("{} is not an ODM project: no odm.toml here", dir.display());
     }
-    bail!(
-        "no ODM project found from {} upward (looked for .odm/engine.sock, then odm.toml); \
-         name the project dir explicitly",
-        start.display()
-    )
+    Ok(dir)
 }
