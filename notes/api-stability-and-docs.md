@@ -17,7 +17,9 @@ projects and run agent feedback rounds before stabilizing anything).
   file shadowing a new name in its own isolate keeps its shadow).
   Rejected X.Y min-featureset: unenforced minor rots; its one payoff
   (clear "engine too old" error) is had cheaper via good unknown-API
-  errors. Pragma grammar can grow a minor later.
+  errors. Pragma grammar can grow a minor later. The same `//!` block
+  also carries the doohickey's prose description (first line = summary)
+  — see `plans/views-and-metadata.md` phase 1.
 - **One live implementation, not frozen copies**: engine ops + core
   stay singular; each stamped version is a thin JS shim. The frozen
   artifact per version is its conformance suite + docs.
@@ -34,6 +36,11 @@ projects and run agent feedback rounds before stabilizing anything).
   (JSON + handles), additive-only, versioned separately.
 - Old versions live indefinitely; revisit only if a shim becomes
   burdensome.
+- odm.json does not fall under the API version — it is deleted
+  entirely (resolved 2026-07-29): params/animation become per-doohickey
+  declared inputs and `root.js` replaces main.js as marker + default
+  view; see `plans/views-and-metadata.md`. Doohickey `meta`
+  (inputs/presets) IS part of the versioned API surface.
 
 ## Implementation map (all built, tested)
 
@@ -91,10 +98,6 @@ reproduce the aborts — run individually to re-verify on V8 upgrades):
 
 ## Open questions
 
-- Whether odm.json (params/animation) semantics fall under the API
-  version or stay a separate additive-forever format (leaning latter).
-  User wants a broader discussion of odm.json and projects vs files —
-  pending.
 - Project-level metadata recording a target engine version (nudge
   agents on engine skew). Deferred — can be added
   backwards-compatibly later.
