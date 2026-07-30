@@ -443,8 +443,9 @@ impl ViewerApp {
         // once the row no longer fits.
         let room = strip.width() - PLUS.x - PLUS_GAP;
         let share = (room / self.tabs.len() as f32).max(MIN_TAB);
+        let state = self.state();
         let failed: Vec<bool> =
-            self.tabs.iter().map(|tab| self.state.build_failed(&tab.slot)).collect();
+            self.tabs.iter().map(|tab| state.build_failed(&tab.slot)).collect();
         let labels: Vec<_> = self
             .tabs
             .iter()
