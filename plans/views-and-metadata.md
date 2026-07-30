@@ -1,21 +1,38 @@
 # Plan: views, unified inputs, doohickey metadata
 
-Decisions from design discussion with user (2026-07-29). Replaces main.js,
-odm.json, `ctx.param`, `ctx.t`, `ctx.args`, and `animation.duration`. No
-back-compat — pre-v1, break freely. Multi-agent (chat identity, build
-fairness) is explicitly deferred; views make it possible later.
+Decisions from design discussion with user (2026-07-29, marker revised
+2026-07-29). Replaces main.js, odm.json, `ctx.param`, `ctx.t`, `ctx.args`,
+and `animation.duration`. No back-compat — pre-v1, break freely.
+Multi-agent (chat identity, build fairness) is explicitly deferred; views
+make it possible later.
 
 ## Model (decided)
 
 - **View** = (doohickey path, args, cascade values), evaluated against the
   current generation. Any `.js` file is viewable/queryable; a viewer tab
   holds one view; every CLI query targets one (default: `root.js` with
-  declared defaults). Views stay pure functions of (generation, inputs) —
-  the byte-reproducibility invariant is untouched.
-- **root.js** replaces main.js: project marker for the walk-up AND default
-  view. odm.json is deleted; nothing project-level remains. Permanent knob
-  changes = editing defaults in code (agent's job); the engine still never
-  writes project files.
+  declared defaults, when that file exists). Views stay pure functions of
+  (generation, inputs) — the byte-reproducibility invariant is untouched.
+- **odm.toml** replaces main.js/odm.json as the project marker for the
+  walk-up. Contents: `name` (project name, shown in window title/status)
+  and `engine` (last-used *engine* version — an integer, currently 0,
+  independent of the per-file JS API version). On open, the engine warns
+  if the file's `engine` is newer than itself (project last touched by a
+  newer engine), and writes its own version back when it differs — the
+  ONE exception to "the engine never writes project files". Unknown keys
+  rejected. Not part of generation identity: it never affects build
+  output, and the engine writing it must not churn generations. Authored
+  at project creation (by hand/agent; no init flow exists — a future
+  `odm init` is a nicety, not part of this plan).
+- **root.js is pure convention**: the entry-file name the CLI/viewer try
+  by default when no path is given, like `index.html` — used if present,
+  nothing structural, and projects are free to name entry files
+  meaningfully instead. No path and no root.js: CLI queries error listing
+  viewable files; the viewer restores tabs from `.odm/` or shows a
+  picker. Permanent knob changes = editing defaults in code (agent's
+  job).
+- **`.odm/`** stays engine-private local state (socket, tab persistence,
+  caches) — never user-authored, never a project marker.
 - **Doohickey metadata**, two parts:
   - Prose description in the `//!` comment block (shared with the version
     pragma, already parsed at sync time in
@@ -107,10 +124,18 @@ fairness) is explicitly deferred; views make it possible later.
   validates against the reader's environment. Pass = generation + view
   (root path, args, view-level provides).
 - Schema validation at boundaries; fall-through + conflict lint recording.
-- Delete odm.json (params/animation plumbing throughout); main.js →
-  root.js in `find_project`/`is_project`/examples; regenerate IR-hash
-  goldens; rewrite docs/api (params-and-animation.md → inputs.md; touch
-  doohickeys/composition) and docs/prompts.
+- Delete odm.json (params/animation plumbing throughout). Marker swap:
+  `find_project`/`is_project` (odm-cli lib.rs, odm-engine session.rs,
+  viewer open.rs) look for odm.toml only; add `toml` crate (MIT/Apache);
+  parse name+engine, reject unknown keys; newer-engine warning + engine
+  writes back its version on open (only when it differs). main.js loses
+  all special status — `ROOT_DOOHICKEY` becomes "root.js if present"
+  until phase 3 deletes the fixed-root concept; examples get an odm.toml
+  and a root.js entry file. Regenerate IR-hash goldens; rewrite docs/api
+  (params-and-animation.md → inputs.md; touch doohickeys/composition,
+  project-format docs) and docs/prompts; amend the "engine never writes
+  project files" invariant (CLAUDE.md, notes/architecture.md) with the
+  odm.toml exception.
 
 ### 3. View plumbing: engine + CLI
 - EngineState: published slot → map keyed by view; background loop builds
@@ -120,7 +145,9 @@ fairness) is explicitly deferred; views make it possible later.
   equal-depth ranges union; type conflict = error) — the input panel's
   data source.
 - CLI: queries take optional path + `--set`/`--preset`; default target =
-  root.js. tree/inspect/raycast/render/selection become view-scoped.
+  root.js if present (convention only), else error listing viewable
+  files. tree/inspect/raycast/render/selection become view-scoped;
+  status `has_root` → "default view target exists".
 - Note: issues/engine-serializes-commands.md bites harder with multiple
   views; not addressed here.
 
