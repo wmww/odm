@@ -44,6 +44,8 @@ pub const WEAK_TEXT: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
 /// Selection and progress fill.
 pub const ACCENT: Color32 = Color32::from_rgb(0x30, 0x60, 0xc0);
 pub const ERROR: Color32 = Color32::from_rgb(0xff, 0x6b, 0x6b);
+/// Warnings — console.warn lines in the console pane.
+pub const WARN: Color32 = Color32::from_rgb(0xe6, 0xc4, 0x5c);
 /// The agent's chat lines, against the user's white ones.
 pub const AGENT_TEXT: Color32 = Color32::from_rgb(0x8c, 0xc8, 0xff);
 

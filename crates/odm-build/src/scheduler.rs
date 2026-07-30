@@ -104,7 +104,8 @@ pub struct BuildFailure {
     /// Doohickey the failure originated in.
     pub path: String,
     pub kind: FailureKind,
-    /// Agent-readable message (includes stack/log context where relevant).
+    /// Agent-readable message (includes the JS stack where relevant).
+    /// Console output travels separately, in the pass logs.
     pub message: String,
 }
 
@@ -518,13 +519,19 @@ impl BuildEngine {
                 Ok(out.output)
             }
             Err(e) => {
-                let kind = match &e {
+                // A failed build's console output still belongs to the pass:
+                // it surfaces next to the error, never embedded in it.
+                if !e.logs.is_empty() {
+                    let mut logs = pass.logs.lock().unwrap();
+                    logs.extend(e.logs.into_iter().map(|l| (path.to_string(), l)));
+                }
+                let kind = match &e.error {
                     BuildError::Js(_) => FailureKind::Js,
                     BuildError::Cancelled => FailureKind::Cancelled,
                     BuildError::BadOutput(_) => FailureKind::BadOutput,
                     BuildError::Internal(_) => FailureKind::Internal,
                 };
-                Err(fail(path, kind, e.to_string()))
+                Err(fail(path, kind, e.error.to_string()))
             }
         }
     }

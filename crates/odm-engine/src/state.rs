@@ -4,7 +4,7 @@
 use crate::commands::CmdError;
 use crate::server::Peer;
 use odm_build::{BuildEngine, FailureKind, InputReport, PassResult, SyncResult, View};
-use odm_js::JsEnv;
+use odm_js::{JsEnv, LogLine};
 use odm_kernel::Kernel;
 use odm_render::Renderer;
 use odm_store::{Object, Store};
@@ -31,6 +31,10 @@ pub struct Published {
     /// alive across store GCs, so the viewer never reads an unrooted hash.
     pub root: Option<(odm_ir::Hash, Arc<Object>)>,
     pub error: Option<String>,
+    /// Console output of the last build attempt — success or failure, memo
+    /// hits replay theirs — as (doohickey path, line). Latest-attempt
+    /// semantics, unlike `root`'s last-good.
+    pub logs: Arc<Vec<(String, LogLine)>>,
     pub building: bool,
     /// Fall-through report of the last successful build: the view-settable
     /// cascade inputs (the input panel's data source).
@@ -438,7 +442,7 @@ impl EngineState {
         let sync = match self.build.sync() {
             Ok(s) => s,
             Err(e) => {
-                self.publish_failure(slot, None, &view, e.to_string());
+                self.publish_failure(slot, None, &view, e.to_string(), Vec::new());
                 return Err(CmdError::new("scan", e.to_string()));
             }
         };
@@ -450,14 +454,21 @@ impl EngineState {
         match result {
             Ok(res) => {
                 let report = self.build.input_report(&pass);
-                self.publish_success(slot, &sync, &view, res.root, report);
+                self.publish_success(slot, &sync, &view, res.root, report, res.logs);
                 Ok(())
             }
             Err(f) => {
+                let logs = pass.take_logs();
                 if f.kind != FailureKind::Cancelled {
-                    self.publish_failure(slot, Some(sync.generation.0), &view, f.message.clone());
+                    self.publish_failure(
+                        slot,
+                        Some(sync.generation.0),
+                        &view,
+                        f.message.clone(),
+                        logs.clone(),
+                    );
                 }
-                Err(CmdError::from_failure(&f, pass.take_logs()))
+                Err(CmdError::from_failure(&f, logs))
             }
         }
     }
@@ -506,6 +517,7 @@ impl EngineState {
         view: &View,
         root: odm_ir::Hash,
         report: InputReport,
+        logs: Vec<(String, LogLine)>,
     ) {
         // Fetch the object first so the Arc keeps the root alive for the
         // viewer across later GCs.
@@ -517,6 +529,7 @@ impl EngineState {
         entry.view = view.clone();
         entry.root = obj.map(|o| (root, o));
         entry.error = None;
+        entry.logs = Arc::new(logs);
         entry.building = self.queue.pending.lock().unwrap().iter().any(|s| s == slot);
         entry.report = Arc::new(report);
         // Every active slot's current-generation root stays pinned; then GC.
@@ -531,7 +544,14 @@ impl EngineState {
     }
 
     /// `generation: None` (e.g. scan errors) keeps the last known generation.
-    fn publish_failure(&self, slot: &str, generation: Option<u64>, view: &View, message: String) {
+    fn publish_failure(
+        &self,
+        slot: &str,
+        generation: Option<u64>,
+        view: &View,
+        message: String,
+        logs: Vec<(String, LogLine)>,
+    ) {
         let mut published = self.published.lock().unwrap();
         let entry = published.entry(slot.to_string()).or_default();
         entry.revision += 1;
@@ -540,6 +560,7 @@ impl EngineState {
         }
         entry.view = view.clone();
         entry.error = Some(message);
+        entry.logs = Arc::new(logs);
         entry.building = self.queue.pending.lock().unwrap().iter().any(|s| s == slot);
         drop(published);
         self.wake();

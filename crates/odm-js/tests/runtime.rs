@@ -1,5 +1,5 @@
 use odm_ir::{Canonical, Hash, Node};
-use odm_js::{BuildError, BuildInput, BuildOutput, Invoker, JsEnv, run_build};
+use odm_js::{BuildInput, BuildOutput, FailedBuild, Invoker, JsEnv, run_build};
 use odm_kernel::Kernel;
 use odm_store::{Dep, Object, Store};
 use serde_json::{Value, json};
@@ -22,7 +22,7 @@ fn world() -> World {
     World { store, kernel }
 }
 
-fn build(w: &World, code: &str) -> Result<BuildOutput, BuildError> {
+fn build(w: &World, code: &str) -> Result<BuildOutput, FailedBuild> {
     build_full(w, code, &json!({}), &json!({}), &HashMap::new(), None)
 }
 
@@ -33,7 +33,7 @@ fn build_full(
     decls: &Value,
     cascade: &HashMap<String, Value>,
     invoker: Option<Box<dyn Invoker>>,
-) -> Result<BuildOutput, BuildError> {
+) -> Result<BuildOutput, FailedBuild> {
     run_build(
         env(),
         BuildInput {
@@ -238,7 +238,10 @@ fn runtime_error_has_stack_and_logs() {
     let msg = err.to_string();
     assert!(msg.contains("boom"), "{msg}");
     assert!(msg.contains("inner"), "stack should name the frame: {msg}");
-    assert!(msg.contains("about to fail"), "logs should ride along: {msg}");
+    // Console output is data next to the error, never text inside it.
+    assert!(!msg.contains("about to fail"), "logs must not leak into the message: {msg}");
+    let logged: Vec<&str> = err.logs.iter().map(|l| l.message.as_str()).collect();
+    assert_eq!(logged, vec![r#"about to fail {"step":3}"#], "logs ride along as data");
 }
 
 #[test]

@@ -47,6 +47,9 @@ const PICK_RADIUS_PT: f64 = 6.0;
 /// panel as the message grows.
 const ERROR_HEIGHT: f32 = 140.0;
 
+/// Height of the console pane, same deal.
+const CONSOLE_HEIGHT: f32 = 140.0;
+
 /// Height of the chat transcript. The viewport is the main event, so the panel
 /// stays modest and fixed.
 const CHAT_HEIGHT: f32 = 92.0;
@@ -1001,6 +1004,38 @@ impl ViewerApp {
                 let size = egui::vec2(ui.available_width(), ERROR_HEIGHT);
                 theme::list_box(ui, "error", size, egui::Vec2b::new(false, true), |ui| {
                     ui.label(egui::RichText::new(err).monospace());
+                });
+            });
+        }
+
+        // Console output of the last build attempt (success or failure) —
+        // latest-attempt semantics, same as the error above.
+        let logs = self.tab().published.logs.clone();
+        if !logs.is_empty() {
+            let header = format!("Console ({})", logs.len());
+            let header_color =
+                if logs.iter().any(|(_, l)| l.level == "warn" || l.level == "error") {
+                    theme::WARN
+                } else {
+                    theme::TEXT
+                };
+            let console_open = &mut self.tabs[self.active].console_open;
+            theme::collapsing(ui, "console", console_open, &header, header_color, |ui| {
+                let size = egui::vec2(ui.available_width(), CONSOLE_HEIGHT);
+                theme::list_box(ui, "console", size, egui::Vec2b::new(false, true), |ui| {
+                    for (path, line) in logs.iter() {
+                        let color = match line.level.as_str() {
+                            "error" => theme::ERROR,
+                            "warn" => theme::WARN,
+                            "debug" => theme::WEAK_TEXT,
+                            _ => theme::TEXT,
+                        };
+                        ui.label(
+                            egui::RichText::new(format!("{path}: {}", line.message))
+                                .monospace()
+                                .color(color),
+                        );
+                    }
                 });
             });
         }

@@ -81,7 +81,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - `odm-js` — deno_core =0.408.0; per-build disposable isolates from ONE
   snapshot embedding `framework/` (odm API + three r185 subset, every
   supported API version's surface manifest — see "API versions" below); ops
-  extension; dep recording; console capture; `run_build` is the single
+  extension; dep recording; console capture (logs are always data —
+  `run_build` errors are `FailedBuild` = error + that build's logs, never
+  text-embedded; the scheduler folds them into pass logs); `run_build` is the single
   entry point (`extract_export` the side door for reading a module's export
   without building — the conformance runner uses it). `ir_json::node_from_json` interns the framework's IR JSON into
   the store and returns the root hash; `ctx.invoke` crosses the boundary as a
@@ -139,8 +141,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (right side; controls from the tab's fall-through report: trackbars for
   ranged numbers, toggles, choice buttons, JSON-ish text fields, presets), a
   `t` transport when a ranged cascade number named t falls through
-  (scrub + play at 1 unit/sec looping), error panel with
-  last-good scene, click-select via CPU raycast when shaded / nearest-wire
+  (scrub + play at 1 unit/sec looping), error + console panels with
+  last-good scene (`Published.logs` is latest-attempt: success or failure,
+  colored by level), click-select via CPU raycast when shaded / nearest-wire
   screen-space pick when wireframe, shift-click to select several),
   background build loop over the active view slots
   (per-slot latest-wins, Pass::cancel on same-slot supersede; a new

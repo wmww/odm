@@ -52,6 +52,27 @@ pub enum BuildError {
     Internal(String),
 }
 
+/// A failed build plus the console output it produced before failing. Logs
+/// stay data all the way up — each surface (CLI JSON, viewer panel) decides
+/// how to show them next to the error.
+#[derive(Debug)]
+pub struct FailedBuild {
+    pub error: BuildError,
+    pub logs: Vec<LogLine>,
+}
+
+impl std::fmt::Display for FailedBuild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl From<BuildError> for FailedBuild {
+    fn from(error: BuildError) -> FailedBuild {
+        FailedBuild { error, logs: Vec::new() }
+    }
+}
+
 pub struct BuildInput<'a> {
     /// Project-relative path, used for module specifier + error messages.
     pub path: &'a str,
@@ -87,7 +108,7 @@ pub struct BuildOutput {
 }
 
 /// Run one doohickey build in a fresh disposable isolate.
-pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, BuildError> {
+pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, FailedBuild> {
     let specifier = snapshot::doohickey_specifier(input.path)
         .map_err(|e| BuildError::Internal(format!("bad doohickey path {:?}: {e}", input.path)))?;
 
@@ -192,19 +213,25 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Buil
     };
 
     let mut session = take_session(&mut rt);
+    let failed = |error: BuildError, session: &mut SessionState| FailedBuild {
+        error,
+        logs: std::mem::take(&mut session.logs),
+    };
     // Cancelled kernel ops surface as JS exceptions; prefer the Cancelled signal.
     if let Some(tok) = &session.cancel
         && tok.is_cancelled()
     {
-        return Err(BuildError::Cancelled);
+        return Err(failed(BuildError::Cancelled, &mut session));
     }
     let ir_value = match ir_value {
         Ok(v) => v,
-        Err(e) => return Err(attach_logs(e, &session)),
+        Err(e) => return Err(failed(e, &mut session)),
     };
 
-    let output = ir_json::node_from_json(&store, &ir_value)
-        .map_err(|m| attach_logs(BuildError::BadOutput(m), &session))?;
+    let output = match ir_json::node_from_json(&store, &ir_value) {
+        Ok(o) => o,
+        Err(m) => return Err(failed(BuildError::BadOutput(m), &mut session)),
+    };
     Ok(BuildOutput {
         output,
         deps: std::mem::take(&mut session.deps),
@@ -286,28 +313,11 @@ fn format_js_error(e: &JsError) -> String {
     out
 }
 
-fn js_error(path: &str, session: SessionState, msg: String) -> BuildError {
-    if session.cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
-        return BuildError::Cancelled;
-    }
-    attach_logs(BuildError::Js(format!("{path}: {msg}")), &session)
-}
-
-/// Errors keep their message; logs travel with the scheduler separately in
-/// the success path, but on error we append them so the agent sees both.
-fn attach_logs(err: BuildError, session: &SessionState) -> BuildError {
-    if session.logs.is_empty() {
-        return err;
-    }
-    let (msg, rewrap): (String, fn(String) -> BuildError) = match err {
-        BuildError::Js(m) => (m, BuildError::Js),
-        BuildError::BadOutput(m) => (m, BuildError::BadOutput),
-        other => return other,
+fn js_error(path: &str, mut session: SessionState, msg: String) -> FailedBuild {
+    let error = if session.cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+        BuildError::Cancelled
+    } else {
+        BuildError::Js(format!("{path}: {msg}"))
     };
-    let mut out = msg;
-    out.push_str("\n--- console output ---");
-    for line in &session.logs {
-        out.push_str(&format!("\n[{}] {}", line.level, line.message));
-    }
-    rewrap(out)
+    FailedBuild { error, logs: std::mem::take(&mut session.logs) }
 }

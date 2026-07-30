@@ -497,6 +497,32 @@ fn logs_are_collected_per_pass() {
 }
 
 #[test]
+fn failed_build_logs_reach_the_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "root.js",
+        r#"
+        export default function build(ctx) {
+            console.log('before the boom');
+            throw new Error('boom');
+        }
+        "#,
+    );
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    let pass = e.start_pass(&sync, View::of("root.js"));
+    let err = e.build_view(&pass).unwrap_err();
+    assert!(err.message.contains("boom"), "{}", err.message);
+    // Console output is data in the pass logs, never text inside the message.
+    assert!(!err.message.contains("before the boom"), "{}", err.message);
+    let lines: Vec<String> =
+        pass.take_logs().iter().map(|(p, l)| format!("{p}: {}", l.message)).collect();
+    assert_eq!(lines, vec!["root.js: before the boom".to_string()]);
+}
+
+#[test]
 fn bounded_recursion_is_allowed() {
     let dir = tempfile::tempdir().unwrap();
     write(
