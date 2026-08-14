@@ -7,10 +7,11 @@ diffs would be CI-only), cmake 4.4 + ninja, node 26.4, rustc 1.93
 ## Every checkout gets its own target dir, seeded from the main one
 
 `scripts/seed-target.sh` gives a linked checkout its own `target/`, copied from
-the main checkout's the first time it runs. Auto-applied by the `SessionStart`
-hook in the tracked `.claude/settings.json`; idempotent, and a no-op in the main
-checkout, outside a git repo, or once `target/` exists. Run it by hand if a
-checkout is set up without a new session.
+the main checkout's the first time it runs. Run by `.wt-hooks/create`, which the
+worktree workflow executes in a new worktree right after creating it (`done` and
+`wipe` hooks exist too; nothing needs them yet). Idempotent, and a no-op in the
+main checkout, outside a git repo, or once `target/` exists — so run it by hand
+in a worktree made outside that workflow.
 
 Measured 2026-07-24: seed 0.8 s, first build **6.2 s** (the 8 local crates and
 nothing else), 1.7 GiB of real disk once built — versus a ~3.6 GiB cold build

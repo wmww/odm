@@ -9,19 +9,5 @@
   },
   "enabledPlugins": {
     "gui-testing@wmww-agent-skills": true
-  },
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/seed-target.sh\" 2>/dev/null || true",
-            "statusMessage": "Seeding cargo target dir",
-            "timeout": 120
-          }
-        ]
-      }
-    ]
   }
 }

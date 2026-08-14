@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Runs in a new worktree right after it's created.
+# Give it its own cargo target dir, seeded from the main checkout, so the first
+# build is ~6 s instead of a ~4 GiB cold build. See notes/build-environment.md.
+exec sh "$(git rev-parse --show-toplevel)/scripts/seed-target.sh"
