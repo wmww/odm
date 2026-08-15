@@ -1,22 +1,25 @@
-//! Post-build fall-through report: which cascade inputs resolved at the
-//! view level (explicitly set, or by a declaration's auto-provided default),
-//! and the winning declarations. This is the input panel's data source, the
-//! CLI's `--set` typo check, and the conflict lint.
+//! Post-build input report: one flat list of everything settable on the
+//! view — the target's own plain inputs plus every cascade input that fell
+//! through to the view level (explicitly set, or resolved by a
+//! declaration's auto-provided default). This is the input panel's data
+//! source, the CLI's `--set` typo check, and the conflict lint.
 //!
 //! Computed by walking the pass's memo entries (they are all fresh or
 //! revalidated after a successful build), so memo hits cost nothing extra
 //! during the build itself.
 
-use crate::meta::Meta;
-use crate::scheduler::{BuildEngine, Pass};
+use crate::meta::{Input, Meta};
+use crate::scheduler::{BuildEngine, Pass, View};
 use odm_ir::hash_json;
 use odm_store::{Dep, MemoKey};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
-/// One view-settable cascade input: `name` fell through to the view level
-/// somewhere in the built tree.
+/// One view-settable input. `kind` says which channel a set value travels
+/// on (the write path routes automatically, so callers can ignore it);
+/// `declared_in` tells the interesting story — declared on the target, or
+/// bubbled up from a part.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReportEntry {
     pub name: String,
@@ -24,6 +27,7 @@ pub struct ReportEntry {
     pub value: Value,
     /// Where that value came from this pass.
     pub source: ValueSource,
+    pub kind: InputKind,
     /// From the winning (shallowest) declaration.
     pub ty: Option<String>,
     pub minimum: Option<f64>,
@@ -34,6 +38,24 @@ pub struct ReportEntry {
     pub choices: Option<Vec<Value>>,
     /// Declaring files, shallowest first.
     pub declared_in: Vec<String>,
+}
+
+/// Which declaration kind (and therefore which view channel) an entry is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputKind {
+    /// A plain input declared on the view target; set values become view args.
+    Plain,
+    /// A cascade input that fell through; set values become view cascade values.
+    Cascade,
+}
+
+impl InputKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InputKind::Plain => "plain",
+            InputKind::Cascade => "cascade",
+        }
+    }
 }
 
 /// The origin of a reported value: set at the view, or the winning
@@ -63,6 +85,7 @@ impl ReportEntry {
             "name": self.name,
             "value": self.value,
             "source": self.source.as_str(),
+            "kind": self.kind.as_str(),
             "type": self.ty,
             "minimum": self.minimum,
             "maximum": self.maximum,
@@ -72,33 +95,66 @@ impl ReportEntry {
             "declared_in": self.declared_in,
         })
     }
+
+    /// An entry straight from a declaration, with `set` the view-level value
+    /// if one was set.
+    fn declared(
+        name: &str,
+        input: &Input,
+        kind: InputKind,
+        set: Option<&Value>,
+        declared_in: Vec<String>,
+    ) -> ReportEntry {
+        let default = input.default.clone().unwrap_or(Value::Null);
+        ReportEntry {
+            name: name.to_string(),
+            value: set.cloned().unwrap_or_else(|| default.clone()),
+            source: ValueSource::of(set.is_some()),
+            kind,
+            ty: input.type_name().map(|t| t.to_string()),
+            minimum: input.minimum(),
+            maximum: input.maximum(),
+            description: input
+                .authored
+                .get("description")
+                .and_then(|d| d.as_str())
+                .map(|d| d.to_string()),
+            default,
+            choices: choices_of(&input.authored),
+            declared_in,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InputReport {
-    /// The view target's own plain (non-cascade) inputs — the "root args"
-    /// half of the input panel. Sorted by name.
-    pub args: Vec<ReportEntry>,
-    /// Cascade inputs that fell through to the view level. Sorted by name.
-    pub entries: Vec<ReportEntry>,
+    /// Everything settable on the view, one entry per name, sorted by name:
+    /// the target's own plain inputs plus the cascade inputs that fell
+    /// through to the view level.
+    pub inputs: Vec<ReportEntry>,
     /// The view target's presets: name → input values.
     pub presets: Vec<(String, Map<String, Value>)>,
     /// Conflict lint: same name falling through in unrelated subtrees with
-    /// conflicting defaults (warning) or conflicting types (error).
+    /// conflicting defaults (warning) or conflicting types (error), plus
+    /// shadowing (a plain target input hiding a fall-through cascade name).
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
 }
 
-impl InputReport {
-    pub fn to_json(&self) -> Value {
-        json!({
-            "args": self.args.iter().map(|e| e.to_json()).collect::<Vec<_>>(),
-            "inputs": self.entries.iter().map(|e| e.to_json()).collect::<Vec<_>>(),
-            "presets": self.presets.iter().map(|(n, v)| (n.clone(), Value::Object(v.clone()))).collect::<serde_json::Map<_, _>>(),
-            "warnings": self.warnings,
-            "errors": self.errors,
+/// The view target's declared inputs as report entries — what a *failed*
+/// build can still answer about "what can I set". No fall-through info:
+/// that needs a successful pass; the declared schema doesn't.
+pub fn declared_entries(path: &str, meta: &Meta, view: &View) -> Vec<ReportEntry> {
+    meta.inputs
+        .iter()
+        .map(|(name, input)| {
+            let (kind, set) = match input.cascade {
+                true => (InputKind::Cascade, view.cascade.get(name)),
+                false => (InputKind::Plain, view.args.get(name)),
+            };
+            ReportEntry::declared(name, input, kind, set, vec![path.to_string()])
         })
-    }
+        .collect()
 }
 
 /// One declaration site for a name that fell through to the view.
@@ -137,6 +193,7 @@ impl BuildEngine {
         report.warnings.extend(cascade_warnings);
 
         // The target's own plain inputs and presets, for the panel.
+        let mut plain_names: HashSet<String> = HashSet::new();
         if let Some(source) = pass.snapshot().sources.get(&view.path)
             && let Ok(meta) = self.meta(&view.path, source).as_ref()
         {
@@ -144,23 +201,14 @@ impl BuildEngine {
                 if input.cascade {
                     continue;
                 }
-                let default = input.default.clone().unwrap_or(Value::Null);
-                report.args.push(ReportEntry {
-                    name: name.clone(),
-                    value: view.args.get(name).cloned().unwrap_or_else(|| default.clone()),
-                    source: ValueSource::of(view.args.contains_key(name)),
-                    ty: input.type_name().map(|t| t.to_string()),
-                    minimum: input.minimum(),
-                    maximum: input.maximum(),
-                    description: input
-                        .authored
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .map(|d| d.to_string()),
-                    default,
-                    choices: choices_of(&input.authored),
-                    declared_in: vec![view.path.clone()],
-                });
+                plain_names.insert(name.clone());
+                report.inputs.push(ReportEntry::declared(
+                    name,
+                    input,
+                    InputKind::Plain,
+                    view.args.get(name),
+                    vec![view.path.clone()],
+                ));
             }
             report.presets =
                 meta.presets.iter().map(|(n, v)| (n.clone(), v.clone())).collect();
@@ -168,6 +216,19 @@ impl BuildEngine {
 
         for (name, mut found) in sites {
             found.sort_by(|a, b| a.depth.cmp(&b.depth).then_with(|| a.path.cmp(&b.path)));
+            // A plain target input shadows a same-named fall-through cascade
+            // name: set values route to the plain input, so the cascade one
+            // silently keeps its default. Lint it and keep the one entry a
+            // set value actually reaches.
+            if plain_names.contains(&name) {
+                report.warnings.push(format!(
+                    "input {name:?} is a plain input of {} and also falls through as a \
+                     cascade input (declared in {}) — a view-set value reaches only the \
+                     plain input; rename one of them",
+                    view.path, found[0].path
+                ));
+                continue;
+            }
             let win_depth = found[0].depth;
             // Equal-depth winners: ranges union; the lint below flags
             // default/type disagreements.
@@ -209,10 +270,11 @@ impl BuildEngine {
                     declared_in.push(s.path.clone());
                 }
             }
-            report.entries.push(ReportEntry {
+            report.inputs.push(ReportEntry {
                 name,
                 value,
                 source,
+                kind: InputKind::Cascade,
                 ty: found[0].ty.clone(),
                 minimum,
                 maximum,
@@ -222,6 +284,7 @@ impl BuildEngine {
                 declared_in,
             });
         }
+        report.inputs.sort_by(|a, b| a.name.cmp(&b.name));
         report
     }
 
@@ -388,13 +451,13 @@ pub fn check_set_names(
 ) -> Result<(), String> {
     for name in cascade.keys() {
         let declared_on_target = target_meta.inputs.contains_key(name);
-        let in_report = report.entries.iter().any(|e| &e.name == name);
+        let in_report = report.inputs.iter().any(|e| &e.name == name);
         if !declared_on_target && !in_report {
             let mut known: Vec<&str> = target_meta
                 .inputs
                 .keys()
                 .map(|s| s.as_str())
-                .chain(report.entries.iter().map(|e| e.name.as_str()))
+                .chain(report.inputs.iter().map(|e| e.name.as_str()))
                 .collect();
             known.sort();
             known.dedup();

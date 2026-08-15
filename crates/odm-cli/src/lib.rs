@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 pub const USAGE: &str = "  status                     project overview: files, generation, inputs
   sync                       force a rescan (every command also syncs first)
   build   [<path>] [--set name=value ...] [--preset <name>]
-                             build a view; reports errors + console logs
+                             build a view; reports its settable inputs, the
+                             target's description/presets, build stats, logs
   render  [<path>] [--set ...] [--preset] [--width N] [--height N] [--out FILE]
           [--wireframe] [--no-grid] [--ortho] [--eye x,y,z] [--target x,y,z]
           [--up x,y,z] [--direction x,y,z] [--fov deg] [--ortho-height h]
@@ -28,7 +29,6 @@ pub const USAGE: &str = "  status                     project overview: files, g
   raycast --origin x,y,z --dir x,y,z [--path <p>] [--set ...] [--preset]
                              nearest hit in the scene
   selection                  viewer selection: list of {node, name}
-  interface [<path>]         a doohickey's description, input schemas, presets
   poll    [--timeout <sec>] [--follow]
                              wait for messages the user typed in the viewer
                              (--follow: never exit, one JSON line per batch)
@@ -146,14 +146,6 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             let (node, rest) = take_positional(rest, "node id (see `odm tree`)")?;
             let mut v = parse_opts(&cmd, rest, &with_view(&[]))?;
             v.insert("node".into(), json!(node));
-            v
-        }
-        "interface" => {
-            let (path, rest) = optional_positional(rest);
-            let mut v = parse_opts(&cmd, rest, &[])?;
-            if let Some(p) = path {
-                v.insert("path".into(), json!(p));
-            }
             v
         }
         "raycast" => parse_opts(

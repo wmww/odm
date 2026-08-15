@@ -94,17 +94,19 @@ export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('
   plus ODM types `solid`, `vector2/3`, `quaternion`, `matrix4`,
   `color` (hydrated to real THREE values). No `default` = required.
 - **Plain inputs** come from the immediate caller (invoke args, or the
-  view's `--set`). **Cascade inputs** (`cascade: true`, default
-  mandatory) resolve up the invoke chain: the nearest
-  `ctx.invoke(path, args, cascade)` value wins, the view is the
-  outermost layer, and a declaration auto-provides its default for
-  its own subtree.
+  view's `--set`). Declaring `cascade: true` (default mandatory)
+  instead makes an input deep inside a model settable from anywhere
+  above without threading it through every invoke: the nearest value
+  provided up the chain wins — an invoke's third argument
+  `ctx.invoke(path, args, cascade)`, or the view's `--set` outermost —
+  and a declaration auto-provides its default for its own subtree.
 - **Time is just an input**: declare a ranged cascade `t` and the
   viewer gives it a transport (scrub/play, looping over the range);
   `odm render --set t=1.5` sets it like anything else. Only readers of
   `t` rebuild when it changes.
 - `meta.presets` names input bundles; `--preset <name>` applies one.
-- `odm interface <path>` prints a file's description, inputs, presets.
+- `odm build <path>` reports a file's description, settable inputs,
+  and presets — even when the build fails.
 
 ## Colors
 

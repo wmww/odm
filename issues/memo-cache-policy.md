@@ -13,6 +13,10 @@ pins its output node — and transitively its meshes — against GC, each pinned
 mesh keeping a live `Manifold` in the kernel cache. A parametric part invoked
 with many distinct sizes accumulates without bound.
 
+The thrash is now *observable*: `odm build` reports per-pass `stats`
+(per-doohickey runs + self-time, memo hits), so "arm.js runs: 2" on every
+identical rebuild is this issue showing itself.
+
 Fix idea (from Salsa-ish designs), solving both together: store a small
 bounded list of entries per key and validate each candidate's recorded deps
 on lookup (`odm-build/src/scheduler.rs` `get_or_build`/`validate`), plus an

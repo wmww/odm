@@ -150,6 +150,10 @@ pub struct Pass {
     cancelled: AtomicBool,
     isolates: Mutex<Vec<odm_js::IsolateHandle>>,
     logs: Mutex<Vec<(String, LogLine)>>,
+    stats: Mutex<BuildStats>,
+    /// Child-time accumulators for the in-progress build chain (builds nest
+    /// inline), so a build's recorded time excludes its invoked children.
+    timers: Mutex<Vec<std::time::Duration>>,
 }
 
 impl Pass {
@@ -179,12 +183,31 @@ impl Pass {
     pub fn snapshot(&self) -> &Arc<ProjectSnapshot> {
         &self.snapshot
     }
+
+    /// This pass's build accounting so far.
+    pub fn take_stats(&self) -> BuildStats {
+        std::mem::take(&mut self.stats.lock().unwrap())
+    }
 }
 
+/// Engine-lifetime counters (cumulative across passes); tests use these.
+/// Per-pass numbers travel in [`PassResult::stats`].
 #[derive(Debug, Default)]
 pub struct Stats {
     pub builds: AtomicU64,
     pub memo_hits: AtomicU64,
+}
+
+/// One pass's build accounting: what actually ran (memo misses, per
+/// doohickey, with total JS time) and how many memo hits stood in for
+/// builds. Surfaced in the CLI build response, so "structure your model
+/// for the cache" is verifiable rather than advice.
+#[derive(Debug, Default, Clone)]
+pub struct BuildStats {
+    /// doohickey path → (builds run, total build time). One doohickey built
+    /// under several distinct inputs counts each run.
+    pub built: BTreeMap<String, (u64, std::time::Duration)>,
+    pub memo_hits: u64,
 }
 
 #[derive(Debug)]
@@ -192,6 +215,7 @@ pub struct PassResult {
     /// Hash of the root output Node in the store.
     pub root: Hash,
     pub logs: Vec<(String, LogLine)>,
+    pub stats: BuildStats,
 }
 
 /// One engine per project: owns the store, the JS environment, and the
@@ -293,6 +317,8 @@ impl BuildEngine {
             cancelled: AtomicBool::new(false),
             isolates: Mutex::new(Vec::new()),
             logs: Mutex::new(Vec::new()),
+            stats: Mutex::new(BuildStats::default()),
+            timers: Mutex::new(Vec::new()),
         })
     }
 
@@ -303,7 +329,7 @@ impl BuildEngine {
         let path = pass.view.path.clone();
         let args = Value::Object(pass.view.args.clone());
         let root = self.get_or_build(pass, &[], &path, &args, &env)?;
-        Ok(PassResult { root, logs: pass.take_logs() })
+        Ok(PassResult { root, logs: pass.take_logs(), stats: pass.take_stats() })
     }
 
     /// Publish built roots: pin them as the generation's GC roots and
@@ -407,6 +433,7 @@ impl BuildEngine {
                 && self.validate(pass, chain, path, args_hash, &env, &entry)
             {
                 self.stats.memo_hits.fetch_add(1, Ordering::Relaxed);
+                pass.stats.lock().unwrap().memo_hits += 1;
                 // Replay the original run's console output so logs don't
                 // silently vanish on a hit.
                 if !entry.logs.is_empty() {
@@ -470,6 +497,8 @@ impl BuildEngine {
         let pass_for_isolate = pass.clone();
         let pushed = Arc::new(AtomicBool::new(false));
         let pushed_flag = pushed.clone();
+        pass.timers.lock().unwrap().push(std::time::Duration::ZERO);
+        let started = std::time::Instant::now();
         let result = run_build(
             &self.env,
             BuildInput {
@@ -493,6 +522,20 @@ impl BuildEngine {
         // handle now that the isolate is gone (cancel() stays O(live builds)).
         if pushed.load(Ordering::SeqCst) {
             pass.isolates.lock().unwrap().pop();
+        }
+        {
+            let elapsed = started.elapsed();
+            let mut timers = pass.timers.lock().unwrap();
+            let children = timers.pop().unwrap_or_default();
+            if let Some(parent) = timers.last_mut() {
+                *parent += elapsed;
+            }
+            drop(timers);
+            let mut stats = pass.stats.lock().unwrap();
+            let entry =
+                stats.built.entry(path.to_string()).or_insert((0, std::time::Duration::ZERO));
+            entry.0 += 1;
+            entry.1 += elapsed.saturating_sub(children);
         }
 
         match result {

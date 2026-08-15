@@ -16,7 +16,7 @@ pub struct Tab {
     pub path: String,
     /// Values the user set, already split by channel: plain inputs of the
     /// target (args) vs cascade/fall-through values (cascade). The split
-    /// comes from which section of the input report a control lives in.
+    /// comes from each report entry's `kind`.
     pub set_args: Map<String, Value>,
     pub set_cascade: Map<String, Value>,
     pub orbit: Orbit,

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 const COMMANDS: &str =
-    "status, sync, build, render, tree, inspect, raycast, selection, interface, poll, say";
+    "status, sync, build, render, tree, inspect, raycast, selection, poll, say";
 
 /// One socket request. Unknown commands *and* unknown fields are errors, so
 /// agents hear about typos instead of silently getting a default.
@@ -72,9 +72,6 @@ enum Request {
         dir: Option<[f64; 3]>,
     },
     Selection {},
-    Interface {
-        path: Option<String>,
-    },
     Poll {
         timeout: Option<f64>,
     },
@@ -152,17 +149,27 @@ fn default_height() -> f64 {
     768.0
 }
 
-/// A failed command. `doohickey`/`logs` are set for build failures.
+/// A failed command. `doohickey`/`logs` are set for build failures;
+/// `extra` fields land at the response's top level, next to `error`
+/// (`cmd_build` uses it to report the target's declared interface even
+/// when the build fails).
 pub(crate) struct CmdError {
     kind: &'static str,
     message: String,
     doohickey: Option<String>,
     logs: Vec<(String, LogLine)>,
+    extra: Map<String, Value>,
 }
 
 impl CmdError {
     pub(crate) fn new(kind: &'static str, message: impl Into<String>) -> CmdError {
-        CmdError { kind, message: message.into(), doohickey: None, logs: vec![] }
+        CmdError {
+            kind,
+            message: message.into(),
+            doohickey: None,
+            logs: vec![],
+            extra: Map::new(),
+        }
     }
 
     fn bad_request(message: impl Into<String>) -> CmdError {
@@ -186,6 +193,7 @@ impl CmdError {
             message: f.message.clone(),
             doohickey: Some(f.path.clone()),
             logs,
+            extra: Map::new(),
         }
     }
 
@@ -218,7 +226,12 @@ impl EngineState {
                 }
                 v
             }
-            Err(e) => json!({ "ok": false, "error": e.to_json() }),
+            Err(e) => {
+                let mut o = e.extra.clone();
+                o.insert("ok".into(), json!(false));
+                o.insert("error".into(), e.to_json());
+                Value::Object(o)
+            }
         }
     }
 
@@ -250,7 +263,6 @@ impl EngineState {
                 self.cmd_raycast(view_req(path, set, preset, view, viewer_state), origin, dir)
             }
             Request::Selection {} => self.cmd_selection(),
-            Request::Interface { path } => self.cmd_interface(path.as_deref()),
             Request::Poll { .. } | Request::Say { .. } | Request::Ack {} => {
                 unreachable!("handled above")
             }
@@ -422,15 +434,49 @@ impl EngineState {
         Ok((sync, view, result, report))
     }
 
+    /// Build + the one answer to "what can I set": the target's description
+    /// and presets, the flat settable-inputs list, lint output, and build
+    /// stats. A *failed* build still reports the target's declared schema
+    /// (attached next to the error), since that needs no successful pass.
     fn cmd_build(&self, req: ViewReq) -> Result<Value, CmdError> {
-        let (sync, view, result, report) = self.query_view(&req)?;
-        Ok(json!({
-            "generation": sync.generation.0,
-            "path": view.path,
-            "root": result.root.to_hex(),
-            "inputs": report.to_json(),
-            "logs": logs_json(&result.logs),
-        }))
+        let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
+        let view = self.resolve_view(&sync, &req)?;
+        let source = &sync.snapshot.sources[&view.path];
+        let description = source.description.clone();
+        let meta = self.build_engine().meta(&view.path, source);
+        match self.build_view_cmd(&sync, &view) {
+            Ok((result, report)) => {
+                let mut o = json!({
+                    "generation": sync.generation.0,
+                    "path": view.path,
+                    "inputs": inputs_json(&report.inputs),
+                    "presets": presets_json(report.presets.iter().map(|(n, v)| (n, v))),
+                    "warnings": report.warnings,
+                    "errors": report.errors,
+                    "stats": stats_json(&result.stats),
+                    "logs": logs_json(&result.logs),
+                });
+                if !description.is_empty() {
+                    o["description"] = json!(description);
+                }
+                Ok(o)
+            }
+            Err(mut e) => {
+                e.extra.insert("path".into(), json!(view.path));
+                if !description.is_empty() {
+                    e.extra.insert("description".into(), json!(description));
+                }
+                if let Ok(meta) = meta.as_ref() {
+                    let entries = odm_build::declared_entries(&view.path, meta, &view);
+                    e.extra.insert("inputs".into(), inputs_json(&entries));
+                    e.extra.insert(
+                        "presets".into(),
+                        presets_json(meta.presets.iter().map(|(n, v)| (n, v))),
+                    );
+                }
+                Err(e)
+            }
+        }
     }
 
     fn cmd_render(&self, req: RenderReq) -> Result<Value, CmdError> {
@@ -598,56 +644,6 @@ impl EngineState {
         Ok(json!({ "view": view.path, "hit": hit }))
     }
 
-    /// A doohickey's declared interface: `//!` description, `meta.inputs`
-    /// schemas, presets. Reads metadata by evaluating the module (no build);
-    /// the result is cached by code hash.
-    fn cmd_interface(&self, path: Option<&str>) -> Result<Value, CmdError> {
-        let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
-        let path = match path {
-            Some(p) => p,
-            None if sync.snapshot.sources.contains_key(odm_build::DEFAULT_ROOT) => {
-                odm_build::DEFAULT_ROOT
-            }
-            None => return Err(CmdError::bad_request(format!(
-                "no {} in this project — name a doohickey: odm interface <path>",
-                odm_build::DEFAULT_ROOT
-            ))),
-        };
-        let Some(source) = sync.snapshot.sources.get(path) else {
-            let available: Vec<&str> =
-                sync.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
-            return Err(CmdError::bad_request(format!(
-                "no doohickey at {path:?}; project has: {}",
-                if available.is_empty() { "(no .js files)".into() } else { available.join(", ") }
-            )));
-        };
-        let meta = self.build_engine().meta(path, source);
-        let meta = match meta.as_ref() {
-            Ok(m) => m,
-            Err(e) => return Err(CmdError::new("meta", e.clone())),
-        };
-        let inputs: Value = meta
-            .inputs
-            .iter()
-            .map(|(name, input)| (name.clone(), Value::Object(input.authored.clone())))
-            .collect::<serde_json::Map<_, _>>()
-            .into();
-        let presets: Value = meta
-            .presets
-            .iter()
-            .map(|(name, values)| (name.clone(), Value::Object(values.clone())))
-            .collect::<serde_json::Map<_, _>>()
-            .into();
-        Ok(json!({
-            "path": path,
-            "api": source.api.as_ref().ok().map(|v| v.name()),
-            "summary": source.description.lines().next().unwrap_or(""),
-            "description": source.description,
-            "inputs": inputs,
-            "presets": presets,
-        }))
-    }
-
     fn cmd_selection(&self) -> Result<Value, CmdError> {
         let sel = self.selection.lock().unwrap().clone();
         let sel: Vec<Value> =
@@ -751,6 +747,36 @@ fn request_error(e: &serde_json::Error) -> String {
     }
 }
 
+fn inputs_json(entries: &[odm_build::ReportEntry]) -> Value {
+    Value::Array(entries.iter().map(|e| e.to_json()).collect())
+}
+
+fn presets_json<'a>(
+    presets: impl Iterator<Item = (&'a String, &'a Map<String, Value>)>,
+) -> Value {
+    Value::Object(presets.map(|(n, v)| (n.clone(), Value::Object(v.clone()))).collect())
+}
+
+/// Per-pass build accounting: what actually ran (most expensive first, time
+/// excluding invoked children) and how many memo hits stood in for builds.
+fn stats_json(stats: &odm_build::BuildStats) -> Value {
+    let mut built: Vec<_> = stats.built.iter().collect();
+    built.sort_by(|a, b| b.1.1.cmp(&a.1.1).then_with(|| a.0.cmp(b.0)));
+    json!({
+        "memo_hits": stats.memo_hits,
+        "built": built
+            .into_iter()
+            .map(|(path, (runs, t))| {
+                json!({
+                    "doohickey": path,
+                    "runs": runs,
+                    "ms": (t.as_secs_f64() * 10_000.0).round() / 10.0,
+                })
+            })
+            .collect::<Vec<Value>>(),
+    })
+}
+
 fn logs_json(logs: &[(String, LogLine)]) -> Value {
     Value::Array(
         logs.iter()
@@ -799,14 +825,9 @@ mod tests {
         let e = parse(r#"{"cmd":"render","typo":1}"#).err().unwrap();
         assert!(e.contains("typo"), "{e}");
 
-        assert!(matches!(
-            parse(r#"{"cmd":"interface","path":"wheel.js"}"#),
-            Ok(Request::Interface { path: Some(p) }) if p == "wheel.js"
-        ));
-        assert!(matches!(
-            parse(r#"{"cmd":"interface"}"#),
-            Ok(Request::Interface { path: None })
-        ));
+        // `interface` was absorbed into `build`.
+        let e = parse(r#"{"cmd":"interface"}"#).err().unwrap();
+        assert!(e.contains("build"), "{e}");
     }
 
     #[test]

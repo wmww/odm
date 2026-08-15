@@ -15,10 +15,12 @@ mod scheduler;
 mod sources;
 
 pub use meta::{ExtType, Input, Meta};
-pub use report::{InputReport, ReportEntry, ValueSource, check_set_names};
+pub use report::{
+    InputKind, InputReport, ReportEntry, ValueSource, check_set_names, declared_entries,
+};
 pub use scheduler::{
-    BuildEngine, BuildFailure, DEFAULT_ROOT, FailureKind, Pass, PassResult, Stats, SyncResult,
-    View,
+    BuildEngine, BuildFailure, BuildStats, DEFAULT_ROOT, FailureKind, Pass, PassResult, Stats,
+    SyncResult, View,
 };
 pub use sources::{
     ENGINE_VERSION, ProjectMarker, ProjectSnapshot, ScanError, Source, create_project, is_project,

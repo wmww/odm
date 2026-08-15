@@ -108,7 +108,7 @@ pub struct Input {
     /// (no default = required).
     pub cascade: bool,
     pub extension: Option<ExtType>,
-    /// The entry as authored (with `default` normalized), for `odm interface`.
+    /// The entry as authored (with `default` normalized), for the input report.
     pub authored: Map<String, Value>,
     /// Normalized default, if declared.
     pub default: Option<Value>,

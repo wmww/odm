@@ -11,11 +11,11 @@ a single JSON object. Exit code 0 = ok, nonzero = error. (`prompt` and
 ```
 odm status                    # files, generation, project name
 odm build [<path>] [--set name=value ...] [--preset <name>]
+                              # settable inputs, presets, build stats
 odm tree [<path>] [--set ...] [--depth N]
 odm inspect <node-id> [--path <p>] [--set ...]
 odm raycast --origin 0,0,50 --dir 0,0,-1 [--path <p>] [--set ...]
 odm render [<path>] [--set ...] [options]    # PNG → prints path
-odm interface [<path>]        # a file's description, input schemas, presets
 odm selection                 # what the user selected in the viewer
 odm poll [--timeout <sec>] [--follow]   # wait for messages from the user
 odm say <text>                # send a message to the user
@@ -29,8 +29,14 @@ built with its declared input defaults. `--set name=value` sets any
 input — values parse as JSON, falling back to plain strings (`--set
 t=1.5`, `--set finish=painted`, `--set 'size=[10,20,5]'`); a typo'd
 name is an error listing the settable inputs. `--preset <name>`
-applies a preset from the target's meta first. The `inputs` field of a
-build response lists what is settable (the fall-through report).
+applies a preset from the target's meta first.
+
+`odm build` is the one answer to "what can I set here": the target's
+description and presets, plus `inputs` — every settable name, one
+entry with its current value, type/range, default, and where it is
+declared. Its `stats` show which doohickeys actually re-ran (with
+per-file time) vs. were served from the memo cache. A failed build
+still reports the target's declared inputs next to the error.
 
 Node ids are child-index paths from the root (`""`, `0`, `0/2`); get
 them from `odm tree`.

@@ -32,9 +32,10 @@ from:
   caller only — the invoking doohickey's args, or the view (viewer
   panel / CLI `--set`) when this file is the view target. No `default`
   means required.
-- **Cascade input** (`cascade: true`): the value cascades down the
-  invoke chain — the nearest value provided above wins, with the view
-  outermost; `default` is mandatory. See "Cascade resolution" below.
+- **Cascade input** (`cascade: true`): an authoring tool — the input
+  becomes settable from anywhere above the declaring file, without
+  being threaded through every invoke in between. `default` is
+  mandatory. See "Cascade inputs" below.
 
 Reading an undeclared name is an error, and so is passing an undeclared
 name in an invoke's args — typos fail loudly at the boundary, not
@@ -80,7 +81,33 @@ export default function build(ctx) {
 }
 ```
 
-## Cascade resolution
+## What a view can set
+
+From the outside, a view simply *has inputs*. After each build the
+engine reports them as one flat list — the target's own inputs plus
+every cascade input that reached the view level — each entry with its
+current value, where it came from (`view` = explicitly set, `default`
+otherwise), its schema (type, range, choices, default), and the
+file(s) declaring it. That report is what the viewer's input panel and
+CLI `--set` validation are generated from; `odm build` prints it, and
+a set name nothing reads is an error listing what *is* settable.
+
+Lints ride along with the report: two unrelated subtrees falling
+through with conflicting defaults get a warning (conflicting *types*
+are an error); a cascade value that nothing in the invoked subtree
+declares is a warning — a typo'd name (or a plain-input value sent
+through the cascade channel) must not silently do nothing; and a plain
+input on the target shadowing a same-named fall-through cascade input
+is a warning, since a set value only reaches the plain one.
+
+A *failed* build still reports the target's declared inputs next to
+the error — the declared schema needs no successful pass.
+
+## Cascade inputs
+
+A cascade input makes something declared deep inside a model settable
+at the top without threading it through every invoke in between. The
+declaration lives at the *reader*; values are provided from above.
 
 `ctx.invoke(path, args, cascade)` has two separate channels:
 
@@ -104,20 +131,10 @@ agrees on the value whether or not it was explicitly set. Resolution
 depends only on the reader's invoke path, so it memoizes like any
 other input.
 
-After each build the engine reports which cascade names *fell through*
-to the view level (nothing below provided them), each with the source
-of its resolved value (`view` or `default`) — that report is what the
-viewer's input panel and CLI `--set` validation are generated from.
-Two unrelated subtrees falling through with conflicting defaults get a
-lint warning; conflicting *types* are an error. A cascade value that
-nothing in the invoked subtree declares is also a lint warning — a
-typo'd name (or a plain-input value sent through the cascade channel)
-must not silently do nothing.
+### Time is a convention, not a feature
 
-## Time is a convention, not a feature
-
-There is no animation system. `t` is an ordinary cascade number with a
-range:
+The worked example — there is no animation system; `t` is an ordinary
+cascade number with a range:
 
 ```js
 //! odm unstable
@@ -128,13 +145,16 @@ export const meta = {
 export default (ctx) => odm.box([10, 2, 2]).rotateZ(Math.PI * ctx.input('t'));
 ```
 
-The viewer renders a ranged, fall-through numeric control named `t` as
-a transport (scrub, plus play at 1 unit/second looping over the
-range); the CLI sets it like any input (`odm render --set t=1.5`).
-Declaring `t` 0–2 *is* "this loops every 2 seconds". Only doohickeys
-that read `t` rebuild when it changes — keep static geometry in
-doohickeys that don't, and animate at the assembly level with
-transforms, so scrubbing stays cheap.
+Any doohickey that reads `t` animates; assemblies compose animated
+parts without mentioning `t` at all, yet the view can still set it —
+that is the cascade mechanism doing its job. The viewer renders a
+ranged, fall-through numeric control named `t` as a transport (scrub,
+plus play at 1 unit/second looping over the range); the CLI sets it
+like any input (`odm render --set t=1.5`). Declaring `t` 0–2 *is*
+"this loops every 2 seconds". Only doohickeys that read `t` rebuild
+when it changes — keep static geometry in doohickeys that don't, and
+animate at the assembly level with transforms, so scrubbing stays
+cheap (the build response's `stats` show what actually re-ran).
 
 ## Presets
 
@@ -154,8 +174,6 @@ One click in the viewer applies one; the CLI takes `--preset heavy`
 (explicit `--set` values override the preset). Use them as the
 "stories" of a doohickey: the configurations worth looking at.
 
-## Reading inputs from the CLI
-
-`odm interface <path>` prints a doohickey's `//!` description, input
-schemas, and presets without building it. `odm build`/`render`/`tree`
-report the fall-through inputs of the view they built.
+`odm build <path>` is the CLI's window into all of this: the file's
+`//!` description, its settable inputs, and its presets — even when
+the build fails.

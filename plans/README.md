@@ -6,8 +6,6 @@ independent work; cross-references note where they touch.
 
 - `scene-query.md` — merge `tree`+`inspect` into one scene query command:
   scope × detail grid, summary default, name addressing, repeat collapsing.
-- `build-report.md` — one answer to "what's settable": flat inputs list,
-  absorb `interface` into `build`, cascade becomes authoring-only, memo stats.
 - `colors-srgb.md` — sRGB end-to-end; linear becomes renderer-internal.
 - `render-workflow.md` — contact-sheet/multi-frame renders, `--look` camera
   shorthands, demote explicit camera to docs.

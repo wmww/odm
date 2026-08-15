@@ -1,6 +1,6 @@
 //! The input panel: controls generated from the active tab's input report
-//! (the target's own args + the cascade fall-through entries), presets, and
-//! the `t` transport. Edits come back as events; `apply` folds them into the
+//! (one flat list of everything settable on the view), presets, and the `t`
+//! transport. Edits come back as events; `apply` folds them into the
 //! tab, and the app submits the tab's new view to the engine.
 //!
 //! Invariant: the panel is a pure render of (report, tab set values). The
@@ -11,7 +11,7 @@
 use super::tabs::{Section, Tab};
 use crate::theme;
 use eframe::egui;
-use odm_build::{InputReport, ReportEntry};
+use odm_build::{InputKind, InputReport, ReportEntry};
 use serde_json::Value;
 
 /// One panel interaction.
@@ -40,13 +40,14 @@ pub fn apply(tab: &mut Tab, report: &InputReport, events: Vec<Event>) {
             Event::Preset(name) => {
                 if let Some((_, bundle)) = report.presets.iter().find(|(n, _)| *n == name) {
                     for (input, value) in bundle {
-                        // Split by which section of the report the name
-                        // lives in (presets only name declared inputs).
-                        let section = if report.args.iter().any(|e| &e.name == input) {
-                            Section::Arg
-                        } else {
-                            Section::Cascade
-                        };
+                        // The entry's kind says which channel the value
+                        // travels on (presets only name declared inputs).
+                        let section = report
+                            .inputs
+                            .iter()
+                            .find(|e| &e.name == input)
+                            .map(section_of)
+                            .unwrap_or(Section::Cascade);
                         tab.set_values_mut(section).insert(input.clone(), value.clone());
                     }
                 }
@@ -56,15 +57,24 @@ pub fn apply(tab: &mut Tab, report: &InputReport, events: Vec<Event>) {
     }
 }
 
+/// Which view channel an entry's set values travel on.
+fn section_of(entry: &ReportEntry) -> Section {
+    match entry.kind {
+        InputKind::Plain => Section::Arg,
+        InputKind::Cascade => Section::Cascade,
+    }
+}
+
 /// The ranged numeric cascade input named `t`, if the report has one — the
 /// transport's control.
 pub fn transport_entry(tab: &Tab) -> Option<ReportEntry> {
     tab.published
         .report
-        .entries
+        .inputs
         .iter()
         .find(|e| {
             e.name == "t"
+                && e.kind == InputKind::Cascade
                 && matches!(e.ty.as_deref(), Some("number") | Some("integer"))
                 && e.minimum.is_some()
                 && e.maximum.is_some()
@@ -95,7 +105,7 @@ pub fn panel_ui(ui: &mut egui::Ui, tab: &mut Tab, skip_t: bool) -> Vec<Event> {
     let mut events = Vec::new();
     let report = tab.published.report.clone();
 
-    if report.args.is_empty() && report.entries.is_empty() && report.presets.is_empty() {
+    if report.inputs.is_empty() && report.presets.is_empty() {
         ui.label(egui::RichText::new("This view declares no inputs.").color(theme::WEAK_TEXT));
         return events;
     }
@@ -111,17 +121,11 @@ pub fn panel_ui(ui: &mut egui::Ui, tab: &mut Tab, skip_t: bool) -> Vec<Event> {
         ui.add_space(4.0);
     }
 
-    for entry in &report.args {
-        control(ui, tab, Section::Arg, entry, &mut events);
-    }
-    if !report.args.is_empty() && !report.entries.is_empty() {
-        ui.add_space(4.0);
-    }
-    for entry in &report.entries {
-        if skip_t && entry.name == "t" {
+    for entry in &report.inputs {
+        if skip_t && entry.name == "t" && entry.kind == InputKind::Cascade {
             continue; // lives in the transport row
         }
-        control(ui, tab, Section::Cascade, entry, &mut events);
+        control(ui, tab, section_of(entry), entry, &mut events);
     }
 
     for w in &report.warnings {
@@ -278,6 +282,7 @@ mod tests {
             name: name.into(),
             value: json!(default),
             source: ValueSource::Default,
+            kind: InputKind::Plain,
             ty: Some("number".into()),
             minimum: Some(1.0),
             maximum: None,
@@ -416,7 +421,7 @@ mod tests {
 
     fn box_report() -> InputReport {
         InputReport {
-            args: vec![number_entry("height", 30), number_entry("wall", 3)],
+            inputs: vec![number_entry("height", 30), number_entry("wall", 3)],
             presets: vec![preset("chunky", json!({ "height": 40, "wall": 6 }))],
             ..Default::default()
         }
@@ -440,8 +445,8 @@ mod tests {
         // panel must not lean on it once the set is cleared (a failed build
         // would leave it stale forever).
         let mut stale = (*h.tab.published.report).clone();
-        stale.args[0].value = json!(40);
-        stale.args[0].source = ValueSource::View;
+        stale.inputs[0].value = json!(40);
+        stale.inputs[0].source = ValueSource::View;
         h.tab.published.report = stale.into();
 
         h.click_text("×"); // height's — the first set row on screen

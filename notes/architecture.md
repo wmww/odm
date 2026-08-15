@@ -121,9 +121,14 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   early cutoff; `Dep::Invoke` carries its cascade map. `meta.rs` = schema-
   profile allowlist walk + extension desugaring, cached by code hash
   (`BuildEngine::meta`, extraction via `extract_export`); `report.rs` =
-  post-build fall-through report walked from memo entries (view-settable
-  cascade names, winning declarations, conflict lint) + the target's own
-  args/presets — the input panel's data source and `--set` typo check.
+  post-build input report walked from memo entries: ONE flat list of
+  everything view-settable (target's plain inputs + fall-through cascade
+  names, each entry carrying `kind`), winning declarations, lints
+  (conflicting defaults/types, unread cascade values, plain-shadows-cascade)
+  — the input panel's data source and `--set` typo check; `declared_entries`
+  is the failure-path subset (target's declared schema, no walk needed).
+  Each pass also collects `BuildStats` (per-doohickey runs + self-time,
+  memo hits) into `PassResult.stats`, surfaced by `odm build`.
   In-flight registry (wait-for-in-flight + wait-graph cycle detection);
   cancellation (token + TerminateExecution post-module-eval). Cycle check is
   keyed on (path, args-hash, env-hash) so bounded recursion works; memo
@@ -168,8 +173,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
   Commands: status/sync/build/render/tree/inspect/raycast/
-  selection/interface, and poll/say/ack (see "Talking to the agent"); every
-  command except those three syncs first. View-scoped queries take optional
+  selection, and poll/say/ack (see "Talking to the agent"); every
+  command except those three syncs first. `build` is the one answer to
+  "what's settable": description, presets, flat inputs list, lints, build
+  stats — and on a *failed* build it still attaches the target's declared
+  schema next to the error (`CmdError::extra` → top-level fields). View-scoped queries take optional
   path + `--set`/`--preset`, or adopt a viewer tab (`--view <slot>` /
   `--viewer-state`); poll answers carry a snapshot of the user's active view
   (path, inputs, selection). CLI one-off views build without publishing;

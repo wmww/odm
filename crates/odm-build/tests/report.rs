@@ -1,7 +1,7 @@
-//! The post-build fall-through report: which cascade inputs are settable at
-//! the view level, with winning declarations and the conflict lint.
+//! The post-build input report: one flat list of everything settable on the
+//! view, with winning declarations and the conflict lint.
 
-use odm_build::{BuildEngine, ValueSource, View, check_set_names};
+use odm_build::{BuildEngine, InputKind, ValueSource, View, check_set_names, declared_entries};
 use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::Store;
@@ -58,14 +58,15 @@ fn fall_through_names_reach_the_view() {
     e.build_view(&pass).unwrap();
     let report = e.input_report(&pass);
 
-    let names: Vec<&str> = report.entries.iter().map(|e| e.name.as_str()).collect();
+    let names: Vec<&str> = report.inputs.iter().map(|e| e.name.as_str()).collect();
     // `t` falls through from the root; `speed` falls through from the FIRST
     // arm invoke (the second is covered by an invoke's cascade value).
     assert_eq!(names, vec!["speed", "t"]);
-    let t = report.entries.iter().find(|e| e.name == "t").unwrap();
+    let t = report.inputs.iter().find(|e| e.name == "t").unwrap();
     assert_eq!((t.minimum, t.maximum), (Some(0.0), Some(2.0)));
     assert_eq!(t.value, json!(0));
     assert_eq!(t.source, ValueSource::Default);
+    assert_eq!(t.kind, InputKind::Cascade);
     assert!(report.warnings.is_empty() && report.errors.is_empty());
 
     // Set at the view: value and source reflect it.
@@ -75,7 +76,7 @@ fn fall_through_names_reach_the_view() {
     let pass = e.start_pass(&sync, view);
     e.build_view(&pass).unwrap();
     let report = e.input_report(&pass);
-    let t = report.entries.iter().find(|e| e.name == "t").unwrap();
+    let t = report.inputs.iter().find(|e| e.name == "t").unwrap();
     assert_eq!(t.value, json!(1.5));
     assert_eq!(t.source, ValueSource::View);
 
@@ -89,6 +90,101 @@ fn fall_through_names_reach_the_view() {
     let mut fine = Map::new();
     fine.insert("speed".into(), json!(2));
     assert!(check_set_names(&fine, meta, &report).is_ok());
+}
+
+/// The flat list holds both kinds — the target's plain inputs and the
+/// fall-through cascade names — and `declared_entries` answers the same
+/// question from the declared schema alone (the failed-build path).
+#[test]
+fn plain_and_cascade_inputs_share_one_list() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "root.js",
+        r#"
+        export const meta = { inputs: { width: { type: 'number', default: 40, minimum: 1 } } };
+        export default (ctx) => odm.group(
+            odm.box([ctx.input('width'), 10, 4]),
+            ctx.invoke('arm.js'),
+        );
+        "#,
+    );
+    write(
+        dir.path(),
+        "arm.js",
+        r#"
+        export const meta = { inputs: { speed: { type: 'number', cascade: true, default: 1 } } };
+        export default (ctx) => odm.box([1, 1, 1 + ctx.input('speed')]);
+        "#,
+    );
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    let mut args = Map::new();
+    args.insert("width".into(), json!(50));
+    let view = View { path: "root.js".into(), args, cascade: Map::new() };
+    let pass = e.start_pass(&sync, view.clone());
+    e.build_view(&pass).unwrap();
+    let report = e.input_report(&pass);
+
+    let kinds: Vec<(&str, InputKind)> =
+        report.inputs.iter().map(|e| (e.name.as_str(), e.kind)).collect();
+    assert_eq!(kinds, vec![("speed", InputKind::Cascade), ("width", InputKind::Plain)]);
+    let width = &report.inputs[1];
+    assert_eq!(width.value, json!(50));
+    assert_eq!(width.source, ValueSource::View);
+    assert_eq!(width.declared_in, vec!["root.js"]);
+
+    // The declared schema alone: the plain input with its set value, no
+    // fall-through info (that needs a successful pass).
+    let meta = e.meta("root.js", &sync.snapshot.sources["root.js"]);
+    let declared = declared_entries("root.js", meta.as_ref().as_ref().unwrap(), &view);
+    let names: Vec<&str> = declared.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["width"]);
+    assert_eq!(declared[0].value, json!(50));
+    assert_eq!(declared[0].kind, InputKind::Plain);
+}
+
+/// A plain target input and a same-named fall-through cascade input: a set
+/// value only reaches the plain one, so the report keeps that entry and
+/// lints the shadowed cascade name.
+#[test]
+fn a_plain_input_shadowing_a_cascade_name_is_linted() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "root.js",
+        r#"
+        export const meta = { inputs: { size: { type: 'number', default: 10 } } };
+        export default (ctx) => odm.group(
+            odm.box(ctx.input('size')),
+            ctx.invoke('part.js'),
+        );
+        "#,
+    );
+    write(
+        dir.path(),
+        "part.js",
+        r#"
+        export const meta = { inputs: { size: { type: 'number', cascade: true, default: 2 } } };
+        export default (ctx) => odm.sphere(ctx.input('size'));
+        "#,
+    );
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    let pass = e.start_pass(&sync, View::of("root.js"));
+    e.build_view(&pass).unwrap();
+    let report = e.input_report(&pass);
+
+    let sizes: Vec<InputKind> =
+        report.inputs.iter().filter(|e| e.name == "size").map(|e| e.kind).collect();
+    assert_eq!(sizes, vec![InputKind::Plain], "one entry, the one --set reaches");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("\"size\"") && w.contains("part.js")),
+        "{:?}",
+        report.warnings
+    );
 }
 
 #[test]

@@ -39,8 +39,8 @@ description (the `odm <version>` pragma line is excluded): first line =
 one-sentence summary, the rest is the body. It is parsed without
 running the file, so it survives broken builds and is greppable.
 Structured metadata — input declarations, presets — lives in
-`export const meta` ([inputs.md](inputs.md)). `odm interface <path>`
-prints both.
+`export const meta` ([inputs.md](inputs.md)). `odm build <path>`
+reports both.
 
 ## The API version pragma
 
