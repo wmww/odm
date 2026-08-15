@@ -1,7 +1,8 @@
 //! The menu bar: what is on it, and what picking an item does.
 
-use super::ViewerApp;
+use super::new::NewDialog;
 use super::open::OpenDialog;
+use super::{Dialog, ViewerApp};
 use crate::theme::{self, MenuEntry};
 use eframe::egui;
 
@@ -9,6 +10,7 @@ use eframe::egui;
 /// bar is a list of names and the handler a list of effects.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    New,
     Open,
     Quit,
     Frame,
@@ -23,6 +25,7 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
             ui,
             "File",
             &[
+                MenuEntry::item(Action::New, "New Project…"),
                 MenuEntry::item(Action::Open, "Open Project…"),
                 MenuEntry::separator(),
                 MenuEntry::item(Action::Quit, "Exit"),
@@ -49,12 +52,19 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
 
 fn apply(app: &mut ViewerApp, action: Action) {
     match action {
-        // Browse from the open project, or from wherever we were launched.
+        // Both browse from the open project, or from wherever we were
+        // launched — New puts the project beside the one open, Open finds it.
+        Action::New => {
+            app.dialog = Some(Dialog::New(match &app.session {
+                Some(state) => NewDialog::beside(state.project()),
+                None => NewDialog::browse(&super::cwd()),
+            }))
+        }
         Action::Open => {
-            app.open_dialog = Some(match &app.session {
+            app.dialog = Some(Dialog::Open(match &app.session {
                 Some(state) => OpenDialog::new(state.project()),
                 None => OpenDialog::browse(&super::cwd()),
-            })
+            }))
         }
         Action::Quit => app.quit.request(),
         Action::Frame => app.frame_scene(),

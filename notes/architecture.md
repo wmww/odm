@@ -168,7 +168,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   layer: a serde-tagged `Request` enum with `deny_unknown_fields`, so a
   typo'd command *or* option is an error, plus `CmdError`→JSON),
   `watcher.rs`, `server.rs`, `session.rs`, `viewer/` (`mod.rs` app + viewport,
-  `idle.rs` event loop, `menu.rs` menu bar, `open.rs` Open dialog, `tree.rs`
+  `idle.rs` event loop, `menu.rs` menu bar, `browse.rs` folder list with
+  `open.rs`/`new.rs` on top of it, `tree.rs`
   scene tree), `scene.rs`, `theme/`, `icons.rs`.
   `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
@@ -223,7 +224,7 @@ overruns, so a full strip can still be added to. Labels elide
 
 `viewer/menu.rs` is the whole bar: an `Action` enum, a `theme::menu` per
 drop-down listing `MenuEntry`s, and one `apply` that turns an action into an
-effect. File has Open Project…/Exit, View has Frame Scene (F) and checkmarked
+effect. File has New Project…/Open Project…/Exit, View has Frame Scene (F) and checkmarked
 Wireframe/Grid. `theme::menu` measures its own entries and pins the popup width
 before drawing, because an auto-sizing egui popup doesn't know its width until
 the frame after — and a highlight that stops at the text looks broken. Titles
@@ -257,22 +258,41 @@ and swaps it:
 `Sessions::empty()` builds the snapshot and serves nothing, and the viewer
 launched outside a project starts there (`ViewerApp::session: Option`). It
 draws the menu bar (File only — nothing to look at, so no View menu) over a
-"No project open." panel with an Open Project… button, with the dialog
-already up, browsing cwd. Cancel leaves the panel rather than trapping the
+"No project open." panel with Open Project… / New Project… buttons, with the
+Open dialog already up, browsing cwd. Cancel leaves the panel rather than trapping the
 user in a modal with nowhere to go. `ViewerApp::state()` expects a session,
 which holds because `ui` peels this case off first; everything downstream of
 it (tabs, `self.tabs[self.active]`) assumes a project. Open from here is the
 same `Sessions::open` path as a swap, minus the old session to retire —
 `Sessions::start` is now just `empty()` + `open()`.
 
-`viewer/open.rs` is the directory chooser (no portal here, no dialog crate in
-the tree). Directories only, since a project *is* one; `is_project` (odm.toml)
-picks the icon and gates Open. `new(current)` browses the open project's parent with it
-selected; `browse(dir)` browses `dir` with nothing selected, for when there is
-no project to start from. The path field is what Open acts on, so clicking a row and
-typing a path are the same gesture; double-clicking a plain folder browses into
-it, double-clicking a project opens it. `~` expands, nothing else does. Its row
-list is a `theme::list_box`, so it gets the era's scrollbar for free.
+`viewer/browse.rs` is the directory chooser both project dialogs are built on
+(no portal here, no dialog crate in the tree): "Look in:" + Up over a
+`theme::list_box` of subdirectories — directories only, since a project *is*
+one, hidden ones skipped, and `is_project` (odm.toml) picking the icon. It
+owns the dialogs' one message line (`report`), and hands back what a row was
+asked to do (`Hit`) rather than acting, since navigating mid-layout would
+relist under the rows still being iterated. `beside(current)` browses
+`current`'s parent with it selected; `at(dir)` browses `dir` with nothing
+selected, for when there is no project to start from.
+
+`open.rs` adds the path field, which is what Open acts on, so clicking a row
+and typing a path are the same gesture; double-clicking a plain folder browses
+into it, double-clicking a project opens it. `~` expands, nothing else does.
+
+`new.rs` adds a *name* field instead — the project is a folder that isn't
+there yet, so there is nothing to point at. It refuses a name with a `/` in
+it, a leading `.`, one that is already taken, and a folder inside a project
+(every .js under a project belongs to it, so nesting would build the inner one
+as part of its host). Create writes the project (`odm_build::create_project`:
+odm.toml + a starter `root.js`, never over an existing file) and opens it in
+one gesture. Written-but-not-opened — the socket claim can fail — hands off to
+the Open dialog pointed at the new project, since making it is done and only
+opening is left.
+
+The two are one `Option<Dialog>` on `ViewerApp`: only one is ever up, both are
+drawn last (their backdrop covers everything above), and both keep themselves
+up with the reason when the engine turns a pick down.
 
 ### Talking to the agent
 
@@ -446,10 +466,12 @@ notes/spike-findings.md "Snapshot count/concurrency".
 
 - Consistency: every published result is byte-equivalent to a from-scratch
   build of its generation (tested: `odm-build/tests/build.rs`).
-- The engine never writes ODM project files — with ONE exception: the
-  `engine` value in `odm.toml` (recorded on project open;
+- The engine never writes ODM project files of an existing project — with ONE
+  exception: the `engine` value in `odm.toml` (recorded on project open;
   `odm_build::sync_marker`). odm.toml is not part of generation identity,
-  so the write-back cannot churn generations.
+  so the write-back cannot churn generations. (`create_project`, File ▸ New
+  Project, authors a project's first files, but only ever creates files that
+  are not there.)
 - Engine queries on content-addressed handles are pure → never memo deps.
   Queries on transformed solids bake via op_transform_bake (cached per
   Solid) — exact, but costs a mesh copy per distinct transform.

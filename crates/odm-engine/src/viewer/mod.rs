@@ -3,9 +3,11 @@
 //! transport, error panel. Never blocks on builds — shows each tab's last
 //! published scene with a building indicator.
 
+mod browse;
 mod idle;
 mod inputs;
 mod menu;
+mod new;
 mod open;
 mod tabs;
 mod tree;
@@ -123,6 +125,14 @@ pub(crate) struct SceneCache {
     pub scene: RenderScene,
 }
 
+/// The modal that picks a project, when one is up. Open and New are the same
+/// kind of thing — a browse over folders that ends in a project to serve — so
+/// only one of them is ever up, and one field holds either.
+enum Dialog {
+    Open(open::OpenDialog),
+    New(new::NewDialog),
+}
+
 pub struct ViewerApp {
     sessions: Arc<Sessions>,
     /// The project being viewed, if one is: `None` means the viewer was
@@ -140,7 +150,8 @@ pub struct ViewerApp {
     needs_render: bool,
     /// The chat input line. The transcript itself lives in `EngineState`.
     chat_input: String,
-    open_dialog: Option<open::OpenDialog>,
+    /// File ▸ Open / File ▸ New Project, when one of them is up.
+    dialog: Option<Dialog>,
     /// The new-tab file picker: Some(list of viewable files).
     add_tab: Option<Vec<String>>,
     /// File ▸ Exit; acted on by the event loop (see `idle.rs`).
@@ -167,7 +178,7 @@ impl ViewerApp {
             grid: true,
             needs_render: true,
             chat_input: String::new(),
-            open_dialog: None,
+            dialog: None,
             add_tab: None,
             quit,
         };
@@ -175,7 +186,7 @@ impl ViewerApp {
             true => app.init_tabs(),
             // Nothing to show but the question: which project? Browsing starts
             // where we were launched, the likeliest place to find one.
-            false => app.open_dialog = Some(open::OpenDialog::browse(&cwd())),
+            false => app.dialog = Some(Dialog::Open(open::OpenDialog::browse(&cwd()))),
         }
         app
     }
@@ -824,7 +835,7 @@ impl ViewerApp {
         }
         // Not while a dialog is up or a field has the caret — "F" is a letter
         // in a path before it is a shortcut.
-        if self.open_dialog.is_none()
+        if self.dialog.is_none()
             && self.add_tab.is_none()
             && !ui.ctx().egui_wants_keyboard_input()
             && ui.input(|i| i.key_pressed(egui::Key::F))
@@ -1043,8 +1054,8 @@ impl ViewerApp {
 
     /// The whole window when no project is open: the menu bar, and the reason
     /// there is nothing under it. The Open dialog is up already (see `new`);
-    /// dismissing it leaves this, and File ▸ Open Project… brings it back —
-    /// a modal with nowhere to go would be a trap.
+    /// dismissing it leaves this, and the buttons (or the File menu) bring a
+    /// chooser back — a modal with nowhere to go would be a trap.
     fn no_project_ui(&mut self, ui: &mut egui::Ui) {
         let menu = egui::Panel::top("menubar")
             .frame(egui::Frame::new().fill(theme::FACE).inner_margin(egui::Margin::symmetric(2, 1)))
@@ -1056,30 +1067,54 @@ impl ViewerApp {
                 ui.label("No project open.");
                 ui.add_space(6.0);
                 if theme::button(ui, "Open Project…").clicked() {
-                    self.open_dialog = Some(open::OpenDialog::browse(&cwd()));
+                    self.dialog = Some(Dialog::Open(open::OpenDialog::browse(&cwd())));
+                }
+                ui.add_space(4.0);
+                if theme::button(ui, "New Project…").clicked() {
+                    self.dialog = Some(Dialog::New(new::NewDialog::browse(&cwd())));
                 }
             });
         });
-        self.open_dialog_ui(ui.ctx());
+        self.dialog_ui(ui.ctx());
     }
 
-    /// The Open dialog, when one is up. Kept out of the two layouts that show
-    /// it, and drawn last by both: its backdrop covers everything above.
-    fn open_dialog_ui(&mut self, ctx: &egui::Context) {
+    /// The project chooser, when one is up. Kept out of the two layouts that
+    /// show it, and drawn last by both: its backdrop covers everything above.
+    fn dialog_ui(&mut self, ctx: &egui::Context) {
         // Taken out of `self` for the call, since opening a project touches
-        // all of it.
-        let Some(mut dialog) = self.open_dialog.take() else { return };
-        match dialog.ui(ctx) {
-            open::Outcome::Idle => self.open_dialog = Some(dialog),
-            open::Outcome::Cancelled => {}
-            open::Outcome::Open(project) => {
-                // A project the engine won't take leaves the dialog up, saying
-                // why, rather than closing over the failure.
-                if let Err(e) = self.open_project(&project, ctx) {
-                    dialog.report(e);
-                    self.open_dialog = Some(dialog);
+        // all of it. Either way a project the engine won't take leaves the
+        // dialog up saying why, rather than closing over the failure.
+        match self.dialog.take() {
+            None => {}
+            Some(Dialog::Open(mut dialog)) => match dialog.ui(ctx) {
+                open::Outcome::Idle => self.dialog = Some(Dialog::Open(dialog)),
+                open::Outcome::Cancelled => {}
+                open::Outcome::Open(project) => {
+                    if let Err(e) = self.open_project(&project, ctx) {
+                        dialog.report(e);
+                        self.dialog = Some(Dialog::Open(dialog));
+                    }
                 }
-            }
+            },
+            Some(Dialog::New(mut dialog)) => match dialog.ui(ctx) {
+                new::Outcome::Idle => self.dialog = Some(Dialog::New(dialog)),
+                new::Outcome::Cancelled => {}
+                // Author it, then serve it: a new project is only worth
+                // making if we can go straight into it.
+                new::Outcome::Create { path, name } => {
+                    if let Err(e) = odm_build::create_project(&path, &name) {
+                        dialog.report(e.to_string());
+                        self.dialog = Some(Dialog::New(dialog));
+                    } else if let Err(e) = self.open_project(&path, ctx) {
+                        // Written but not served: the project is real now, so
+                        // there is nothing left to make. What is left is
+                        // opening it, and Open is the dialog for that.
+                        let mut open = open::OpenDialog::new(&path);
+                        open.report(e);
+                        self.dialog = Some(Dialog::Open(open));
+                    }
+                }
+            },
         }
     }
 }
@@ -1136,7 +1171,7 @@ impl eframe::App for ViewerApp {
             .show(ui, |ui| self.viewport_ui(ui, frame));
 
         self.add_tab_ui(ui.ctx());
-        self.open_dialog_ui(ui.ctx());
+        self.dialog_ui(ui.ctx());
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {

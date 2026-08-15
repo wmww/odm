@@ -4,7 +4,7 @@
 
 use odm_ir::Hash;
 use odm_js::ApiVersion;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -18,7 +18,7 @@ pub const ENGINE_VERSION: i64 = 0;
 /// ever rewrites the `engine` value.
 /// Deliberately NOT part of generation identity — it never affects build
 /// output, and the engine writing it must not churn generations.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectMarker {
     /// Project name, shown in the window title / status.
@@ -35,6 +35,8 @@ pub enum ScanError {
     BadMarker(String),
     #[error("{0} is not a directory")]
     NotADirectory(String),
+    #[error("{0} already exists")]
+    Exists(String),
 }
 
 /// One doohickey's source as of a sync.
@@ -128,6 +130,48 @@ pub fn sync_marker(dir: &Path) -> Result<Option<String>, ScanError> {
     std::fs::write(&path, out)
         .map_err(|e| ScanError::Io { path: "odm.toml".into(), err: e.to_string() })?;
     Ok(warning)
+}
+
+/// Author a new project in `dir`: the marker that makes it one, and a starter
+/// `root.js` so there is something to look at. The directory is created if it
+/// is not there; neither file is overwritten if it is.
+///
+/// The other place the engine writes project files is `sync_marker`. This one
+/// only ever writes files that do not exist yet, so nothing authored can be
+/// lost to it.
+pub fn create_project(dir: &Path, name: &str) -> Result<(), ScanError> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| ScanError::Io { path: dir.display().to_string(), err: e.to_string() })?;
+    let marker = ProjectMarker { name: name.to_owned(), engine: ENGINE_VERSION };
+    let marker = toml::to_string(&marker).map_err(|e| ScanError::BadMarker(e.to_string()))?;
+    write_new(&dir.join("odm.toml"), &marker)?;
+    write_new(&dir.join("root.js"), &starter(name))
+}
+
+/// Write a file that is not there, and say so rather than clobber one that is.
+fn write_new(path: &Path, contents: &str) -> Result<(), ScanError> {
+    use std::io::Write;
+    let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy().into_owned();
+    let mut file = match std::fs::File::create_new(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(ScanError::Exists(name));
+        }
+        Err(e) => return Err(ScanError::Io { path: name, err: e.to_string() }),
+    };
+    file.write_all(contents.as_bytes())
+        .map_err(|e| ScanError::Io { path: name, err: e.to_string() })
+}
+
+/// The doohickey a new project opens with: the smallest thing worth seeing.
+fn starter(name: &str) -> String {
+    format!(
+        "//! odm unstable\n\
+         //! {name}: a new project — start here.\n\
+         export default function build(ctx) {{\n  \
+           return odm.box([40, 30, 20]).color('#4682b4').name('block');\n\
+         }}\n"
+    )
 }
 
 fn walk(
