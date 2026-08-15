@@ -18,6 +18,9 @@ cd examples/piston
 Edit any `.js` file and re-run a command — every CLI call syncs and rebuilds
 what changed.
 
+`scripts/install.sh` builds and drops the binary in `~/.local/bin` (override
+with `BINDIR=`); it is self-contained, so that is the whole install.
+
 To point an agent at a project, give it the instructions ODM ships with:
 
 ```sh
