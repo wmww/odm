@@ -188,17 +188,14 @@ impl ViewerApp {
             add_tab: None,
             quit,
         };
-        match app.session.is_some() {
-            true => {
-                app.init_tabs();
-                // The startup project was opened before this struct existed;
-                // its questions have been waiting on the session since.
-                app.ask_about_agent_files();
-            }
-            // Nothing to show but the question: which project? Browsing starts
-            // where we were launched, the likeliest place to find one.
-            false => app.dialog = Some(Dialog::Open(open::OpenDialog::browse(&cwd()))),
+        if app.session.is_some() {
+            app.init_tabs();
+            // The startup project was opened before this struct existed;
+            // its questions have been waiting on the session since.
+            app.ask_about_agent_files();
         }
+        // With no project there is nothing to put up: `no_project_ui` offers
+        // Open and New, and the choice stays the user's to start.
         app
     }
 
@@ -1052,9 +1049,8 @@ impl ViewerApp {
     }
 
     /// The whole window when no project is open: the menu bar, and the reason
-    /// there is nothing under it. The Open dialog is up already (see `new`);
-    /// dismissing it leaves this, and the buttons (or the File menu) bring a
-    /// chooser back — a modal with nowhere to go would be a trap.
+    /// there is nothing under it. Nothing is chosen for the user — the buttons
+    /// here (or the File menu) bring up a chooser when they want one.
     fn no_project_ui(&mut self, ui: &mut egui::Ui) {
         let menu = egui::Panel::top("menubar")
             .frame(egui::Frame::new().fill(theme::FACE).inner_margin(egui::Margin::symmetric(2, 1)))
