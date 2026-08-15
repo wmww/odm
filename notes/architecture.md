@@ -169,8 +169,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   typo'd command *or* option is an error, plus `CmdError`→JSON),
   `watcher.rs`, `server.rs`, `session.rs`, `viewer/` (`mod.rs` app + viewport,
   `idle.rs` event loop, `menu.rs` menu bar, `browse.rs` folder list with
-  `open.rs`/`new.rs` on top of it, `tree.rs`
-  scene tree), `scene.rs`, `theme/`, `icons.rs`.
+  `open.rs`/`new.rs` on top of it, `tree.rs` scene tree, `tabs.rs` tab state,
+  `inputs.rs` input panel — see "Input panel" below), `scene.rs`, `theme/`,
+  `icons.rs`.
   `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`,
@@ -219,6 +220,33 @@ carved *out* of the tab's click rect rather than layered over it, so neither
 steals the other's click, and the + being pinned to the right end when the row
 overruns, so a full strip can still be added to. Labels elide
 (`TextWrapping::truncate_at_width`) once tabs are squeezed past their share.
+
+### Input panel
+
+`viewer/inputs.rs` + `viewer/tabs.rs`. Controls come from the tab's
+fall-through report; interactions come back as `Event`s which
+`inputs::apply` folds into the tab's `set_args`/`set_cascade` (pure and
+unit-tested; `mod.rs` then submits `tab.view()` to the engine). The
+invariant that keeps it honest: **the panel is a pure render of (report, tab
+set values)** — the only other state is `Tab::edit`, the buffer of the one
+text field currently holding keyboard focus (egui focus is single, so it's
+an `Option`, present exactly while focused; Enter applies, any other focus
+loss discards). Two rules that came out of a 2026-08-14 bug (a text field
+frozen at its first-frame value, blind to presets/×):
+
+- Never cache what a control displays outside `Tab::edit`. Unfocused text
+  fields re-derive their string from `shown_value` every frame.
+- `shown_value` = the tab's set value, else the entry's declared *default* —
+  never the report's resolved `value`, which is from the last successful
+  build and lags the set values (briefly after any change, forever if the
+  build fails). The tab is the only writer of view-level values, so unset
+  always means "resolves to the default".
+
+Text fields get stable explicit egui ids (`("input", section, name)` via
+`theme::text_edit`'s id param) so focus/cursor state survives rows
+appearing above them — and so tests can find them. `inputs.rs` tests drive
+the real panel through a headless `egui::Context` (real clicks on painted
+labels, real focus, asserting on the painted galley text).
 
 ### Menu bar, and switching projects
 
@@ -489,7 +517,8 @@ integration tests in `crates/*/tests/`; the unit tests in `src/` are
 `odm-render/src/grid.rs`, `odm-js/src/version.rs` (pragma parsing) and, in
 odm-engine, `icons.rs`, `commands.rs`, `state.rs` (the chat queue),
 `server.rs` (delivery over a real socket), `viewer/tree.rs`,
-`theme/scroll.rs`, and `conformance.rs` (the suite runner, below). Every
+`viewer/inputs.rs` (the input panel, headless egui), `theme/scroll.rs`, and
+`conformance.rs` (the suite runner, below). Every
 test binary shares one `JsEnv` in a `OnceLock` (`state::tests::env()` in
 odm-engine) — building a snapshot while another test thread runs JS aborts
 the process (see spike-findings "Snapshot count/concurrency").

@@ -842,12 +842,21 @@ pub fn cross(p: &egui::Painter, at: Pos2, color: Color32) {
 /// Deliberately no `TextEdit::frame`: setting one makes egui skip its own
 /// background and margins, which is how you get white-on-face text in a box
 /// too short for its descenders.
-pub fn text_edit(ui: &mut Ui, text: &mut String, width: f32) -> Response {
+pub fn text_edit(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    text: &mut String,
+    width: f32,
+) -> Response {
     let r = ui
         .scope(|ui| {
             ui.visuals_mut().selection.stroke = Stroke::NONE;
             ui.add(
+                // Explicit id: focus and cursor state must survive the
+                // surrounding layout shifting (rows appearing/disappearing
+                // would move an auto id).
                 egui::TextEdit::singleline(text)
+                    .id(egui::Id::new(id))
                     .desired_width(width)
                     .margin(Margin::symmetric(3, 3))
                     .background_color(WINDOW),

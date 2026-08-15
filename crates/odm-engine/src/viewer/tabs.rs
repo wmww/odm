@@ -8,7 +8,6 @@ use crate::viewer::tree::TreeState;
 use odm_build::View;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 use std::path::Path;
 
 pub struct Tab {
@@ -30,8 +29,12 @@ pub struct Tab {
     pub scene: Option<SceneCache>,
     /// The `t` transport is playing (1 unit/sec, looping over the range).
     pub playing: bool,
-    /// In-progress text-field edits, keyed by input name.
-    pub edits: HashMap<String, String>,
+    /// The one in-progress text-field edit — (section, input name, buffer).
+    /// Present exactly while that field has keyboard focus (egui focus is
+    /// single, so one is enough); everything else the panel draws is derived
+    /// fresh each frame from the report and the set values, so external
+    /// changes (presets, ×, rebuilds) always show through.
+    pub edit: Option<(Section, String, String)>,
 }
 
 impl Tab {
@@ -50,7 +53,7 @@ impl Tab {
             published: Published::default(),
             scene: None,
             playing: false,
-            edits: HashMap::new(),
+            edit: None,
         }
     }
 
@@ -68,20 +71,35 @@ impl Tab {
         self.path.rsplit('/').next().unwrap_or(&self.path)
     }
 
-    /// The value a panel control shows: what the user set, else what the
-    /// last build resolved.
-    pub fn shown_value<'a>(&'a self, section: Section, entry: &'a odm_build::ReportEntry) -> &'a Value {
-        let set = match section {
+    /// The user-set values on one channel.
+    pub fn set_values(&self, section: Section) -> &Map<String, Value> {
+        match section {
             Section::Arg => &self.set_args,
             Section::Cascade => &self.set_cascade,
-        };
-        set.get(&entry.name).unwrap_or(&entry.value)
+        }
+    }
+
+    pub fn set_values_mut(&mut self, section: Section) -> &mut Map<String, Value> {
+        match section {
+            Section::Arg => &mut self.set_args,
+            Section::Cascade => &mut self.set_cascade,
+        }
+    }
+
+    /// The value a panel control shows: what the user set on this tab, else
+    /// the input's declared default. Never the report's resolved `value`:
+    /// the report is from the last *successful* build, so it lags the set
+    /// values (briefly after any change; indefinitely if a build fails) —
+    /// and the tab is the only writer of view-level values, so unset always
+    /// means "resolves to the default".
+    pub fn shown_value<'a>(&'a self, section: Section, entry: &'a odm_build::ReportEntry) -> &'a Value {
+        self.set_values(section).get(&entry.name).unwrap_or(&entry.default)
     }
 }
 
 /// Which half of the report a control belongs to — and therefore which
 /// channel of the view its value travels on.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Section {
     Arg,
     Cascade,

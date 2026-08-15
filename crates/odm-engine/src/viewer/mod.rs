@@ -345,36 +345,7 @@ impl ViewerApp {
         }
         let report = self.tab().published.report.clone();
         let tab = self.tab_mut();
-        for event in events {
-            match event {
-                inputs::Event::Set(section, name, value) => {
-                    match section {
-                        Section::Arg => tab.set_args.insert(name, value),
-                        Section::Cascade => tab.set_cascade.insert(name, value),
-                    };
-                }
-                inputs::Event::Clear(section, name) => {
-                    match section {
-                        Section::Arg => tab.set_args.remove(&name),
-                        Section::Cascade => tab.set_cascade.remove(&name),
-                    };
-                }
-                inputs::Event::Preset(name) => {
-                    if let Some((_, bundle)) = report.presets.iter().find(|(n, _)| *n == name) {
-                        for (input, value) in bundle {
-                            // Split by which section of the report the name
-                            // lives in (presets only name declared inputs).
-                            if report.args.iter().any(|e| &e.name == input) {
-                                tab.set_args.insert(input.clone(), value.clone());
-                            } else {
-                                tab.set_cascade.insert(input.clone(), value.clone());
-                            }
-                        }
-                    }
-                }
-                inputs::Event::Play(on) => tab.playing = on,
-            }
-        }
+        inputs::apply(tab, &report, events);
         let (slot, view) = (tab.slot.clone(), tab.view());
         self.state().set_view(&slot, view);
         self.save_tabs();
@@ -965,7 +936,7 @@ impl ViewerApp {
             })
         });
         ui.add_space(3.0);
-        let input = theme::text_edit(ui, &mut self.chat_input, ui.available_width() - 4.0);
+        let input = theme::text_edit(ui, "chat-input", &mut self.chat_input, ui.available_width() - 4.0);
         if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             let text = self.chat_input.trim().to_owned();
             if !text.is_empty() {

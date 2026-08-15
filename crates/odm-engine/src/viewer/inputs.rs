@@ -1,12 +1,17 @@
 //! The input panel: controls generated from the active tab's input report
 //! (the target's own args + the cascade fall-through entries), presets, and
-//! the `t` transport. Edits come back as events; the app turns them into a
-//! new view for the tab's slot.
+//! the `t` transport. Edits come back as events; `apply` folds them into the
+//! tab, and the app submits the tab's new view to the engine.
+//!
+//! Invariant: the panel is a pure render of (report, tab set values). The
+//! only other state is `Tab::edit` — the buffer of the text field currently
+//! holding keyboard focus — so a value changed from anywhere else (a preset,
+//! an ×, a rebuild, the CLI) is always what the panel shows next frame.
 
 use super::tabs::{Section, Tab};
 use crate::theme;
 use eframe::egui;
-use odm_build::ReportEntry;
+use odm_build::{InputReport, ReportEntry};
 use serde_json::Value;
 
 /// One panel interaction.
@@ -19,6 +24,36 @@ pub enum Event {
     Preset(String),
     /// Toggle the `t` transport.
     Play(bool),
+}
+
+/// Fold panel events into the tab's state. Pure tab mutation; the caller
+/// re-submits `tab.view()` to the engine and persists the tabs.
+pub fn apply(tab: &mut Tab, report: &InputReport, events: Vec<Event>) {
+    for event in events {
+        match event {
+            Event::Set(section, name, value) => {
+                tab.set_values_mut(section).insert(name, value);
+            }
+            Event::Clear(section, name) => {
+                tab.set_values_mut(section).remove(&name);
+            }
+            Event::Preset(name) => {
+                if let Some((_, bundle)) = report.presets.iter().find(|(n, _)| *n == name) {
+                    for (input, value) in bundle {
+                        // Split by which section of the report the name
+                        // lives in (presets only name declared inputs).
+                        let section = if report.args.iter().any(|e| &e.name == input) {
+                            Section::Arg
+                        } else {
+                            Section::Cascade
+                        };
+                        tab.set_values_mut(section).insert(input.clone(), value.clone());
+                    }
+                }
+            }
+            Event::Play(on) => tab.playing = on,
+        }
+    }
 }
 
 /// The ranged numeric cascade input named `t`, if the report has one — the
@@ -113,10 +148,7 @@ fn control(
         if let Some(d) = &entry.description {
             label.on_hover_text(d);
         }
-        let is_set = match section {
-            Section::Arg => tab.set_args.contains_key(&name),
-            Section::Cascade => tab.set_cascade.contains_key(&name),
-        };
+        let is_set = tab.set_values(section).contains_key(&name);
         if is_set && theme::button(ui, "×").clicked() {
             events.push(Event::Clear(section, name.clone()));
         }
@@ -153,15 +185,27 @@ fn control(
                 }
             }
             ControlKind::Text => {
-                // Free-form: edit as (relaxed) JSON, apply on Enter.
-                let buf = tab.edits.entry(name.clone()).or_insert_with(|| plain(&shown));
-                let response = theme::text_edit(ui, buf, ui.available_width() - 8.0);
-                if response.lost_focus() {
+                // Free-form: edit as (relaxed) JSON, applied on Enter,
+                // discarded on any other focus loss (click away, Escape).
+                // The buffer lives only while the field has focus; an
+                // unfocused field mirrors `shown` every frame.
+                let editing =
+                    tab.edit.as_ref().is_some_and(|(s, n, _)| *s == section && n == &name);
+                let mut buf = match &tab.edit {
+                    Some((_, _, b)) if editing => b.clone(),
+                    _ => plain(&shown),
+                };
+                let response =
+                    theme::text_edit(ui, ("input", section, &name), &mut buf, ui.available_width() - 8.0);
+                if response.has_focus() {
+                    tab.edit = Some((section, name.clone(), buf));
+                } else if editing {
+                    // Focus left this frame.
                     if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        let value = parse_value(buf, entry.ty.as_deref());
+                        let value = parse_value(&buf, entry.ty.as_deref());
                         events.push(Event::Set(section, name.clone(), value));
                     }
-                    tab.edits.remove(&name);
+                    tab.edit = None;
                 }
             }
         }
@@ -219,4 +263,227 @@ fn num(v: f64) -> Value {
 fn trim_num(v: f64) -> String {
     let s = format!("{v:.3}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use odm_build::ValueSource;
+    use serde_json::{Map, json};
+
+    /// A number input with a minimum but no maximum — a text control, like
+    /// every input of examples/parametric-box.
+    fn number_entry(name: &str, default: i64) -> ReportEntry {
+        ReportEntry {
+            name: name.into(),
+            value: json!(default),
+            source: ValueSource::Default,
+            ty: Some("number".into()),
+            minimum: Some(1.0),
+            maximum: None,
+            description: None,
+            default: json!(default),
+            choices: None,
+            declared_in: vec!["root.js".into()],
+        }
+    }
+
+    fn preset(name: &str, values: Value) -> (String, Map<String, Value>) {
+        (name.into(), values.as_object().unwrap().clone())
+    }
+
+    /// A headless input panel, one frame at a time; panel events fold back
+    /// into the tab each frame exactly as the viewer applies them.
+    struct Harness {
+        ctx: egui::Context,
+        tab: Tab,
+        /// Painted text runs from the last frame: (bounding rect, text).
+        texts: Vec<(egui::Rect, String)>,
+    }
+
+    impl Harness {
+        fn new(report: InputReport) -> Harness {
+            let mut tab = Tab::new("tab-1".into(), "root.js".into());
+            tab.published.report = report.into();
+            let mut h = Harness { ctx: egui::Context::default(), tab, texts: Vec::new() };
+            h.frame(Vec::new());
+            h
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) {
+            let modifiers = events
+                .iter()
+                .find_map(|e| match e {
+                    egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 600.0),
+                )),
+                modifiers,
+                events,
+                ..Default::default()
+            };
+            let tab = &mut self.tab;
+            let mut events = Vec::new();
+            let output = self.ctx.run_ui(input, |ui| {
+                events = panel_ui(ui, tab, false);
+            });
+            let report = self.tab.published.report.clone();
+            apply(&mut self.tab, &report, events);
+            self.texts.clear();
+            for clipped in &output.shapes {
+                collect_texts(&clipped.shape, &mut self.texts);
+            }
+        }
+
+        /// Press and release at `pos`; the click lands on the release frame.
+        fn click_at(&mut self, pos: egui::Pos2) {
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            };
+            self.frame(vec![egui::Event::PointerMoved(pos), button(true)]);
+            self.frame(vec![button(false)]);
+            // The release frame's events are applied after it rendered; one
+            // more frame shows their effect, like the viewer's next repaint.
+            self.frame(Vec::new());
+        }
+
+        /// Click the widget labeled `text` (a preset button, an ×).
+        fn click_text(&mut self, text: &str) {
+            let rect = self
+                .texts
+                .iter()
+                .find(|(_, t)| t == text)
+                .unwrap_or_else(|| panic!("no {text:?} on screen: {:?}", self.texts))
+                .0;
+            self.click_at(rect.center());
+        }
+
+        /// What the text field for arg `name` displays right now.
+        fn field_text(&self, name: &str) -> String {
+            let rect = self
+                .ctx
+                .read_response(egui::Id::new(("input", Section::Arg, name)))
+                .unwrap_or_else(|| panic!("no field {name:?}"))
+                .rect;
+            self.texts
+                .iter()
+                .filter(|(r, _)| rect.contains(r.center()))
+                .map(|(_, t)| t.as_str())
+                .collect()
+        }
+
+        fn field_center(&self, name: &str) -> egui::Pos2 {
+            self.ctx
+                .read_response(egui::Id::new(("input", Section::Arg, name)))
+                .unwrap()
+                .rect
+                .center()
+        }
+
+        fn key(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
+            self.frame(vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }]);
+        }
+    }
+
+    fn collect_texts(shape: &egui::epaint::Shape, out: &mut Vec<(egui::Rect, String)>) {
+        match shape {
+            egui::epaint::Shape::Text(t) => {
+                let rect = egui::Rect::from_min_size(t.pos, t.galley.size());
+                out.push((rect, t.galley.text().to_string()));
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for s in shapes {
+                    collect_texts(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn box_report() -> InputReport {
+        InputReport {
+            args: vec![number_entry("height", 30), number_entry("wall", 3)],
+            presets: vec![preset("chunky", json!({ "height": 40, "wall": 6 }))],
+            ..Default::default()
+        }
+    }
+
+    /// The parametric-box bug (2026-08-14): click the Chunky preset, then the
+    /// × it puts next to height. The value under height must track both — it
+    /// used to freeze at whatever the field showed on its first frame.
+    #[test]
+    fn text_fields_track_preset_and_clear() {
+        let mut h = Harness::new(box_report());
+        assert_eq!(h.field_text("height"), "30");
+        assert!(h.tab.edit.is_none(), "no cached text without focus");
+
+        h.click_text("chunky");
+        assert_eq!(h.tab.set_args["height"], json!(40));
+        assert_eq!(h.tab.set_args["wall"], json!(6));
+        assert_eq!(h.field_text("height"), "40");
+
+        // The rebuild's report now resolves height to the set value; the
+        // panel must not lean on it once the set is cleared (a failed build
+        // would leave it stale forever).
+        let mut stale = (*h.tab.published.report).clone();
+        stale.args[0].value = json!(40);
+        stale.args[0].source = ValueSource::View;
+        h.tab.published.report = stale.into();
+
+        h.click_text("×"); // height's — the first set row on screen
+        assert!(!h.tab.set_args.contains_key("height"));
+        h.frame(Vec::new());
+        assert_eq!(h.field_text("height"), "30", "cleared field shows the default again");
+        assert_eq!(h.field_text("wall"), "6", "the other set value stays");
+    }
+
+    /// Typing into a field: the buffer exists only while focused, Enter
+    /// applies the parsed value, and the field then mirrors the set value.
+    #[test]
+    fn typing_applies_on_enter() {
+        let mut h = Harness::new(box_report());
+        h.click_at(h.field_center("height"));
+        assert!(h.tab.edit.is_some(), "focus opens an edit");
+
+        h.key(egui::Key::A, egui::Modifiers::COMMAND);
+        h.frame(vec![egui::Event::Text("42".into())]);
+        assert_eq!(h.tab.edit, Some((Section::Arg, "height".into(), "42".into())));
+        assert_eq!(h.field_text("height"), "42");
+
+        h.key(egui::Key::Enter, egui::Modifiers::default());
+        assert_eq!(h.tab.edit, None);
+        assert_eq!(h.tab.set_args["height"], json!(42));
+        h.frame(Vec::new());
+        assert_eq!(h.field_text("height"), "42");
+    }
+
+    /// Leaving a field without Enter discards the edit instead of applying
+    /// it, and the field snaps back to the current value.
+    #[test]
+    fn unfocusing_discards_the_edit() {
+        let mut h = Harness::new(box_report());
+        h.click_at(h.field_center("height"));
+        h.frame(vec![egui::Event::Text("9".into())]);
+        assert!(h.tab.edit.is_some());
+
+        h.click_at(egui::pos2(280.0, 580.0)); // empty panel space
+        assert_eq!(h.tab.edit, None);
+        assert!(h.tab.set_args.is_empty(), "no value applied");
+        h.frame(Vec::new());
+        assert_eq!(h.field_text("height"), "30");
+    }
 }

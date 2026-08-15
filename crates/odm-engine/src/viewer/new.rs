@@ -58,7 +58,7 @@ impl NewDialog {
         ui.add_space(5.0);
         ui.horizontal(|ui| {
             ui.label("Name:");
-            theme::text_edit(ui, &mut self.name, ui.available_width() - 4.0);
+            theme::text_edit(ui, "new-name", &mut self.name, ui.available_width() - 4.0);
         });
         self.browser.error_ui(ui);
 

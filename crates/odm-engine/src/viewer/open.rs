@@ -64,7 +64,7 @@ impl OpenDialog {
         ui.add_space(5.0);
         ui.horizontal(|ui| {
             ui.label("Folder:");
-            theme::text_edit(ui, &mut self.path, ui.available_width() - 4.0);
+            theme::text_edit(ui, "open-path", &mut self.path, ui.available_width() - 4.0);
         });
         self.browser.error_ui(ui);
 
