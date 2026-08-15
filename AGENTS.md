@@ -13,7 +13,7 @@ Future plans live in `plans/`. Do not execute them unless asked, or write new pl
 ## Workflow
 - This project is agent-built, you own the code.
 - Refactor freely as needed. don't trust that existing code/comments/notes are necessarily correct, or existing design decisions are optimal.
-- Only git commit when asked.
+- Unless otherwise asked, commit when you've completed your task.
 - Only pull/push when explicitly asked. Git push may hang without user approval.
 - Commit to the current branch unless asked, don't make feature branches.
 - Do not run code formatting tools unless explicitly asked.
