@@ -17,7 +17,7 @@ odm raycast --origin 0,0,50 --dir 0,0,-1 [--path <p>] [--set ...]
 odm render [<path>] [--set ...] [options]    # PNG → prints path
 odm interface [<path>]        # a file's description, input schemas, presets
 odm selection                 # what the user selected in the viewer
-odm poll [--timeout <sec>]    # wait for messages from the user
+odm poll [--timeout <sec>] [--follow]   # wait for messages from the user
 odm say <text>                # send a message to the user
 odm prompt                    # print these instructions
 odm docs [<topic>]            # full API reference (list topics when bare)
@@ -70,6 +70,10 @@ you collect them with `odm poll`:
   forever. `--timeout <sec>` additionally bounds the wait, exiting with
   `"messages": []` — use it if your harness limits how long a command
   may run.
+- `--follow` never exits: it prints one compact JSON line per batch (the
+  same object, one per line) and keeps waiting. For a harness that
+  surfaces each line of a long-running command, this is one standing
+  command instead of a relaunch per message.
 - Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
   a message is only retired once the poll that took it has printed it,
   so anything it didn't get to goes back in the queue for the next one.
@@ -77,13 +81,16 @@ you collect them with `odm poll`:
   make one message arrive twice — if the same text turns up again
   immediately, it is the same instruction, not a second one.
 
-**Keep a poll running in the background at all times**, including while
-you work: launch `odm poll` as a background task, and whenever it exits,
-act on any messages and launch it again. Messages are never lost —
-anything sent while you weren't polling is delivered to the next poll,
-and the viewer shows the user which of their messages have reached you —
-but it also tells them nobody is listening when no poll is active, so a
-standing poll is what makes you reachable.
+**Stay reachable at all times**, including while you work: if your
+harness can watch a long-running command's output line by line, park
+`odm poll --follow` under it once at the start of the session;
+otherwise launch `odm poll --timeout <sec>` as a background task and
+relaunch it whenever it exits, acting on any messages it printed.
+Messages are never lost — anything sent while nothing was polling is
+delivered to the next poll, and the viewer shows the user which of
+their messages have reached you — but it also tells them nobody is
+listening when no poll is active, so a standing poll is what makes you
+reachable.
 
 `odm say <text>` sends a message back; it appears in the viewer next to
 the user's own messages. Use it to answer questions and report what you

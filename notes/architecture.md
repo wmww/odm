@@ -344,13 +344,21 @@ The user types in the viewer's chat panel; the agent collects messages with
 `odm poll` and answers with `odm say`. No MCP: CLI + `docs/prompts/` is
 agent-agnostic and enough.
 
-- **Poll's contract is set by agent harnesses.** They can't read a running
-  background command's output — they are woken when it *exits*. So poll blocks
-  until ≥1 message is queued, prints them all, and exits; process exit is the
-  delivery mechanism. `--timeout` bounds the wait (empty `messages`), and a
-  retired session (File ▸ Open) answers `{"ok": false, "error": {"kind":
-  "stopped"}}` so a poll never outlives its engine. `docs/prompts/cli.md` tells the
-  agent to keep one poll running at all times.
+- **Poll's contract is set by agent harnesses.** The baseline one can't read a
+  running background command's output — it is woken when the command *exits*.
+  So poll blocks until ≥1 message is queued, prints them all, and exits;
+  process exit is the delivery mechanism. `--timeout` bounds the wait (empty
+  `messages`), and a retired session (File ▸ Open) answers `{"ok": false,
+  "error": {"kind": "stopped"}}` so a poll never outlives its engine.
+- **`--follow` is the same thing for harnesses that watch lines** (Claude
+  Code's Monitor, say): park one command at session start and every batch
+  arrives as a push — no relaunch per message, and no gap where nobody is
+  listening. Purely a CLI-side loop (`follow_poll`): send poll, print the
+  response as one compact JSON line, flush, ack, poll again — so the engine and
+  the protocol's one-response-per-request rule are untouched, and delivery is
+  the same two-phase handshake per batch. A `--timeout` alongside it is an
+  error (nothing to bound). `docs/prompts/cli.md` tells the agent to park a
+  follow if its harness can watch lines, and to loop `--timeout` otherwise.
 - **Delivery is committed, not assumed** (the fix for a 2026-07-27 bug where
   Ctrl+C on a poll made the next message disappear). Each entry carries a
   `Delivery`: `Pending` → `InFlight` (a poll took it) → `Done`, and *only* an

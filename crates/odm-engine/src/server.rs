@@ -263,6 +263,37 @@ mod tests {
         state.stop();
     }
 
+    /// What `odm poll --follow` does: one connection, poll/ack per batch, no
+    /// reconnect in between. Each batch must retire on its own.
+    #[test]
+    fn a_follower_polls_again_on_the_same_connection() {
+        let state = engine();
+        let sock = serving(&state);
+        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+
+        for (i, text) in ["first", "second"].iter().enumerate() {
+            state.send_message((*text).into());
+            client.write_all(b"{\"cmd\":\"poll\"}\n").unwrap();
+            let mut reply = String::new();
+            reader.read_line(&mut reply).unwrap();
+            assert!(reply.contains(text), "{reply}");
+            client.write_all(b"{\"cmd\":\"ack\"}\n").unwrap();
+            reply.clear();
+            reader.read_line(&mut reply).unwrap();
+            // Only this batch is acked — the last one is already retired.
+            assert!(reply.contains("\"acked\":1"), "{reply}");
+            assert_eq!(state.with_transcript(|t| t[i].delivery), Delivery::Done);
+        }
+
+        // The follower going away takes nothing with it.
+        drop(reader);
+        drop(client);
+        std::thread::sleep(Duration::from_millis(50));
+        state.with_transcript(|t| assert!(t.iter().all(|e| e.delivery == Delivery::Done)));
+        state.stop();
+    }
+
     #[test]
     fn an_acknowledged_message_is_retired() {
         let state = engine();

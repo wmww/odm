@@ -11,7 +11,5 @@ independent work; cross-references note where they touch.
 - `colors-srgb.md` — sRGB end-to-end; linear becomes renderer-internal.
 - `render-workflow.md` — contact-sheet/multi-frame renders, `--look` camera
   shorthands, demote explicit camera to docs.
-- `poll-follow.md` — streaming `odm poll --follow` for harnesses with
-  per-line watchers.
 - `clearance.md` — "do these parts touch" assembly queries.
 - `cli-diet.md` — cross-cutting surface cuts + the prompt-vs-docs policy.

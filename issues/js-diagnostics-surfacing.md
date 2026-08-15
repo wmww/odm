@@ -38,3 +38,8 @@ failure.)
    (agent fixes breakage unprompted)? Risk is noise from the agent's own
    mid-refactor saves triggering watcher rebuilds; if added, make it opt-in
    and coalesce per-slot (latest-wins, matching publish semantics).
+   Mostly answered by `odm poll --follow` (2026-08-15): on a stream a
+   transition can just be another line, and a follower is parked all
+   session, so waking one is not the intrusion it is for a relaunch loop.
+   Still coalesce per-slot, and keep it out of one-shot poll's answer
+   beyond the snapshot.
