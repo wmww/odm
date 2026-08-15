@@ -12,7 +12,7 @@ cargo build --release
 target/release/odm run examples/piston --headless &   # drop --headless for the viewer
 cd examples/piston
 ../../target/release/odm render --t 1.0     # writes a PNG, prints its path
-../../target/release/odm tree
+../../target/release/odm inspect
 ```
 
 Edit any `.js` file and re-run a command — every CLI call syncs and rebuilds

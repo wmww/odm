@@ -172,12 +172,14 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   headless), i.e. on every `published` change. It also owns its winit event
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
-  Commands: status/sync/build/render/tree/inspect/raycast/
+  Commands: status/sync/build/render/inspect/raycast/
   selection, and poll/say/ack (see "Talking to the agent"); every
   command except those three syncs first. `build` is the one answer to
   "what's settable": description, presets, flat inputs list, lints, build
   stats — and on a *failed* build it still attaches the target's declared
-  schema next to the error (`CmdError::extra` → top-level fields). View-scoped queries take optional
+  schema next to the error (`CmdError::extra` → top-level fields). `inspect`
+  is the one scene query (see "Scene query" below). View-scoped queries take
+  optional
   path + `--set`/`--preset`, or adopt a viewer tab (`--view <slot>` /
   `--viewer-state`); poll answers carry a snapshot of the user's active view
   (path, inputs, selection). CLI one-off views build without publishing;
@@ -508,6 +510,45 @@ Consequences:
   `egui::Context`, like the tree tests. The GUI harness *cannot*: wdotool
   delivers a whole press-move-release chain inside one frame, so an injected
   drag never registers. Screenshot the look there, test behavior in unit tests.
+
+### Scene query
+
+`odm inspect` is the whole scene-query surface (it replaced a separate
+`tree` in 2026-08 — one query at two hardcoded corners of a scope × detail
+grid, with mismatched field names). Two orthogonal knobs, both defaulting
+off one signal — *did you name a node?*:
+
+- **scope**: node (`--`positional: name, or index path as tiebreaker) plus
+  `--depth N`/`--recursive`. Unnamed → whole scene, recursive; named →
+  that node, children as a count.
+- **detail**: summary (unnamed) | full (named, or `--full`) |
+  `--fields a,b,c`. `id` and `children` are structural and always there.
+
+Decisions worth keeping (`scene.rs`):
+
+- **`bounds`/`tris`/`verts` are subtree aggregates**, computed without the
+  kernel (stored mesh AABBs + counts, cached per mesh hash). That is what
+  makes "how tall is the whole model" answerable at any elision point, and
+  what keeps a recursive summary cheap. `volume`/`area` are per-mesh and do
+  hit Manifold — full detail only, on demand.
+- **`volume`/`area` are world-space**: scaled by s³/s² under a similarity,
+  and measured on the transformed solid under shear/non-uniform scale
+  rather than quietly reporting local numbers.
+- **Runs of identical consecutive siblings collapse to `repeat: N`** —
+  identity is the node's content hash with its transform zeroed, so whole
+  repeated subtrees collapse, not just meshes. The entry shown is the run's
+  first member; ids run on consecutively. Collapsing switches off as soon
+  as the requested fields would show placement (`position`/`matrix`/
+  `world_matrix`), so `--full` expands.
+- **One node schema everywhere**: `id` + `name` in `inspect`, `raycast`
+  (whose hit position is `point`, as in JS) and `selection` alike.
+- Dropped in the merge: mesh hashes (internal; `repeat` delivers their one
+  payoff) and `bounds_local` (a JS-side concern).
+
+The CLI prints responses with its own `pretty` (odm-cli `lib.rs`): standard
+indentation, except that any value fitting in 96 columns stays on one line.
+A 3-vector as five lines was a large share of the 191 KB tree that started
+this.
 
 ## API versions
 

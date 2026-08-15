@@ -3,10 +3,10 @@
 ## Why
 Every concept in the agent-facing surface costs tokens and attention. Audit
 conclusion (2026-08): the command count is fine; the fat is in concepts and
-output fields. Prompt is ~3K tokens once per session; one un-dieted `tree`
-was 191 KB — so output shape ≫ concept count ≫ command count. The big items
-have their own plans (`scene-query.md`; the build-report rework is done);
-this one holds the small cuts and the policy.
+output fields. Prompt is ~3K tokens once per session; the un-dieted `tree`
+that `inspect` replaced was 191 KB — so output shape ≫ concept count ≫
+command count. The big items had their own plans (both the scene-query and
+build-report reworks are done); this one holds the small cuts and the policy.
 
 ## Cuts
 - **`sync`**: every command syncs first — a standalone sync command invites
@@ -16,9 +16,8 @@ this one holds the small cuts and the policy.
   user sees."
 - **`generation`**: internal consistency counter; drop from all responses
   except `status`.
-- **Hashes**: nothing agent-visible prints content hashes (build's `root`
-  is already cut; `render` still prints one — see also `scene-query.md`
-  mesh hashes).
+- **Hashes**: nothing agent-visible prints content hashes (build's `root` is
+  already cut and `inspect` dropped its mesh hashes; `render` still prints one).
 - **Prompt demotions**: `raycast` (its "find a node id" role dies with name
   addressing; precise probing is advanced) and the explicit camera flags
   (see `render-workflow.md`) move to docs-only.

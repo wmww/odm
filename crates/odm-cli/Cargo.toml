@@ -6,7 +6,7 @@ license.workspace = true
 
 [lib]
 doctest = false
-# unit tests in src/lib.rs (the poll --follow loop)
+# unit tests in src/lib.rs (poll --follow loop, response pretty-printer)
 test = true
 
 [dependencies]

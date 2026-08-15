@@ -9,7 +9,7 @@ correctness question, and there's no direct way to ask it — `raycast` only
 confirms after you've guessed where the part should be, which is backwards.
 
 ## Design
-`odm clearance <a> <b>` (nodes by name, per `scene-query.md`): minimum
+`odm clearance <a> <b>` (nodes by name, as `inspect` addresses them): minimum
 distance between two subtrees; 0 or negative = contact/interpenetration.
 Scriptable as a self-check after each edit, and usable at animation extremes
 (`--set t=…`) for collision checks.

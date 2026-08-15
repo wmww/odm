@@ -1,13 +1,15 @@
-//! Scene-tree helpers for CLI queries: id-addressed tree walks and
-//! world-space raycasts against the built scene. Flattening and matrix math
-//! live in odm-render (single code path with rendering).
+//! Scene queries behind the CLI `inspect` command: node addressing (index
+//! path or name), recursive node summaries with aggregate measurements, and
+//! world-space raycasts. Flattening and matrix math live in odm-render
+//! (single code path with rendering).
 
-use odm_ir::{Hash, Node};
+use odm_ir::{Canonical, Hash, Node, Transform};
 use odm_kernel::Kernel;
 use odm_render::math::{Mat4, mul as mat_mul, transform_dir, transform_point};
 use odm_render::{Instance, mesh_aabb, node_id};
 use odm_store::{Object, Store};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 
 /// Read a child node out of the store (children are content hashes).
 fn child_node(store: &Store, h: Hash) -> Option<Node> {
@@ -17,22 +19,483 @@ fn child_node(store: &Store, h: Hash) -> Option<Node> {
     }
 }
 
-/// Locate a node by id ("" = root, "0/2" = child paths) and accumulate its
-/// world transform along the way.
-pub fn find_node_world(store: &Store, root: &Node, id: &str) -> Option<(Node, Mat4)> {
+// --- addressing ---------------------------------------------------------
+
+/// Does this address look like an index path (`0`, `1/0/2`) rather than a
+/// name? A node named "0" is unreachable by name — index paths win, and the
+/// name is still reachable by its path.
+fn is_index_path(s: &str) -> bool {
+    s.split('/').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Locate a node by name or index path. Returns its id, the node, and its
+/// **parent's** world transform (the node's own is applied by the walk).
+/// `""` is the root. Errors are agent-facing: they list the candidates.
+pub fn locate(store: &Store, root: &Node, addr: &str) -> Result<(String, Node, Mat4), String> {
+    if addr.is_empty() {
+        return Ok((String::new(), root.clone(), odm_render::math::IDENTITY));
+    }
+    if is_index_path(addr) {
+        return find_by_path(store, root, addr)
+            .map(|(node, parent)| (addr.to_string(), node, parent))
+            .ok_or_else(|| format!("no node at index path {addr:?}"));
+    }
+    let mut hits = Vec::new();
+    find_by_name(store, root, "", &odm_render::math::IDENTITY, addr, &mut hits);
+    match hits.len() {
+        1 => Ok(hits.pop().expect("one hit")),
+        0 => {
+            let mut names = Vec::new();
+            collect_names(store, root, &mut names);
+            names.sort();
+            names.dedup();
+            let shown: Vec<&str> = names.iter().map(|s| s.as_str()).take(30).collect();
+            Err(format!(
+                "no node named {addr:?}; names in this scene: {}",
+                if shown.is_empty() { "(none)".into() } else { shown.join(", ") }
+            ))
+        }
+        n => {
+            let ids: Vec<&str> = hits.iter().map(|(id, _, _)| id.as_str()).take(20).collect();
+            Err(format!("{addr:?} matches {n} nodes; address one by id: {}", ids.join(", ")))
+        }
+    }
+}
+
+/// Walk an index path, accumulating the transforms of everything above the
+/// target.
+fn find_by_path(store: &Store, root: &Node, id: &str) -> Option<(Node, Mat4)> {
     let mut cur = root.clone();
-    let mut world = cur.transform.0;
-    if !id.is_empty() {
-        for part in id.split('/') {
-            let idx: usize = part.parse().ok()?;
-            cur = child_node(store, *cur.children.get(idx)?)?;
-            if !cur.transform.is_identity() {
-                world = mat_mul(&world, &cur.transform.0);
+    let mut parent = odm_render::math::IDENTITY;
+    for part in id.split('/') {
+        let idx: usize = part.parse().ok()?;
+        if !cur.transform.is_identity() {
+            parent = mat_mul(&parent, &cur.transform.0);
+        }
+        cur = child_node(store, *cur.children.get(idx)?)?;
+    }
+    Some((cur, parent))
+}
+
+fn find_by_name(
+    store: &Store,
+    node: &Node,
+    id: &str,
+    parent: &Mat4,
+    want: &str,
+    out: &mut Vec<(String, Node, Mat4)>,
+) {
+    if node.name.as_deref() == Some(want) {
+        out.push((id.to_string(), node.clone(), *parent));
+    }
+    let world = world_of(node, parent);
+    for (i, &c) in node.children.iter().enumerate() {
+        if let Some(child) = child_node(store, c) {
+            find_by_name(store, &child, &node_id(id, i), &world, want, out);
+        }
+    }
+}
+
+fn collect_names(store: &Store, node: &Node, out: &mut Vec<String>) {
+    if let Some(n) = &node.name {
+        out.push(n.clone());
+    }
+    for &c in &node.children {
+        if let Some(child) = child_node(store, c) {
+            collect_names(store, &child, out);
+        }
+    }
+}
+
+// --- fields -------------------------------------------------------------
+
+/// Which per-node fields `inspect` prints. `id`, `children` and `repeat` are
+/// structural and always present.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Fields {
+    pub name: bool,
+    pub color: bool,
+    pub bounds: bool,
+    pub tris: bool,
+    pub verts: bool,
+    pub volume: bool,
+    pub area: bool,
+    pub position: bool,
+    pub rotation: bool,
+    pub scale: bool,
+    pub matrix: bool,
+    pub world_matrix: bool,
+}
+
+impl Fields {
+    /// The default: what a node *is* and how big it is.
+    pub fn summary() -> Fields {
+        Fields { name: true, color: true, bounds: true, tris: true, ..Fields::default() }
+    }
+
+    /// Everything but the raw matrices (which `--fields` still reaches).
+    pub fn full() -> Fields {
+        Fields {
+            verts: true,
+            volume: true,
+            area: true,
+            position: true,
+            rotation: true,
+            scale: true,
+            ..Fields::summary()
+        }
+    }
+
+    /// `--fields name,bounds,volume`.
+    pub fn parse(list: &str) -> Result<Fields, String> {
+        let mut f = Fields::default();
+        for name in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let slot = match name {
+                "name" => &mut f.name,
+                "color" => &mut f.color,
+                "bounds" => &mut f.bounds,
+                "tris" => &mut f.tris,
+                "verts" => &mut f.verts,
+                "volume" => &mut f.volume,
+                "area" => &mut f.area,
+                "position" => &mut f.position,
+                "rotation" => &mut f.rotation,
+                "scale" => &mut f.scale,
+                "matrix" => &mut f.matrix,
+                "world_matrix" => &mut f.world_matrix,
+                other => {
+                    return Err(format!(
+                        "unknown field {other:?}; fields: name, color, bounds, tris, verts, \
+                         volume, area, position, rotation, scale, matrix, world_matrix"
+                    ));
+                }
+            };
+            *slot = true;
+        }
+        if f == Fields::default() {
+            return Err("--fields needs at least one field name".into());
+        }
+        Ok(f)
+    }
+
+    /// Identical siblings only collapse into `repeat: N` when the output
+    /// can't tell them apart anyway — placement is what differs.
+    fn collapses(&self) -> bool {
+        !(self.position || self.matrix || self.world_matrix)
+    }
+}
+
+// --- inspection ---------------------------------------------------------
+
+/// World-space AABB as (min, max).
+type Aabb = ([f64; 3], [f64; 3]);
+
+/// Local AABB plus triangle and vertex counts of one stored mesh.
+type MeshStats = (Option<Aabb>, usize, usize);
+
+/// Subtree totals: what a node's entry stands for, however far it was
+/// expanded. Aggregates never touch the geometry kernel — they are read off
+/// stored meshes, so a recursive summary stays cheap.
+#[derive(Clone, Copy, Default)]
+struct Agg {
+    bounds: Option<Aabb>,
+    tris: usize,
+    verts: usize,
+}
+
+impl Agg {
+    fn merge(&mut self, other: &Agg) {
+        self.tris += other.tris;
+        self.verts += other.verts;
+        match (self.bounds, other.bounds) {
+            (_, None) => {}
+            (None, b) => self.bounds = b,
+            (Some((amin, amax)), Some((bmin, bmax))) => {
+                let mut min = amin;
+                let mut max = amax;
+                for k in 0..3 {
+                    min[k] = min[k].min(bmin[k]);
+                    max[k] = max[k].max(bmax[k]);
+                }
+                self.bounds = Some((min, max));
             }
         }
     }
-    Some((cur, world))
 }
+
+pub struct Inspector<'a> {
+    store: &'a Store,
+    kernel: &'a Kernel,
+    fields: Fields,
+    /// Local AABB / counts per mesh hash — repeated parts pay once.
+    meshes: HashMap<Hash, MeshStats>,
+}
+
+impl<'a> Inspector<'a> {
+    pub fn new(store: &'a Store, kernel: &'a Kernel, fields: Fields) -> Inspector<'a> {
+        Inspector { store, kernel, fields, meshes: HashMap::new() }
+    }
+
+    /// The `inspect` response body: `node` expanded `depth` levels deep.
+    /// None if a child hash is not in the store (handlers run at quiescence,
+    /// so only a corrupt store gets here).
+    pub fn inspect(
+        &mut self,
+        node: &Node,
+        id: &str,
+        parent: &Mat4,
+        depth: usize,
+    ) -> Option<Value> {
+        let (value, _) = self.walk(node, id, parent, depth, true)?;
+        value
+    }
+
+    fn walk(
+        &mut self,
+        node: &Node,
+        id: &str,
+        parent: &Mat4,
+        depth: usize,
+        emit: bool,
+    ) -> Option<(Option<Value>, Agg)> {
+        let world = world_of(node, parent);
+        let mut agg = Agg::default();
+        if let Some(h) = node.mesh {
+            let (local, tris, verts) = self.mesh_stats(h);
+            agg.tris += tris;
+            agg.verts += verts;
+            agg.bounds = local.map(|(min, max)| world_aabb(min, max, &world));
+        }
+
+        // Children are always visited: aggregates cover the whole subtree
+        // even where it was elided or collapsed.
+        let expand = emit && depth > 0;
+        let collapse = self.fields.collapses();
+        let mut kids: Vec<(Option<Hash>, Value)> = Vec::new();
+        for (i, &c) in node.children.iter().enumerate() {
+            let child = child_node(self.store, c)?;
+            let child_depth = if expand { depth - 1 } else { 0 };
+            let (value, child_agg) =
+                self.walk(&child, &node_id(id, i), &world, child_depth, expand)?;
+            agg.merge(&child_agg);
+            if let Some(v) = value {
+                kids.push((collapse.then(|| repeat_key(&child)), v));
+            }
+        }
+
+        if !emit {
+            return Some((None, agg));
+        }
+
+        let f = self.fields;
+        let mut obj = Map::new();
+        obj.insert("id".into(), json!(id));
+        if f.name && let Some(n) = &node.name {
+            obj.insert("name".into(), json!(n));
+        }
+        // Only an explicitly set color: inherited color is the renderer's
+        // business, and "did my color apply" wants the authored answer.
+        if f.color && let Some(c) = node.color {
+            obj.insert("color".into(), json!([c.r, c.g, c.b, c.a]));
+        }
+        if f.bounds && let Some((min, max)) = agg.bounds {
+            obj.insert("bounds".into(), json!({ "min": min, "max": max }));
+        }
+        if f.tris {
+            obj.insert("tris".into(), json!(agg.tris));
+        }
+        if f.verts {
+            obj.insert("verts".into(), json!(agg.verts));
+        }
+        if (f.volume || f.area) && let Some(h) = node.mesh {
+            let (volume, area) = self.measure(h, &world);
+            if f.volume && let Some(v) = volume {
+                obj.insert("volume".into(), json!(v));
+            }
+            if f.area && let Some(a) = area {
+                obj.insert("area".into(), json!(a));
+            }
+        }
+        if f.position || f.rotation || f.scale {
+            let (position, rotation, scale) = decompose(&node.transform.0);
+            if f.position {
+                obj.insert("position".into(), json!(position));
+            }
+            // No rotation and no scaling are the defaults; printing them on
+            // every node is noise.
+            if f.rotation && rotation != [0.0; 3] {
+                obj.insert("rotation".into(), json!(rotation));
+            }
+            if f.scale && scale != [1.0; 3] {
+                obj.insert("scale".into(), json!(scale));
+            }
+        }
+        if f.matrix {
+            obj.insert("matrix".into(), json!(node.transform.0.to_vec()));
+        }
+        if f.world_matrix {
+            obj.insert("world_matrix".into(), json!(world.to_vec()));
+        }
+        if !node.children.is_empty() {
+            let children = if expand {
+                Value::Array(collapse_runs(kids))
+            } else {
+                json!(node.children.len())
+            };
+            obj.insert("children".into(), children);
+        }
+        Some((Some(Value::Object(obj)), agg))
+    }
+
+    fn mesh_stats(&mut self, h: Hash) -> MeshStats {
+        if let Some(v) = self.meshes.get(&h) {
+            return *v;
+        }
+        let stats = match self.store.get(h).as_deref() {
+            // AABB and counts straight from stored positions — no Manifold.
+            Some(Object::Mesh(m)) => (mesh_aabb(m), m.triangle_count(), m.vertex_count()),
+            _ => (None, 0, 0),
+        };
+        self.meshes.insert(h, stats);
+        stats
+    }
+
+    /// Volume and surface area of a mesh **in world space**. Under a
+    /// similarity (the usual case: rigid motion, maybe uniform scale) they
+    /// are the local measurements scaled by s³/s²; anything else — shear or
+    /// non-uniform scale — measures the transformed solid outright rather
+    /// than report a number that is quietly wrong.
+    fn measure(&self, h: Hash, world: &Mat4) -> (Option<f64>, Option<f64>) {
+        match similarity_scale(world) {
+            Some(s) => (
+                self.kernel.volume(h).ok().map(|v| v * s * s * s),
+                self.kernel.surface_area(h).ok().map(|a| a * s * s),
+            ),
+            None => match self.kernel.transform_solid(h, Transform(*world), None) {
+                Ok(t) => (self.kernel.volume(t).ok(), self.kernel.surface_area(t).ok()),
+                Err(_) => (None, None),
+            },
+        }
+    }
+}
+
+/// Collapse runs of consecutive identical siblings into one entry carrying
+/// `repeat: N`: the fields shown are the run's first member's, and the N-1
+/// after it differ only in placement. Their ids are consecutive, so `id`
+/// plus `repeat` names the whole run. A `None` key never joins a run — that
+/// is how the caller turns collapsing off.
+fn collapse_runs(kids: Vec<(Option<Hash>, Value)>) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut run: Option<(Hash, usize)> = None; // key, index in `out`
+    for (key, value) in kids {
+        match (&run, key) {
+            (Some((k, at)), Some(key)) if *k == key => {
+                let n = out[*at]["repeat"].as_u64().unwrap_or(1) + 1;
+                out[*at]["repeat"] = json!(n);
+            }
+            (_, key) => {
+                run = key.map(|k| (k, out.len()));
+                out.push(value);
+            }
+        }
+    }
+    out
+}
+
+/// Identity of a repeated part: everything about a node except where it sits.
+/// Children are content hashes, so this covers whole subtrees.
+fn repeat_key(node: &Node) -> Hash {
+    let mut probe = node.clone();
+    probe.transform = Transform::IDENTITY;
+    probe.hash()
+}
+
+fn world_of(node: &Node, parent: &Mat4) -> Mat4 {
+    if node.transform.is_identity() { *parent } else { mat_mul(parent, &node.transform.0) }
+}
+
+/// AABB of a transformed AABB (transform all 8 corners).
+pub fn world_aabb(min: [f64; 3], max: [f64; 3], m: &Mat4) -> Aabb {
+    let mut out_min = [f64::INFINITY; 3];
+    let mut out_max = [f64::NEG_INFINITY; 3];
+    for i in 0..8 {
+        let corner = [
+            if i & 1 == 0 { min[0] } else { max[0] },
+            if i & 2 == 0 { min[1] } else { max[1] },
+            if i & 4 == 0 { min[2] } else { max[2] },
+        ];
+        let p = transform_point(m, corner);
+        for k in 0..3 {
+            out_min[k] = out_min[k].min(p[k]);
+            out_max[k] = out_max[k].max(p[k]);
+        }
+    }
+    (out_min, out_max)
+}
+
+/// Uniform scale factor of a matrix whose linear part is a rotation times a
+/// scalar, or None for shear / non-uniform scale.
+fn similarity_scale(m: &Mat4) -> Option<f64> {
+    let cols = [[m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]];
+    let len = |c: &[f64; 3]| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+    let dot = |a: &[f64; 3], b: &[f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let s = len(&cols[0]);
+    if s <= 0.0 {
+        return None;
+    }
+    let tol = 1e-9 * s;
+    for c in &cols[1..] {
+        if (len(c) - s).abs() > tol {
+            return None;
+        }
+    }
+    for (a, b) in [(0, 1), (0, 2), (1, 2)] {
+        if dot(&cols[a], &cols[b]).abs() > tol * s {
+            return None;
+        }
+    }
+    Some(s)
+}
+
+/// Position / XYZ Euler rotation (radians, the API's angle unit) / scale of a
+/// local transform, three.js `Matrix4.decompose` conventions. Lossy under
+/// shear — `--fields matrix` is the exact answer.
+fn decompose(m: &Mat4) -> ([f64; 3], [f64; 3], [f64; 3]) {
+    let position = [m[12], m[13], m[14]];
+    let col = |c: usize| [m[c * 4], m[c * 4 + 1], m[c * 4 + 2]];
+    let len = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    let det = {
+        let (a, b, c) = (col(0), col(1), col(2));
+        a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+            + a[2] * (b[0] * c[1] - b[1] * c[0])
+    };
+    // A negative determinant is one mirrored axis; three.js pins it on x.
+    let sx = if det < 0.0 { -len(col(0)) } else { len(col(0)) };
+    let scale = [sx, len(col(1)), len(col(2))];
+    let mut r = [0.0; 9]; // rotation, column-major 3x3
+    for c in 0..3 {
+        let s = if scale[c] == 0.0 { 0.0 } else { 1.0 / scale[c] };
+        for k in 0..3 {
+            r[c * 3 + k] = m[c * 4 + k] * s;
+        }
+    }
+    // Euler XYZ from the rotation matrix (three.js Euler.setFromRotationMatrix).
+    let (m11, m12, m13) = (r[0], r[3], r[6]);
+    let (m22, m23) = (r[4], r[7]);
+    let (m32, m33) = (r[5], r[8]);
+    let mut rotation = if m13.abs() < 0.999_999_9 {
+        [(-m23).atan2(m33), m13.clamp(-1.0, 1.0).asin(), (-m12).atan2(m11)]
+    } else {
+        [m32.atan2(m22), m13.clamp(-1.0, 1.0).asin(), 0.0]
+    };
+    // atan2 of a negated zero prints "-0.0"; nobody wants to read that.
+    for a in &mut rotation {
+        *a += 0.0;
+    }
+    (position, rotation, scale)
+}
+
+// --- raycast ------------------------------------------------------------
 
 /// Inverse of an affine matrix (last row assumed [0,0,0,1]).
 pub fn invert_affine(m: &Mat4) -> Option<Mat4> {
@@ -68,89 +531,8 @@ pub fn invert_affine(m: &Mat4) -> Option<Mat4> {
     ])
 }
 
-fn mesh_summary(store: &Store, h: Hash, world: &Mat4) -> Value {
-    let (tris, bounds) = match store.get(h).as_deref() {
-        // AABB straight from stored positions — no Manifold rebuild.
-        Some(Object::Mesh(m)) => (m.triangle_count(), mesh_aabb(m)),
-        _ => (0, None),
-    };
-    let world_bounds = bounds.map(|(min, max)| {
-        world_aabb(&odm_kernel::Bounds { min, max }, world)
-    });
-    json!({
-        "hash": h.to_hex(),
-        "tris": tris,
-        "world_bounds": world_bounds.map(|(min, max)| json!({ "min": min, "max": max })),
-    })
-}
-
-/// AABB of a transformed AABB (transform all 8 corners).
-pub fn world_aabb(b: &odm_kernel::Bounds, m: &Mat4) -> ([f64; 3], [f64; 3]) {
-    let mut min = [f64::INFINITY; 3];
-    let mut max = [f64::NEG_INFINITY; 3];
-    for i in 0..8 {
-        let corner = [
-            if i & 1 == 0 { b.min[0] } else { b.max[0] },
-            if i & 2 == 0 { b.min[1] } else { b.max[1] },
-            if i & 4 == 0 { b.min[2] } else { b.max[2] },
-        ];
-        let p = transform_point(m, corner);
-        for k in 0..3 {
-            min[k] = min[k].min(p[k]);
-            max[k] = max[k].max(p[k]);
-        }
-    }
-    (min, max)
-}
-
-/// Tree walk producing the CLI `tree` response. None if a child hash is not
-/// in the store (only possible from a bad hash: handlers run at quiescence).
-pub fn tree_json(
-    store: &Store,
-    node: &Node,
-    id: &str,
-    world_parent: &Mat4,
-    depth: usize,
-) -> Option<Value> {
-    let world = if node.transform.is_identity() {
-        *world_parent
-    } else {
-        mat_mul(world_parent, &node.transform.0)
-    };
-    let mut obj = serde_json::Map::new();
-    obj.insert("id".into(), json!(id));
-    if let Some(n) = &node.name {
-        obj.insert("name".into(), json!(n));
-    }
-    if let Some(c) = node.color {
-        obj.insert("color".into(), json!([c.r, c.g, c.b, c.a]));
-    }
-    if !node.transform.is_identity() {
-        obj.insert("matrix".into(), json!(node.transform.0.to_vec()));
-    }
-    if let Some(h) = node.mesh {
-        obj.insert("mesh".into(), mesh_summary(store, h, &world));
-    }
-    if !node.children.is_empty() {
-        if depth == 0 {
-            obj.insert("children_elided".into(), json!(node.children.len()));
-        } else {
-            let children: Option<Vec<Value>> = node
-                .children
-                .iter()
-                .enumerate()
-                .map(|(i, &c)| {
-                    let child = child_node(store, c)?;
-                    tree_json(store, &child, &node_id(id, i), &world, depth - 1)
-                })
-                .collect();
-            obj.insert("children".into(), Value::Array(children?));
-        }
-    }
-    Some(Value::Object(obj))
-}
-
-/// Nearest world-space raycast hit across all instances.
+/// Nearest world-space raycast hit across all instances. The node it hit is
+/// named the way `inspect` names nodes: `id` plus `name`.
 pub fn raycast(
     kernel: &Kernel,
     instances: &[Instance],
@@ -179,10 +561,10 @@ pub fn raycast(
             best = Some((
                 distance,
                 json!({
-                    "node": inst.id,
+                    "id": inst.id,
                     "name": inst.name,
                     "distance": distance,
-                    "position": world_pos,
+                    "point": world_pos,
                     "normal": normal,
                 }),
             ));
@@ -198,4 +580,130 @@ fn mat_transpose_linear(m: &Mat4) -> Mat4 {
         m[2], m[6], m[10], 0.0, //
         0.0, 0.0, 0.0, 1.0,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use odm_ir::Mesh;
+    use std::sync::Arc;
+
+    /// A one-triangle mesh spanning the unit box in x/y.
+    fn tri() -> Mesh {
+        Mesh { positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], indices: vec![0, 1, 2] }
+    }
+
+    fn moved(x: f64) -> Transform {
+        let mut t = Transform::IDENTITY;
+        t.0[12] = x;
+        t
+    }
+
+    /// Root with three identical named parts at x = 0, 10, 20.
+    fn scene() -> (Arc<Store>, Node) {
+        let store = Store::new();
+        let mesh = store.put(Object::Mesh(Arc::new(tri())));
+        let kids: Vec<Hash> = (0..3)
+            .map(|i| {
+                store.put(Object::Node(Node {
+                    name: Some("link".into()),
+                    transform: moved(i as f64 * 10.0),
+                    mesh: Some(mesh),
+                    ..Node::default()
+                }))
+            })
+            .collect();
+        let root = Node { name: Some("chain".into()), children: kids, ..Node::default() };
+        (store, root)
+    }
+
+    fn inspect(fields: Fields, depth: usize) -> Value {
+        let (store, root) = scene();
+        let kernel = Kernel::new(store.clone());
+        let mut ins = Inspector::new(&store, &kernel, fields);
+        ins.inspect(&root, "", &odm_render::math::IDENTITY, depth).expect("inspected")
+    }
+
+    #[test]
+    fn summary_collapses_repeats_and_aggregates() {
+        let v = inspect(Fields::summary(), usize::MAX);
+        // Aggregates cover the whole subtree, so "how wide is this" is
+        // answerable at the top.
+        assert_eq!(v["bounds"]["min"], json!([0.0, 0.0, 0.0]));
+        assert_eq!(v["bounds"]["max"], json!([21.0, 1.0, 0.0]));
+        assert_eq!(v["tris"], json!(3));
+        let kids = v["children"].as_array().unwrap();
+        assert_eq!(kids.len(), 1, "identical siblings collapse: {v}");
+        assert_eq!(kids[0]["repeat"], json!(3));
+        assert_eq!(kids[0]["id"], json!("0"));
+        // The shown fields are the run's first member's.
+        assert_eq!(kids[0]["bounds"]["max"], json!([1.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn showing_placement_expands_the_run() {
+        let v = inspect(Fields::full(), usize::MAX);
+        let kids = v["children"].as_array().unwrap();
+        assert_eq!(kids.len(), 3);
+        assert_eq!(kids[2]["position"], json!([20.0, 0.0, 0.0]));
+        assert!(kids[0].get("repeat").is_none());
+    }
+
+    #[test]
+    fn elided_children_still_count_and_measure() {
+        let v = inspect(Fields::summary(), 0);
+        assert_eq!(v["children"], json!(3), "{v}");
+        assert_eq!(v["tris"], json!(3));
+        assert_eq!(v["bounds"]["max"], json!([21.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn names_address_nodes_and_ambiguity_lists_ids() {
+        let (store, root) = scene();
+        let (id, node, _) = locate(&store, &root, "chain").unwrap();
+        assert_eq!(id, "");
+        assert_eq!(node.name.as_deref(), Some("chain"));
+
+        let e = locate(&store, &root, "link").unwrap_err();
+        assert!(e.contains("matches 3") && e.contains("0, 1, 2"), "{e}");
+
+        let e = locate(&store, &root, "seat").unwrap_err();
+        assert!(e.contains("chain") && e.contains("link"), "{e}");
+
+        // Index paths remain the tiebreaker.
+        let (_, node, parent) = locate(&store, &root, "2").unwrap();
+        assert_eq!(node.name.as_deref(), Some("link"));
+        assert_eq!(parent, odm_render::math::IDENTITY);
+        assert!(locate(&store, &root, "9").unwrap_err().contains("index path"));
+    }
+
+    #[test]
+    fn fields_are_named_and_checked() {
+        let f = Fields::parse("name, bounds,volume").unwrap();
+        assert!(f.name && f.bounds && f.volume && !f.tris);
+        assert!(Fields::parse("naem").unwrap_err().contains("naem"));
+        assert!(Fields::parse("").is_err());
+    }
+
+    #[test]
+    fn decomposition_matches_the_matrix() {
+        // rotateZ(90°) then translate: column-major, x axis maps to +y.
+        let m: Mat4 = [
+            0.0, 2.0, 0.0, 0.0, //
+            -2.0, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 2.0, 0.0, //
+            1.0, 2.0, 3.0, 1.0,
+        ];
+        let (p, r, s) = decompose(&m);
+        assert_eq!(p, [1.0, 2.0, 3.0]);
+        for k in 0..3 {
+            assert!((s[k] - 2.0).abs() < 1e-12, "{s:?}");
+        }
+        assert!((r[2] - std::f64::consts::FRAC_PI_2).abs() < 1e-12, "{r:?}");
+        assert_eq!(similarity_scale(&m), Some(2.0));
+        // Non-uniform scale is not a similarity: measurements take the slow path.
+        let mut shear = m;
+        shear[0] = 1.0;
+        assert_eq!(similarity_scale(&shear), None);
+    }
 }

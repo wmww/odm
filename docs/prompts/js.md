@@ -48,7 +48,7 @@ a.subtract(b); a.union(b); a.intersect(b); a.hull();     // CSG: methods only
 s.translate(5, 0, 2).rotateZ(odm.deg(30)).scale(2, 2, 2); // world-frame, in call order
 s.rotateZ(0.5, { about: [5, 0, 0] });                     // pivot instead of the origin
 s.rotate([0, 1, 1], 0.5); s.applyMatrix4(new THREE.Matrix4()); // arbitrary axis / raw matrix
-s.color('#4682b4'); s.name('bolt');                       // labels show in odm tree
+s.color('#4682b4'); s.name('bolt');                    // names address parts in the CLI
 ```
 
 Rotations and scales happen about the **origin** unless you pass

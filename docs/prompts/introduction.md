@@ -17,8 +17,8 @@ doohickey code and the CLI.
 
 Edit files, then check your work with the CLI — every command syncs
 first, so it always reflects your latest edit. Prefer structured queries
-(`tree`, `inspect`, `raycast`) for measurements; renders are for overall
-shape and looks. Build errors (with JS stacks and `console.log` output)
+(`odm inspect`) for measurements; renders are for overall shape and
+looks. Build errors (with JS stacks and `console.log` output)
 come back through any CLI command; the viewer keeps showing the last
 good build while your code is broken.
 

@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 const COMMANDS: &str =
-    "status, sync, build, render, tree, inspect, raycast, selection, poll, say";
+    "status, sync, build, render, inspect, raycast, selection, poll, say";
 
 /// One socket request. Unknown commands *and* unknown fields are errors, so
 /// agents hear about typos instead of silently getting a default.
@@ -38,17 +38,6 @@ enum Request {
         viewer_state: bool,
     },
     Render(RenderReq),
-    Tree {
-        path: Option<String>,
-        #[serde(default)]
-        set: Map<String, Value>,
-        preset: Option<String>,
-        view: Option<String>,
-        #[serde(default)]
-        viewer_state: bool,
-        #[serde(default = "default_depth")]
-        depth: f64,
-    },
     Inspect {
         path: Option<String>,
         #[serde(default)]
@@ -57,8 +46,14 @@ enum Request {
         view: Option<String>,
         #[serde(default)]
         viewer_state: bool,
+        /// Name or index path; absent (or "") is the root.
+        node: Option<String>,
+        depth: Option<f64>,
         #[serde(default)]
-        node: String,
+        recursive: bool,
+        #[serde(default)]
+        full: bool,
+        fields: Option<String>,
     },
     Raycast {
         path: Option<String>,
@@ -109,6 +104,18 @@ fn view_req(
     ViewReq { path, set, preset, view, viewer_state }
 }
 
+/// `inspect`'s two knobs: **scope** (which node, how deep) and **detail**
+/// (which fields). Both default off the same signal — naming a node asks
+/// about that node, so it gets full detail and its children as a count;
+/// the bare form is a recursive summary of the whole scene.
+struct Scope {
+    node: Option<String>,
+    depth: Option<f64>,
+    recursive: bool,
+    full: bool,
+    fields: Option<String>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RenderReq {
@@ -139,9 +146,6 @@ struct RenderReq {
     ortho_height: Option<f64>,
 }
 
-fn default_depth() -> f64 {
-    32.0
-}
 fn default_width() -> f64 {
     1024.0
 }
@@ -253,11 +257,11 @@ impl EngineState {
                 self.cmd_build(view_req(path, set, preset, view, viewer_state))
             }
             Request::Render(r) => self.cmd_render(r),
-            Request::Tree { path, set, preset, view, viewer_state, depth } => {
-                self.cmd_tree(view_req(path, set, preset, view, viewer_state), depth as usize)
-            }
-            Request::Inspect { path, set, preset, view, viewer_state, node } => {
-                self.cmd_inspect(view_req(path, set, preset, view, viewer_state), &node)
+            Request::Inspect { path, set, preset, view, viewer_state, node, depth, recursive, full, fields } => {
+                self.cmd_inspect(
+                    view_req(path, set, preset, view, viewer_state),
+                    Scope { node, depth, recursive, full, fields },
+                )
             }
             Request::Raycast { path, set, preset, view, viewer_state, origin, dir } => {
                 self.cmd_raycast(view_req(path, set, preset, view, viewer_state), origin, dir)
@@ -569,62 +573,38 @@ impl EngineState {
         Ok(())
     }
 
-    fn cmd_tree(&self, req: ViewReq, depth: usize) -> Result<Value, CmdError> {
+    fn cmd_inspect(&self, req: ViewReq, scope: Scope) -> Result<Value, CmdError> {
+        let addr = scope.node.as_deref().unwrap_or("");
+        // Naming a node is the ask for detail about it; the bare form is a
+        // whole-scene overview. Both stay zero-flag.
+        let named = !addr.is_empty();
+        let fields = match (scope.full, &scope.fields) {
+            (true, Some(_)) => {
+                return Err(CmdError::bad_request("--full and --fields are alternatives"));
+            }
+            (_, Some(list)) => scene::Fields::parse(list).map_err(CmdError::bad_request)?,
+            (true, None) => scene::Fields::full(),
+            (false, None) if named => scene::Fields::full(),
+            _ => scene::Fields::summary(),
+        };
+        let depth = match (scope.recursive, scope.depth) {
+            (true, _) => usize::MAX,
+            (_, Some(d)) if d >= 0.0 => d as usize,
+            (_, Some(_)) => return Err(CmdError::bad_request("depth must be >= 0")),
+            (false, None) if named => 0,
+            _ => usize::MAX,
+        };
+
         let (_sync, view, result, _report) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
-        let tree = scene::tree_json(
-            &self.build_engine().store,
-            &root,
-            "",
-            &odm_ir::Transform::IDENTITY.0,
-            depth,
-        )
-        .ok_or_else(|| CmdError::new("internal", "scene node missing from store"))?;
-        Ok(json!({ "view": view.path, "tree": tree, "logs": logs_json(&result.logs) }))
-    }
-
-    fn cmd_inspect(&self, req: ViewReq, id: &str) -> Result<Value, CmdError> {
-        let (_sync, _view, result, _report) = self.query_view(&req)?;
-        let root = self.root_node(&result)?;
         let engine = self.build_engine();
-        let Some((node, world)) = scene::find_node_world(&engine.store, &root, id) else {
-            return Err(CmdError::bad_request(format!(
-                "no node with id {id:?}; use `tree` to list ids"
-            )));
-        };
-
-        let mesh_info = match node.mesh {
-            Some(h) => {
-                let kernel = &engine.kernel;
-                let (tris, verts) = match engine.store.get(h).as_deref() {
-                    Some(Object::Mesh(m)) => (m.triangle_count(), m.vertex_count()),
-                    _ => (0, 0),
-                };
-                let bounds = kernel.bounds(h).ok().flatten();
-                json!({
-                    "hash": h.to_hex(),
-                    "tris": tris,
-                    "verts": verts,
-                    "volume": kernel.volume(h).ok(),
-                    "area": kernel.surface_area(h).ok(),
-                    "bounds_local": bounds.map(|b| json!({ "min": b.min, "max": b.max })),
-                    "bounds_world": bounds.map(|b| {
-                        let (min, max) = scene::world_aabb(&b, &world);
-                        json!({ "min": min, "max": max })
-                    }),
-                })
-            }
-            None => Value::Null,
-        };
-
-        Ok(json!({
-            "id": id,
-            "name": node.name,
-            "color": node.color.map(|c| [c.r, c.g, c.b, c.a]),
-            "world_matrix": world.to_vec(),
-            "children": node.children.len(),
-            "mesh": mesh_info,
-        }))
+        let (id, node, parent) =
+            scene::locate(&engine.store, &root, addr).map_err(CmdError::bad_request)?;
+        let mut inspector = scene::Inspector::new(&engine.store, &engine.kernel, fields);
+        let node = inspector
+            .inspect(&node, &id, &parent, depth)
+            .ok_or_else(|| CmdError::new("internal", "scene node missing from store"))?;
+        Ok(json!({ "view": view.path, "node": node, "logs": logs_json(&result.logs) }))
     }
 
     fn cmd_raycast(
@@ -647,7 +627,7 @@ impl EngineState {
     fn cmd_selection(&self) -> Result<Value, CmdError> {
         let sel = self.selection.lock().unwrap().clone();
         let sel: Vec<Value> =
-            sel.into_iter().map(|(node, name)| json!({ "node": node, "name": name })).collect();
+            sel.into_iter().map(|(id, name)| json!({ "id": id, "name": name })).collect();
         Ok(json!({ "selection": sel }))
     }
 
@@ -696,7 +676,7 @@ impl EngineState {
                 .lock()
                 .unwrap()
                 .iter()
-                .map(|(node, name)| json!({ "node": node, "name": name }))
+                .map(|(id, name)| json!({ "id": id, "name": name }))
                 .collect();
             json!({ "slot": slot, "path": view.path, "set": set, "selection": selection })
         });
@@ -812,7 +792,19 @@ mod tests {
             other => panic!("{:?}", other.err()),
         }
         // The CLI sends numbers as JSON floats.
-        assert!(matches!(parse(r#"{"cmd":"tree","depth":2.0}"#), Ok(Request::Tree { depth, .. }) if depth == 2.0));
+        assert!(matches!(
+            parse(r#"{"cmd":"inspect","depth":2.0}"#),
+            Ok(Request::Inspect { depth: Some(d), .. }) if d == 2.0
+        ));
+        match parse(r#"{"cmd":"inspect","node":"seat","full":true}"#) {
+            Ok(Request::Inspect { node, full, recursive, fields, .. }) => {
+                assert_eq!(node.as_deref(), Some("seat"));
+                assert!(full && !recursive && fields.is_none());
+            }
+            other => panic!("{:?}", other.err()),
+        }
+        let e = parse(r#"{"cmd":"inspect","recurse":true}"#).err().unwrap();
+        assert!(e.contains("recurse"), "{e}");
 
         let e = parse(r#"{"cmd":"nope"}"#).err().unwrap();
         assert!(e.contains("status") && e.contains("selection"), "{e}");

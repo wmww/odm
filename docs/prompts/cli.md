@@ -12,8 +12,8 @@ a single JSON object. Exit code 0 = ok, nonzero = error. (`prompt` and
 odm status                    # files, generation, project name
 odm build [<path>] [--set name=value ...] [--preset <name>]
                               # settable inputs, presets, build stats
-odm tree [<path>] [--set ...] [--depth N]
-odm inspect <node-id> [--path <p>] [--set ...]
+odm inspect [<node>] [--path <p>] [--set ...] [--depth N] [--recursive]
+            [--full | --fields a,b,c]        # measure the scene
 odm raycast --origin 0,0,50 --dir 0,0,-1 [--path <p>] [--set ...]
 odm render [<path>] [--set ...] [options]    # PNG → prints path
 odm selection                 # what the user selected in the viewer
@@ -38,8 +38,34 @@ declared. Its `stats` show which doohickeys actually re-ran (with
 per-file time) vs. were served from the memo cache. A failed build
 still reports the target's declared inputs next to the error.
 
-Node ids are child-index paths from the root (`""`, `0`, `0/2`); get
-them from `odm tree`.
+## Inspecting the scene
+
+`odm inspect` is the measuring tool: it answers "what is in here" and
+"how big is this" exactly, where a render only shows you shape.
+
+```
+odm inspect                   # whole scene, recursive, summary
+odm inspect seat              # that part, in full, children as a count
+odm inspect seat --recursive  # ...and its subtree
+odm inspect --fields name,bounds     # narrow the columns instead
+```
+
+A node is addressed by the `name` you gave it (`s.name('seat')`); an
+index path from the root (`0`, `1/0/2`, `""` = root) works too, and is
+the tiebreaker when a name is used more than once — the error lists the
+matching ids. Bare `inspect` is a whole-scene overview; naming a node
+asks about that node, so it comes back in full detail with its children
+as a count. `--depth N`/`--recursive` set how far to expand.
+
+Every entry has `id`, `name`, world `bounds` and `tris` **for its whole
+subtree** — so the root's bounds are the model's overall extent, and a
+group's are the group's. Runs of identical siblings collapse into one
+entry with `repeat: N`: their ids run on consecutively from the one
+shown, and they differ only in placement. `--full` adds `verts`,
+`volume`, `area` (world-space, on demand) and the node's own
+`position`/`rotation`/`scale`, and expands the repeats. `--fields`
+picks exactly what you want from `name, color, bounds, tris, verts,
+volume, area, position, rotation, scale, matrix, world_matrix`.
 
 ## Rendering
 
@@ -59,7 +85,7 @@ odm render --set t=2.5 --out /tmp/frame.png  # one moment of an animation
 odm render parts/wheel.js --set radius=12    # view one part alone
 ```
 
-Don't read dimensions off pixels — `tree`/`inspect`/`raycast` are exact.
+Don't read dimensions off pixels — `inspect` is exact.
 
 ## Talking with the user
 
@@ -105,6 +131,6 @@ did — the rebuilt scene speaks for itself, so keep it short. Don't use
 
 When the user refers to a part ("make *this* one longer"), the poll's
 `view.selection` (or `odm selection`) has it — clicked parts appear as
-`{node, name}`, in pick order (shift-click selects several). To query
+`{id, name}`, in pick order (shift-click selects several). To query
 exactly what the user is seeing (their tab, their input values), add
 `--viewer-state` to any scene query.

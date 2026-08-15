@@ -22,13 +22,12 @@ pub const USAGE: &str = "  status                     project overview: files, g
           [--wireframe] [--no-grid] [--ortho] [--eye x,y,z] [--target x,y,z]
           [--up x,y,z] [--direction x,y,z] [--fov deg] [--ortho-height h]
                              render a PNG; prints its path
-  tree    [<path>] [--set ...] [--preset] [--depth N]
-                             scene tree with node ids
-  inspect <node-id> [--path <p>] [--set ...] [--preset]
-                             details for one node (volume, bounds, transform)
+  inspect [<node>] [<view options>] [--depth N] [--recursive]
+          [--full | --fields a,b,c]
+                             the scene tree, or one node by name/index path
   raycast --origin x,y,z --dir x,y,z [--path <p>] [--set ...] [--preset]
                              nearest hit in the scene
-  selection                  viewer selection: list of {node, name}
+  selection                  viewer selection: list of {id, name}
   poll    [--timeout <sec>] [--follow]
                              wait for messages the user typed in the viewer
                              (--follow: never exit, one JSON line per batch)
@@ -38,6 +37,7 @@ pub const USAGE: &str = "  status                     project overview: files, g
   docs    search <pattern>   grep the reference, whole sections out
   docs    changes <from> <to>  API migration guides, concatenated
 
+View options are [<path>] [--set name=value ...] [--preset <name>].
 Queries target a view: <path> (default root.js) built with its declared
 input defaults; --set names any input (--set t=1.5, --set 'size=[10,20,5]',
 JSON or bare strings), --preset applies a named bundle from the target's
@@ -109,14 +109,6 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             }
             v
         }
-        "tree" => {
-            let (path, rest) = optional_positional(rest);
-            let mut v = parse_opts(&cmd, rest, &with_view(&[("depth", ArgKind::Num)]))?;
-            if let Some(p) = path {
-                v.insert("path".into(), json!(p));
-            }
-            v
-        }
         "render" => {
             let (path, rest) = optional_positional(rest);
             let mut v = parse_opts(
@@ -143,9 +135,20 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             v
         }
         "inspect" => {
-            let (node, rest) = take_positional(rest, "node id (see `odm tree`)")?;
-            let mut v = parse_opts(&cmd, rest, &with_view(&[]))?;
-            v.insert("node".into(), json!(node));
+            let (node, rest) = optional_positional(rest);
+            let mut v = parse_opts(
+                &cmd,
+                rest,
+                &with_view(&[
+                    ("depth", ArgKind::Num),
+                    ("recursive", ArgKind::Flag),
+                    ("full", ArgKind::Flag),
+                    ("fields", ArgKind::Str),
+                ]),
+            )?;
+            if let Some(n) = node {
+                v.insert("node".into(), json!(n));
+            }
             v
         }
         "raycast" => parse_opts(
@@ -179,6 +182,9 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             v.insert("text".into(), json!(text));
             v
         }
+        // Gone, but agents remember it: point at what replaced it.
+        "tree" => bail!("`tree` is now `inspect`: `odm inspect` for the scene, \
+                         `odm inspect <name>` for one part"),
         other => bail!("unknown command {other:?}; run `odm --help`"),
     };
 
@@ -209,7 +215,7 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     let mut reader = BufReader::new(stream.try_clone()?);
     send(&mut stream, &request)?;
     let value = read_response(&mut reader)?;
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    println!("{}", pretty(&value));
     // Flush before acknowledging: until these bytes are out of our hands, the
     // engine's copy is the only one there is.
     std::io::stdout().flush()?;
@@ -267,6 +273,88 @@ fn read_response(reader: &mut BufReader<UnixStream>) -> anyhow::Result<Value> {
         bail!("engine closed the connection without responding");
     }
     serde_json::from_str(&response).context("engine sent invalid JSON")
+}
+
+/// Indented JSON, except that anything short enough stays on one line: a
+/// point prints as `[0, 0, 16]`, not five lines of it, and a small node as
+/// one row. Only what actually needs the room gets it.
+fn pretty(v: &Value) -> String {
+    let mut out = String::new();
+    write_value(&mut out, v, 0, 0);
+    out
+}
+
+/// Line budget. Wide enough for a bounds pair, narrow enough that a node
+/// with children still breaks apart.
+const WRAP: usize = 96;
+
+/// `indent` is the nesting level to indent continuation lines by; `col` is
+/// how much of this line is already spoken for.
+fn write_value(out: &mut String, v: &Value, indent: usize, col: usize) {
+    // A scalar has nowhere to break: an over-long message still prints.
+    if !matches!(v, Value::Array(_) | Value::Object(_)) {
+        out.push_str(&v.to_string());
+        return;
+    }
+    if let Some(line) = flat(v, WRAP.saturating_sub(col)) {
+        out.push_str(&line);
+        return;
+    }
+    let pad = |out: &mut String, n: usize| out.extend(std::iter::repeat_n(' ', n * 2));
+    let (open, close) = if v.is_array() { ('[', ']') } else { ('{', '}') };
+    out.push(open);
+    out.push('\n');
+    let inner = indent + 1;
+    let entries: Vec<(Option<&String>, &Value)> = match v {
+        Value::Array(items) => items.iter().map(|i| (None, i)).collect(),
+        Value::Object(fields) => fields.iter().map(|(k, v)| (Some(k), v)).collect(),
+        _ => unreachable!("scalars returned above"),
+    };
+    for (i, (key, value)) in entries.iter().enumerate() {
+        pad(out, inner);
+        let mut col = inner * 2;
+        if let Some(k) = key {
+            let label = Value::String((*k).clone()).to_string();
+            col += label.len() + 2;
+            out.push_str(&label);
+            out.push_str(": ");
+        }
+        write_value(out, value, inner, col);
+        out.push_str(if i + 1 == entries.len() { "\n" } else { ",\n" });
+    }
+    pad(out, indent);
+    out.push(close);
+}
+
+/// One-line rendering, or None if it would not fit in `budget` characters.
+fn flat(v: &Value, budget: usize) -> Option<String> {
+    let mut s = String::new();
+    match v {
+        Value::Array(items) => {
+            s.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&flat(item, budget.checked_sub(s.len() + 1)?)?);
+            }
+            s.push(']');
+        }
+        Value::Object(fields) => {
+            s.push('{');
+            for (i, (key, value)) in fields.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&Value::String(key.clone()).to_string());
+                s.push_str(": ");
+                s.push_str(&flat(value, budget.checked_sub(s.len() + 1)?)?);
+            }
+            s.push('}');
+        }
+        scalar => s = scalar.to_string(),
+    }
+    (s.len() <= budget).then_some(s)
 }
 
 /// Did this response hand us messages the engine is still holding for us?
@@ -391,16 +479,6 @@ fn optional_positional(args: &[String]) -> (Option<&str>, &[String]) {
     }
 }
 
-fn take_positional<'a>(
-    args: &'a [String],
-    what: &str,
-) -> anyhow::Result<(&'a str, &'a [String])> {
-    match args.first() {
-        Some(v) if !v.starts_with("--") => Ok((v, &args[1..])),
-        _ => bail!("missing required argument: {what}"),
-    }
-}
-
 /// Is this directory an ODM project? The marker is the whole rule (same as
 /// `odm_build::is_project`, restated here to keep this crate dependency-light).
 pub fn is_project(dir: &Path) -> bool {
@@ -445,8 +523,9 @@ pub fn project_dir(path: PathBuf) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
-/// The follow loop against a fake engine on the other end of a socket pair:
-/// the poll/ack handshake per batch is the thing worth pinning down.
+/// Two things worth pinning down here: the follow loop's poll/ack
+/// handshake against a fake engine, and the pretty-printer's line
+/// breaking.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +615,36 @@ mod tests {
         let mut rest = String::new();
         reader.read_line(&mut rest).unwrap();
         assert!(rest.is_empty(), "{rest}");
+    }
+
+    // Key order is not asserted: serde_json's map is insertion-ordered in
+    // the workspace build (deno_core turns preserve_order on) and sorted in
+    // a lone `cargo test -p odm-cli`.
+    #[test]
+    fn short_values_stay_on_one_line() {
+        let v = json!({
+            "node": {
+                "id": "0",
+                "name": "chassis",
+                "bounds": {"min": [-35.0, -15.0, 11.0], "max": [35.0, 15.0, 21.0]},
+            },
+            "ok": true,
+        });
+        let out = pretty(&v);
+        // A bounds pair fits, so it gets one line; the node around it does not.
+        assert!(
+            out.lines().any(|l| l.contains("\"min\"") && l.contains("\"max\"")),
+            "{out}"
+        );
+        assert_eq!(out.lines().count(), 8, "{out}");
+        assert_eq!(serde_json::from_str::<Value>(&out).unwrap(), v);
+    }
+
+    #[test]
+    fn a_long_scalar_prints_rather_than_breaking() {
+        let long = "x".repeat(200);
+        let out = pretty(&json!({ "message": long }));
+        assert!(out.contains(&"x".repeat(200)), "{out}");
+        assert_eq!(out.lines().count(), 3, "{out}");
     }
 }

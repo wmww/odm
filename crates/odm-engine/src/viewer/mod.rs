@@ -884,7 +884,7 @@ impl ViewerApp {
         let hit =
             scene::raycast(&state.build_engine().kernel, &scene.scene.instances, origin, dir)?;
         Some((
-            hit.get("node")?.as_str()?.to_string(),
+            hit.get("id")?.as_str()?.to_string(),
             hit.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()),
         ))
     }

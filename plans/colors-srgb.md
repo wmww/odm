@@ -1,7 +1,7 @@
 # sRGB end-to-end; linear is renderer-internal
 
 ## Why
-`.color('#b03a2e')` comes back from tree/inspect as `[0.434, 0.042, 0.027, 1]`
+`.color('#b03a2e')` comes back from `odm inspect` as `[0.434, 0.042, 0.027, 1]`
 — linear, unlabeled. The entire authored surface is already sRGB-only
 (`parseColor` accepts hex and 0..1 sRGB float arrays, nothing else); linear
 exists only because the framework eagerly converts before storing in the IR,
@@ -15,7 +15,7 @@ not in the prompt.
   conversion doesn't get "helpfully" re-added.
 - `odm-render` converts sRGB→linear once, where render data is built
   (flatten/GPU upload). Linear then exists in exactly one place.
-- tree/inspect echo the authored space; print `"#b03a2e"` when the floats
+- `inspect` echoes the authored space; print `"#b03a2e"` when the floats
   quantize exactly to 8-bit (hex inputs always do), else the float array.
   "Did my color apply" becomes string equality.
 - Check viewer swatches/tree rows: egui wants sRGB, so any current display of

@@ -20,7 +20,7 @@ s.rotate(axis, rad)       // arbitrary axis: [x,y,z] or Vector3
 s.scale(x, y, z)          // all three; uniform is scale(k, k, k)
 s.applyMatrix4(m)         // THREE.Matrix4 or column-major array of 16
 s.color(c)                // see colors.md
-s.name(n)                 // label shown in `odm tree` and the viewer
+s.name(n)                 // label shown in the viewer; `odm inspect <name>`
 ```
 
 Rotations and `scale` take an optional `{ about }` pivot — see below.

@@ -9,8 +9,8 @@ Query results come back as THREE math objects (`Box3`, `Vector3`) —
 named components and vector arithmetic instead of array indexing.
 
 Only Solids have queries. To measure a `Group`, query its member Solids
-(or use `odm tree` / `odm inspect` from the CLI, which measure any
-node). An `Instance` cannot be queried from JS.
+(or use `odm inspect` from the CLI, which measures any node — it
+replaced the old `odm tree`). An `Instance` cannot be queried from JS.
 
 ## s.volume() / s.area()
 
