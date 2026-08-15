@@ -21,13 +21,13 @@ what changed.
 `scripts/install.sh` builds and drops the binary in `~/.local/bin` (override
 with `BINDIR=`); it is self-contained, so that is the whole install.
 
-To point an agent at a project, give it the instructions ODM ships with:
+An agent gets the instructions ODM ships with from the project's own
+`AGENTS.md`/`CLAUDE.md`: a new project is created with them, and every project
+open re-syncs whatever sits between the `STANDARD ODM PROMPT` markers, so they
+never go stale. An existing project without them is asked about once per open.
+`odm prompt` prints the same text for pasting anywhere else.
 
-```sh
-odm prompt > AGENTS.md     # or CLAUDE.md, or paste into a system prompt
-```
-
-Those are `docs/prompts/` — how to write doohickeys, and how to use the CLI
+The text is `docs/prompts/` — how to write doohickeys, and how to use the CLI
 (including `odm poll` / `odm say`, which carry messages between the user's
 viewer and the agent).
 
@@ -43,6 +43,8 @@ viewer and the agent).
 - `crates/odm-render` — wgpu renderer (offscreen PNG; viewer shares the code path)
 - `crates/odm-engine` — the engine (socket server, viewer)
 - `crates/odm-cli` — the client commands (JSON over the project socket)
+- `crates/odm-prompt` — the agent prompt text + the `AGENTS.md`/`CLAUDE.md`
+  marked block the engine keeps current
 - `crates/odm` — the one `odm` binary: `run` is the engine, the rest is the client
 - `framework/` — JS framework + vendored three.js subset (r185)
 - `examples/` — example projects (double as integration tests)

@@ -87,8 +87,9 @@ impl Sessions {
         // Claim the new socket before retiring the old session: this is the
         // step that fails when another engine already has the project.
         let listener = server::bind(&socket_of(&project)).map_err(|e| e.to_string())?;
-        sync_marker(&project);
+        let questions = sync_on_open(&project);
         let state = EngineState::new(project, self.env.clone()).map_err(|e| e.to_string())?;
+        state.set_agent_questions(questions);
         if let Some(wake) = self.wake.lock().unwrap().clone() {
             state.set_wake(wake);
         }
@@ -103,16 +104,41 @@ impl Sessions {
     }
 }
 
-/// Record this engine's version in the project marker — the ONE exception
-/// to "the engine never writes project files" — and surface (not fail on)
-/// a newer-engine warning: an unreadable marker already fails loudly at
-/// scan time, and an unwritable one shouldn't block opening.
-fn sync_marker(project: &Path) {
+/// A question the open-time scan wants put to the user. Viewer-only, and
+/// transient: a "no" is not recorded anywhere, so a declined question comes
+/// back the next time the project is opened.
+pub enum AgentQuestion {
+    /// This agent file exists but has no markers: offer to append the block.
+    AddTo(String),
+    /// No agent file at all: offer to author AGENTS.md + CLAUDE.md.
+    CreateFiles,
+}
+
+/// Everything the engine writes to a project it did not author, done in one
+/// place: this engine's version in `odm.toml`, and the standard prompt in
+/// whichever agent files opted in by carrying the markers. Both are
+/// best-effort — warnings go to stderr, and nothing here blocks an open.
+///
+/// Returns what could not be done without asking. Headless calls this too
+/// (for the marked-file updates) and ignores the questions.
+pub fn sync_on_open(project: &Path) -> Vec<AgentQuestion> {
+    // An unreadable marker already fails loudly at scan time, and an
+    // unwritable one shouldn't block opening.
     match odm_build::sync_marker(project) {
         Ok(Some(warning)) => eprintln!("warning: {warning}"),
         Ok(None) => {}
         Err(e) => eprintln!("warning: could not update odm.toml: {e}"),
     }
+    let report = odm_prompt::sync(project);
+    for warning in &report.warnings {
+        eprintln!("warning: {warning}");
+    }
+    let mut questions: Vec<AgentQuestion> =
+        report.unmarked.into_iter().map(AgentQuestion::AddTo).collect();
+    if report.none_exist {
+        questions.push(AgentQuestion::CreateFiles);
+    }
+    questions
 }
 
 /// Socket server, build loop and watcher for one session. Each returns when

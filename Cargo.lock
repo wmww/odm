@@ -2725,6 +2725,7 @@ dependencies = [
  "odm-ir",
  "odm-js",
  "odm-kernel",
+ "odm-prompt",
  "odm-store",
  "serde",
  "serde_json",
@@ -2739,6 +2740,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "include_dir",
+ "odm-prompt",
  "serde_json",
  "tempfile",
 ]
@@ -2754,6 +2756,7 @@ dependencies = [
  "odm-ir",
  "odm-js",
  "odm-kernel",
+ "odm-prompt",
  "odm-render",
  "odm-store",
  "png",
@@ -2798,6 +2801,13 @@ dependencies = [
  "odm-ir",
  "odm-store",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "odm-prompt"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

@@ -13,6 +13,14 @@ fn a_new_project_is_a_project_that_builds() {
     create_project(&project, "widget").unwrap();
 
     assert!(is_project(&project));
+    // The agent files: the block in AGENTS.md, CLAUDE.md a link to it.
+    let agents = std::fs::read_to_string(project.join("AGENTS.md")).unwrap();
+    assert!(agents.contains(odm_prompt::BEGIN) && agents.contains(odm_prompt::END), "{agents}");
+    assert!(agents.contains("ODM"), "{agents}");
+    assert_eq!(
+        std::fs::read_link(project.join("CLAUDE.md")).unwrap(),
+        std::path::Path::new("AGENTS.md")
+    );
     let marker = read_marker(&project).unwrap().unwrap();
     assert_eq!((marker.name.as_str(), marker.engine), ("widget", ENGINE_VERSION));
 

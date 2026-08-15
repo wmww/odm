@@ -3,6 +3,7 @@
 //! transport, error panel. Never blocks on builds — shows each tab's last
 //! published scene with a building indicator.
 
+mod agent;
 mod browse;
 mod idle;
 mod inputs;
@@ -13,7 +14,7 @@ mod tabs;
 mod tree;
 
 use crate::scene;
-use crate::session::Sessions;
+use crate::session::{AgentQuestion, Sessions};
 use crate::state::{Delivery, EngineState, Who};
 use crate::theme;
 use eframe::egui;
@@ -125,12 +126,13 @@ pub(crate) struct SceneCache {
     pub scene: RenderScene,
 }
 
-/// The modal that picks a project, when one is up. Open and New are the same
-/// kind of thing — a browse over folders that ends in a project to serve — so
-/// only one of them is ever up, and one field holds either.
+/// The modal that is up, if one is. Open and New are the same kind of thing —
+/// a browse over folders that ends in a project to serve — and the agent-file
+/// question follows an open, so only ever one of the three is up at a time.
 enum Dialog {
     Open(open::OpenDialog),
     New(new::NewDialog),
+    AgentFiles(agent::AgentDialog),
 }
 
 pub struct ViewerApp {
@@ -150,8 +152,11 @@ pub struct ViewerApp {
     needs_render: bool,
     /// The chat input line. The transcript itself lives in `EngineState`.
     chat_input: String,
-    /// File ▸ Open / File ▸ New Project, when one of them is up.
+    /// File ▸ Open / File ▸ New Project / the agent-file question, when one
+    /// of them is up.
     dialog: Option<Dialog>,
+    /// Agent-file questions from the last open, asked one at a time.
+    agent_questions: Vec<AgentQuestion>,
     /// The new-tab file picker: Some(list of viewable files).
     add_tab: Option<Vec<String>>,
     /// File ▸ Exit; acted on by the event loop (see `idle.rs`).
@@ -179,11 +184,17 @@ impl ViewerApp {
             needs_render: true,
             chat_input: String::new(),
             dialog: None,
+            agent_questions: Vec::new(),
             add_tab: None,
             quit,
         };
         match app.session.is_some() {
-            true => app.init_tabs(),
+            true => {
+                app.init_tabs();
+                // The startup project was opened before this struct existed;
+                // its questions have been waiting on the session since.
+                app.ask_about_agent_files();
+            }
             // Nothing to show but the question: which project? Browsing starts
             // where we were launched, the likeliest place to find one.
             false => app.dialog = Some(Dialog::Open(open::OpenDialog::browse(&cwd()))),
@@ -252,7 +263,24 @@ impl ViewerApp {
         self.renderer.prune_cache(&|_| false);
         self.needs_render = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.session.as_deref())));
+        self.ask_about_agent_files();
         Ok(())
+    }
+
+    /// Pick up what the open-time agent-file scan could not do without asking,
+    /// and put the first question up.
+    fn ask_about_agent_files(&mut self) {
+        self.agent_questions = self.state().take_agent_questions();
+        self.next_agent_question();
+    }
+
+    /// The next question, if any — and if nothing else is using the modal.
+    fn next_agent_question(&mut self) {
+        if self.dialog.is_some() || self.agent_questions.is_empty() {
+            return;
+        }
+        self.dialog =
+            Some(Dialog::AgentFiles(agent::AgentDialog::new(self.agent_questions.remove(0))));
     }
 
     fn frame_scene(&mut self) {
@@ -1085,6 +1113,18 @@ impl ViewerApp {
                         self.dialog = Some(Dialog::Open(open));
                     }
                 }
+            },
+            Some(Dialog::AgentFiles(mut dialog)) => match dialog.ui(ctx) {
+                agent::Outcome::Idle => self.dialog = Some(Dialog::AgentFiles(dialog)),
+                // Nothing is recorded either way: no is just this open's no.
+                agent::Outcome::No => self.next_agent_question(),
+                agent::Outcome::Yes => match dialog.apply(self.state().project()) {
+                    Ok(()) => self.next_agent_question(),
+                    Err(e) => {
+                        dialog.report(e);
+                        self.dialog = Some(Dialog::AgentFiles(dialog));
+                    }
+                },
             },
         }
     }

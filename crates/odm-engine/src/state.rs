@@ -3,6 +3,7 @@
 
 use crate::commands::CmdError;
 use crate::server::Peer;
+use crate::session::AgentQuestion;
 use odm_build::{BuildEngine, FailureKind, InputReport, PassResult, SyncResult, View};
 use odm_js::{JsEnv, LogLine};
 use odm_kernel::Kernel;
@@ -133,6 +134,10 @@ pub struct EngineState {
     stopping: AtomicBool,
     /// Run once by `stop`, to unblock loops parked in a syscall.
     on_stop: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
+    /// What the open-time agent-file scan wants to ask the user, left here
+    /// for the viewer to pick up (see `session::sync_on_open`). Headless
+    /// never drains it — there is no one to ask.
+    agent_questions: Mutex<Vec<AgentQuestion>>,
 }
 
 impl EngineState {
@@ -159,6 +164,7 @@ impl EngineState {
             wake: Mutex::new(None),
             stopping: AtomicBool::new(false),
             on_stop: Mutex::new(Vec::new()),
+            agent_questions: Mutex::new(Vec::new()),
         }))
     }
 
@@ -192,6 +198,16 @@ impl EngineState {
             return hook();
         }
         self.on_stop.lock().unwrap().push(Box::new(hook));
+    }
+
+    pub(crate) fn set_agent_questions(&self, questions: Vec<AgentQuestion>) {
+        *self.agent_questions.lock().unwrap() = questions;
+    }
+
+    /// Take the pending agent-file questions; asking is the viewer's job and
+    /// each one is asked at most once per open.
+    pub(crate) fn take_agent_questions(&self) -> Vec<AgentQuestion> {
+        std::mem::take(&mut *self.agent_questions.lock().unwrap())
     }
 
     pub fn project(&self) -> &Path {

@@ -45,9 +45,22 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   leave no way to fix it in the viewer. Two copies of that one-liner
   (`odm_build::is_project`, `odm_cli::is_project`) — odm-cli stays
   dependency-light on purpose.
-- `odm.toml` is the ONE project file the engine writes: it records its
+- `odm.toml` is one of the two project files the engine writes: it records its
   `engine` version back on open (warning first if the file names a newer
-  engine).
+  engine). The other is the agent files — see below.
+- **Agent files** (`AGENTS.md`, `CLAUDE.md` at the project root): the standard
+  prompt lives between `<!--- BEGIN/END STANDARD ODM PROMPT --->` lines, and a
+  well-formed pair is the file's opt-in — `odm_prompt::sync` splices the
+  current prompt in on every project open (viewer *and* headless), touching
+  nothing outside the markers and not writing at all when the block is already
+  current. A new project (File ▸ New Project) gets AGENTS.md with the block and
+  CLAUDE.md as a relative symlink to it. Anything else is a viewer question,
+  one per logical file (the symlink pair dedupes by canonical path, asked about
+  as AGENTS.md): an existing unmarked file offers an append, and no agent file
+  at all offers to create the pair. Answers are not recorded — a "no" is asked
+  again next open — and headless never asks. Quiet cases (only one file, a
+  regular CLAUDE.md, a symlink out of the project, a dangling one) are left as
+  the user set them up; a lone marker warns and is never guessed at.
 
 ## Crates
 
@@ -191,12 +204,15 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   ones — see "Viewer fonts" and "Viewer icons" below; small glyphs that are not
   worth a file (the checkmark, scrollbar arrows, the tree's +/-) are painted
   from `theme::pixels`/`theme::arrow` as a `Mesh`. See "Scrollbars" below.
+- `odm-prompt` — std-only, no odm deps (odm-cli must stay V8-free): the
+  `docs/prompts/*.md` `include_str!`s behind `text()`, plus the marked-block
+  machinery both `odm prompt` and the engine's on-open sync use.
 - `odm-cli` — client commands: dependency-light JSON pipe + arg parsing
   (`--opt value` and `--opt=value`), pretty-prints responses, exit code
   from `ok`. Also owns project resolution — `find_project` (the cwd walk-up),
   `project_dir`, `is_project`, all reused by `run` — and the two engine-less
-  markdown commands: `prompt.rs` (`odm prompt`
-  `include_str!`s `docs/prompts/*.md`) and `docs.rs` (`odm docs`
+  markdown commands: `odm prompt` (one line over `odm_prompt::text`)
+  and `docs.rs` (`odm docs`
   `include_dir!`s the whole `docs/` tree: topic dump, section-grepping
   `search`, `changes <from> <to>` migration concatenation, `--api N`
   rejected until frozen docs snapshots exist).
@@ -494,12 +510,16 @@ notes/spike-findings.md "Snapshot count/concurrency".
 
 - Consistency: every published result is byte-equivalent to a from-scratch
   build of its generation (tested: `odm-build/tests/build.rs`).
-- The engine never writes ODM project files of an existing project — with ONE
-  exception: the `engine` value in `odm.toml` (recorded on project open;
-  `odm_build::sync_marker`). odm.toml is not part of generation identity,
-  so the write-back cannot churn generations. (`create_project`, File ▸ New
-  Project, authors a project's first files, but only ever creates files that
-  are not there.)
+- The engine never writes ODM project files of an existing project — with two
+  exceptions, neither of which can touch a doohickey or churn a generation
+  (neither odm.toml nor `.md` files are part of generation identity):
+  the `engine` value in `odm.toml` (recorded on project open;
+  `odm_build::sync_marker`), and the standard prompt inside the marker pair of
+  an agent file (`odm_prompt::sync` — both run from `session::sync_on_open`;
+  see "Agent files" under Project format). Agent-file writes are either marker-scoped (the markers *are* the
+  file's opt-in) or user-consented (a viewer question box). (`create_project`,
+  File ▸ New Project, authors a project's first files, but only ever creates
+  files that are not there.)
 - Engine queries on content-addressed handles are pure → never memo deps.
   Queries on transformed solids bake via op_transform_bake (cached per
   Solid) — exact, but costs a mesh copy per distinct transform.
@@ -514,7 +534,8 @@ notes/spike-findings.md "Snapshot count/concurrency".
 
 `cargo test` runs everything in ~1s after compile. Almost all tests are
 integration tests in `crates/*/tests/`; the unit tests in `src/` are
-`odm-render/src/grid.rs`, `odm-js/src/version.rs` (pragma parsing) and, in
+`odm-render/src/grid.rs`, `odm-js/src/version.rs` (pragma parsing),
+`odm-prompt/src/` (marker splicing + the agent-file scan) and, in
 odm-engine, `icons.rs`, `commands.rs`, `state.rs` (the chat queue),
 `server.rs` (delivery over a real socket), `viewer/tree.rs`,
 `viewer/inputs.rs` (the input panel, headless egui), `theme/scroll.rs`, and

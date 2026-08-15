@@ -24,6 +24,9 @@ pub fn run_headless(project: PathBuf) -> anyhow::Result<()> {
     // One project, no viewer to switch it: no session machinery needed.
     let env =
         Arc::new(odm_js::JsEnv::new().map_err(|e| anyhow::anyhow!("js snapshot: {e}"))?);
+    // Questions need a UI; headless gets the silent half (marker + marked
+    // agent files) and drops the rest.
+    session::sync_on_open(&project);
     let state = state::EngineState::new(project.clone(), env)
         .map_err(|e| anyhow::anyhow!("engine startup failed: {e}"))?;
     server::serve(state, &project.join(".odm/engine.sock"))

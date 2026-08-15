@@ -4,7 +4,6 @@
 //! in the `odm` binary crate; everything else lands here.
 
 mod docs;
-mod prompt;
 
 use anyhow::{Context, bail};
 use serde_json::{Map, Value, json};
@@ -78,7 +77,7 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         if !rest.is_empty() {
             bail!("prompt takes no arguments");
         }
-        print!("{}", prompt::text());
+        print!("{}", odm_prompt::text());
         return Ok(0);
     }
     if cmd == "docs" {

@@ -132,20 +132,22 @@ pub fn sync_marker(dir: &Path) -> Result<Option<String>, ScanError> {
     Ok(warning)
 }
 
-/// Author a new project in `dir`: the marker that makes it one, and a starter
-/// `root.js` so there is something to look at. The directory is created if it
-/// is not there; neither file is overwritten if it is.
+/// Author a new project in `dir`: the marker that makes it one, a starter
+/// `root.js` so there is something to look at, and the agent files carrying
+/// the standard ODM instructions. The directory is created if it is not
+/// there; no file is overwritten if it is.
 ///
-/// The other place the engine writes project files is `sync_marker`. This one
-/// only ever writes files that do not exist yet, so nothing authored can be
-/// lost to it.
+/// The other places the engine writes project files are `sync_marker` and the
+/// agent-file block (`odm_prompt`). This one only ever writes files that do
+/// not exist yet, so nothing authored can be lost to it.
 pub fn create_project(dir: &Path, name: &str) -> Result<(), ScanError> {
     std::fs::create_dir_all(dir)
         .map_err(|e| ScanError::Io { path: dir.display().to_string(), err: e.to_string() })?;
     let marker = ProjectMarker { name: name.to_owned(), engine: ENGINE_VERSION };
     let marker = toml::to_string(&marker).map_err(|e| ScanError::BadMarker(e.to_string()))?;
     write_new(&dir.join("odm.toml"), &marker)?;
-    write_new(&dir.join("root.js"), &starter(name))
+    write_new(&dir.join("root.js"), &starter(name))?;
+    odm_prompt::create(dir).map_err(|e| ScanError::Io { path: "agent files".into(), err: e })
 }
 
 /// Write a file that is not there, and say so rather than clobber one that is.
