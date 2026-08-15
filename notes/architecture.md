@@ -226,7 +226,12 @@ drop-down listing `MenuEntry`s, and one `apply` that turns an action into an
 effect. File has Open Project…/Exit, View has Frame Scene (F) and checkmarked
 Wireframe/Grid. `theme::menu` measures its own entries and pins the popup width
 before drawing, because an auto-sizing egui popup doesn't know its width until
-the frame after — and a highlight that stops at the text looks broken.
+the frame after — and a highlight that stops at the text looks broken. Titles
+are painted by hand (open = filled with `ACCENT`, never pressed in) rather than
+via egui's `MenuButton`, and `theme::menu_bar` does the hand-over itself: each
+title records its rect, and while a menu is up the bar opens whichever title
+the pointer is over — decided before any title draws, so two menus are never
+painted at once.
 
 File ▸ Open opens **another engine**, it does not reconfigure this one: an
 engine is bound to one project's store, socket, build loop and watcher.

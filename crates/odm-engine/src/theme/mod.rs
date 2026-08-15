@@ -41,8 +41,9 @@ pub const WINDOW: Color32 = Color32::from_rgb(0x1a, 0x1a, 0x1a);
 pub const TROUGH: Color32 = Color32::from_rgb(0x23, 0x23, 0x23);
 pub const TEXT: Color32 = Color32::WHITE;
 pub const WEAK_TEXT: Color32 = Color32::from_rgb(0x9a, 0x9a, 0x9a);
-/// Selection and progress fill.
-pub const ACCENT: Color32 = Color32::from_rgb(0x30, 0x60, 0xc0);
+/// Selection and progress fill: the era's navy, lifted just enough to read
+/// against the dark face.
+pub const ACCENT: Color32 = Color32::from_rgb(0x20, 0x40, 0x8c);
 pub const ERROR: Color32 = Color32::from_rgb(0xff, 0x6b, 0x6b);
 /// Warnings — console.warn lines in the console pane.
 pub const WARN: Color32 = Color32::from_rgb(0xe6, 0xc4, 0x5c);
@@ -539,11 +540,14 @@ pub fn status_field(ui: &mut Ui, text: impl Into<String>) {
 //
 // The one place the no-hover-feedback rule is off: a drop-down highlights the
 // item under the pointer, because that is how you read one while dragging
-// through it. Menu *titles* still don't — like the era's, they only light up
-// once their menu is open.
+// through it. Menu *titles* still don't on their own — but once any menu is
+// up the bar is tracking the pointer, and moving onto another title opens
+// that menu, as the era's does.
 
 /// Height of a drop-down row, and of the menu bar's own titles.
 const MENU_ROW: f32 = 18.0;
+/// Space either side of a title on the bar.
+const MENU_TITLE_PAD: f32 = 7.0;
 /// Checkmark column, left of every item's label.
 const MENU_GUTTER: f32 = 15.0;
 /// Breathing room at the right of a menu.
@@ -583,32 +587,67 @@ impl<'a, T> MenuEntry<'a, T> {
     }
 }
 
+/// Where each title on the bar sat, and which popup it owns. Recorded by
+/// [`menu`], read by [`menu_bar`] on the next pass to hand the menu over when
+/// the pointer moves along the bar.
+type BarTitles = Vec<(egui::Id, Rect)>;
+
+fn bar_titles_id() -> egui::Id {
+    egui::Id::new("menu_bar_titles")
+}
+
 /// The bar itself. Put it in a top panel and fill it with [`menu`]s.
 pub fn menu_bar(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    // Hand-over is decided here, before any title draws, so the losing menu is
+    // never painted alongside the winning one.
+    let ctx = ui.ctx().clone();
+    let titles: BarTitles =
+        ctx.data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<BarTitles>(bar_titles_id())));
+    let open = titles.iter().any(|(popup, _)| egui::Popup::is_id_open(&ctx, *popup));
+    if let (true, Some(pos)) = (open, ctx.pointer_hover_pos())
+        && let Some((popup, _)) = titles.iter().find(|(_, rect)| rect.contains(pos))
+        && !egui::Popup::is_id_open(&ctx, *popup)
+    {
+        egui::Popup::open_id(&ctx, *popup);
+    }
+    // Titles abut, as the era's do — the bar draws its own, so egui's button
+    // padding and spacing are not wanted.
     egui::MenuBar::new()
-        .style(|style: &mut egui::Style| {
-            style.spacing.button_padding = vec2(7.0, 2.0);
-            style.spacing.item_spacing.x = 0.0;
-            for w in widget_states(&mut style.visuals) {
-                w.weak_bg_fill = Color32::TRANSPARENT;
-                w.bg_stroke = Stroke::NONE;
-            }
-        })
+        .style(|style: &mut egui::Style| style.spacing.item_spacing.x = 0.0)
         .ui(ui, add);
 }
 
 /// One menu on the bar. Returns the id of the entry the user picked.
 pub fn menu<T: Copy>(ui: &mut Ui, title: &str, entries: &[MenuEntry<'_, T>]) -> Option<T> {
+    let galley = label(ui, title);
+    let size = vec2(galley.size().x + MENU_TITLE_PAD * 2.0, MENU_ROW);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    // Keyed by name rather than position: the bar's contents come and go with
+    // the project, and a menu's popup has to keep its identity across that.
+    let response = ui.interact(rect, ui.id().with(title), egui::Sense::click());
+    let popup_id = egui::Popup::default_response_id(&response);
+    ui.ctx().data_mut(|d| {
+        d.get_temp_mut_or_default::<BarTitles>(bar_titles_id()).push((popup_id, rect))
+    });
+
+    // A click toggles, so the highlight has to lead the popup by a pass.
+    let open = egui::Popup::is_id_open(ui.ctx(), popup_id) != response.clicked();
+    let p = ui.painter();
+    if open {
+        // The open menu's title is filled with the selection color — the bar
+        // is flat, so nothing on it presses in.
+        p.rect_filled(rect, CornerRadius::ZERO, ACCENT);
+    }
+    let pos = snap(ui, pos2(rect.left() + MENU_TITLE_PAD, rect.center().y - galley.size().y / 2.0));
+    p.galley(pos, galley, TEXT);
+
     let mut picked = None;
-    let (title_res, popup) = egui::containers::menu::MenuButton::new(title)
-        .ui(ui, |ui| picked = drop_down(ui, entries));
+    let popup = egui::Popup::menu(&response).show(|ui| picked = drop_down(ui, entries));
     if let Some(popup) = popup {
         // The popup's own frame is a flat 1px stroke; the era's menus have the
         // same raised edge as a button, so paint one over it.
         let painter = ui.ctx().layer_painter(popup.response.layer_id);
         bevel(&painter, popup.response.rect, Bevel::Raised);
-        // An open menu's title reads as pressed in.
-        bevel(ui.painter(), title_res.rect, Bevel::Sunken);
     }
     picked
 }

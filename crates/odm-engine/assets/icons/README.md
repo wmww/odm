@@ -55,7 +55,7 @@ one.
 Keep to 11×11 (the unit test allows 4–16): a whole number of pixels, about the
 cap height of the 14px UI font, so it sits level with a line of text. Colors must
 read on both the window background (`#1a1a1a`) and the blue selection fill
-(`#3060c0`) — blues and dark tones are the ones to watch, since the fill eats
+(`#20408c`) — blues and dark tones are the ones to watch, since the fill eats
 them. `icons::paint` takes a tint, but tinting only multiplies, so it can darken
 art and never brighten it.
 
