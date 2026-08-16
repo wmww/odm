@@ -138,8 +138,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   speculative infrastructure for future parallelism, exercised only by
   `concurrent_same_pass_dedups`.
 - `odm-render` — wgpu =29.0.4 (MUST track egui's pinned wgpu major);
-  the single flattener `flatten_node` (color inheritance, world AABB, node
-  ids for picking — engine and viewer both use it) → one draw_indexed per
+  the single flattener `flatten_node` (color inheritance, sRGB→linear — the
+  only conversion in the system, world AABB, node ids for picking — engine
+  and viewer both use it) → one draw_indexed per
   instance with dynamic uniform offsets (not instanced draws), flat shading
   via screen-space derivatives, MSAA 4x, wireframe mode (edges only, in the
   instance color, no fill; one instanced quad per edge widened in the vertex

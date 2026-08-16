@@ -3,7 +3,7 @@
 //! world-space raycasts. Flattening and matrix math live in odm-render
 //! (single code path with rendering).
 
-use odm_ir::{Canonical, Hash, Node, Transform};
+use odm_ir::{Canonical, Color, Hash, Node, Transform};
 use odm_kernel::Kernel;
 use odm_render::math::{Mat4, mul as mat_mul, transform_dir, transform_point};
 use odm_render::{Instance, mesh_aabb, node_id};
@@ -296,7 +296,7 @@ impl<'a> Inspector<'a> {
         // Only an explicitly set color: inherited color is the renderer's
         // business, and "did my color apply" wants the authored answer.
         if f.color && let Some(c) = node.color {
-            obj.insert("color".into(), json!([c.r, c.g, c.b, c.a]));
+            obj.insert("color".into(), color_json(c));
         }
         if f.bounds && let Some((min, max)) = agg.bounds {
             obj.insert("bounds".into(), json!({ "min": min, "max": max }));
@@ -400,6 +400,26 @@ fn collapse_runs(kids: Vec<(Option<Hash>, Value)>) -> Vec<Value> {
         }
     }
     out
+}
+
+/// Colors go out the way they went in: a hex string whenever the floats sit
+/// exactly on 8-bit steps (every hex input does), so "did my color apply" is
+/// string equality; otherwise the authored floats.
+fn color_json(c: Color) -> Value {
+    let byte = |v: f32| {
+        let q = (v * 255.0).round();
+        ((0.0..=255.0).contains(&q) && q / 255.0 == v).then_some(q as u8)
+    };
+    if c.a == 1.0 && let (Some(r), Some(g), Some(b)) = (byte(c.r), byte(c.g), byte(c.b)) {
+        return json!(format!("#{r:02x}{g:02x}{b:02x}"));
+    }
+    // Shortest f32 repr, not the f64 widening of it: 0.1 should print as 0.1.
+    let f = |v: f32| v.to_string().parse::<f64>().unwrap_or(v as f64);
+    if c.a == 1.0 {
+        json!([f(c.r), f(c.g), f(c.b)])
+    } else {
+        json!([f(c.r), f(c.g), f(c.b), f(c.a)])
+    }
 }
 
 /// Identity of a repeated part: everything about a node except where it sits.
@@ -675,6 +695,14 @@ mod tests {
         assert_eq!(node.name.as_deref(), Some("link"));
         assert_eq!(parent, odm_render::math::IDENTITY);
         assert!(locate(&store, &root, "9").unwrap_err().contains("index path"));
+    }
+
+    #[test]
+    fn colors_echo_the_authored_form() {
+        let hex = |v: f32| color_json(Color { r: v, g: 0.0, b: 1.0, a: 1.0 });
+        assert_eq!(hex(0x46 as f32 / 255.0), json!("#4600ff"));
+        // Not on an 8-bit step: the floats come back as written.
+        assert_eq!(hex(0.1), json!([0.1, 0.0, 1.0]));
     }
 
     #[test]

@@ -54,7 +54,8 @@ pub struct Instance {
     pub mesh: Hash,
     /// Column-major world matrix (f64; converted to f32 at GPU upload).
     pub world: math::Mat4,
-    /// Linear RGBA, already resolved through inheritance.
+    /// Linear RGBA — converted from the IR's sRGB in `flatten`, and already
+    /// resolved through inheritance.
     pub color: [f32; 4],
 }
 

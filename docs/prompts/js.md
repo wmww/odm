@@ -110,7 +110,7 @@ export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('
 
 ## Colors
 
-Hex `'#rrggbb'`/`'#rgb'`, or `[r, g, b]` sRGB 0..1. No named colors,
+Hex `'#rrggbb'`/`'#rgb'`, or `[r, g, b]` in 0..1. No named colors,
 no numbers. Alpha must be 1: the renderer has no transparency, so a
 translucent color is rejected rather than silently drawn opaque.
 

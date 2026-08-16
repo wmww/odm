@@ -3,11 +3,12 @@
 `.color(c)` on any scene value accepts:
 
 - a hex string `'#rrggbb'` or `'#rgb'`;
-- an array `[r, g, b]` or `[r, g, b, 1]` of **sRGB** values in 0..1.
+- an array `[r, g, b]` or `[r, g, b, 1]` of values in 0..1.
 
 Nothing else — no named colors, no `0xRRGGBB` numbers.
 
-Inputs are sRGB; conversion to linear happens internally.
+Colors are sRGB throughout — what you write is what `odm inspect`
+reports back (as the same hex string, when the value is one).
 
 **Alpha must be 1.** The renderer has no transparency, so a translucent
 color is rejected with an error rather than silently drawn opaque.

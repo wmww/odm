@@ -9,6 +9,15 @@ type LocalBoundsCache = HashMap<Hash, Option<([f64; 3], [f64; 3])>>;
 /// Linear light gray for nodes with no color anywhere up the tree.
 pub const DEFAULT_COLOR: [f32; 4] = [0.7, 0.7, 0.75, 1.0];
 
+/// The one sRGB→linear crossing: IR colors are authored sRGB, shading math
+/// wants linear, so instances carry linear and nothing upstream has to care.
+fn to_linear(c: odm_ir::Color) -> [f32; 4] {
+    fn ch(c: f32) -> f32 {
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    }
+    [ch(c.r), ch(c.g), ch(c.b), c.a]
+}
+
 /// Node ids are child-index paths from the root: "" (root), "0", "0/2", ...
 pub fn node_id(prefix: &str, index: usize) -> String {
     if prefix.is_empty() { index.to_string() } else { format!("{prefix}/{index}") }
@@ -51,7 +60,7 @@ fn walk(
     } else {
         math::mul(parent, &node.transform.0)
     };
-    let color = node.color.map(|c| [c.r, c.g, c.b, c.a]).or(inherited);
+    let color = node.color.map(to_linear).or(inherited);
 
     if let Some(mesh_hash) = node.mesh {
         let mesh: Arc<Mesh> = match scene.meshes.get(&mesh_hash) {

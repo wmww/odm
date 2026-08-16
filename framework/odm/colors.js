@@ -1,19 +1,11 @@
-function srgbToLinear(c) {
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-}
-
 function fromInt(n) {
-  return [
-    srgbToLinear(((n >> 16) & 0xff) / 255),
-    srgbToLinear(((n >> 8) & 0xff) / 255),
-    srgbToLinear((n & 0xff) / 255),
-    1,
-  ];
+  return [((n >> 16) & 0xff) / 255, ((n >> 8) & 0xff) / 255, (n & 0xff) / 255, 1];
 }
 
 /**
- * Parse a color into linear RGBA. Accepts '#rrggbb'/'#rgb' hex strings and
- * [r,g,b] / [r,g,b,a] arrays of sRGB values in 0..1.
+ * Parse a color into RGBA floats in 0..1. Accepts '#rrggbb'/'#rgb' hex strings
+ * and [r,g,b] / [r,g,b,a] arrays. Values pass through unconverted: sRGB is the
+ * one color space anything outside the renderer ever sees.
  */
 export function parseColor(c) {
   if (Array.isArray(c)) {
@@ -24,7 +16,7 @@ export function parseColor(c) {
       // The renderer has no blending yet; a silently opaque 0.3 would mislead.
       throw new TypeError(`translucent colors are not supported yet: alpha must be 1, got ${c[3]}`);
     }
-    return [srgbToLinear(c[0]), srgbToLinear(c[1]), srgbToLinear(c[2]), c.length === 4 ? c[3] : 1];
+    return [c[0], c[1], c[2], c.length === 4 ? c[3] : 1];
   }
   if (typeof c === 'string') {
     const s = c.trim().toLowerCase();
@@ -36,7 +28,7 @@ export function parseColor(c) {
       return fromInt(parseInt(r + r + g + g + b + b, 16));
     }
     throw new TypeError(
-      `invalid color '${c}': use a hex string like '#4682b4' or an [r,g,b] array of 0..1 sRGB values (named colors are not supported)`,
+      `invalid color '${c}': use a hex string like '#4682b4' or an [r,g,b] array of 0..1 values (named colors are not supported)`,
     );
   }
   if (typeof c === 'number' && Number.isInteger(c) && c >= 0 && c <= 0xffffff) {

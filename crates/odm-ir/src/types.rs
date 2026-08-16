@@ -55,7 +55,9 @@ impl Canonical for Mesh {
     }
 }
 
-/// Linear RGBA color.
+/// sRGB RGBA color, 0..1 — the space colors are authored in, and the only one
+/// anything outside the renderer sees. Do NOT convert to linear here: that
+/// happens once, when render data is built (`odm_render::flatten`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Color {
     pub r: f32,

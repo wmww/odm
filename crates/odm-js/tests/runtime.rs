@@ -96,8 +96,12 @@ fn basic_csg_build() {
     assert_eq!(node.name.as_deref(), Some("plate"));
     let mesh_hash = node.mesh.expect("solid output has geometry");
     assert!(matches!(&*w.store.get(mesh_hash).unwrap(), Object::Mesh(m) if m.triangle_count() > 0));
+    // Hex lands in the IR untouched: sRGB in, sRGB stored.
     let color = node.color.unwrap();
-    assert!(color.b > color.r, "#4682b4 should be blue-ish");
+    assert_eq!(
+        [color.r, color.g, color.b, color.a],
+        [0x46 as f32 / 255.0, 0x82 as f32 / 255.0, 0xb4 as f32 / 255.0, 1.0]
+    );
 }
 
 #[test]

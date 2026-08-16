@@ -10,10 +10,14 @@ unless marked otherwise.
 - Materials deferred: basic color only. Focus is CAD + simple animation;
   lighting/materials extendable later.
 - Colors (API review 2026-07-30): hex strings ('#rrggbb'/'#rgb') and
-  [r,g,b]/[r,g,b,1] sRGB arrays only. Named colors dropped — a curated
+  [r,g,b]/[r,g,b,1] arrays only. Named colors dropped — a curated
   subset agents must memorize is a trap ('aliceblue' is valid CSS but
   would error); 0xRRGGBB numbers dropped — indistinguishable from a
   plain integer by the time the parser sees it. One obvious way each.
+- Color space (2026-08-15): sRGB end to end — framework, IR, inspect.
+  Linear exists only inside `odm-render`'s flattener, where shading needs
+  it. `inspect` echoes hex back when the floats sit on 8-bit steps, so
+  "did my color apply" is string equality; agents never meet a color space.
 - Low-level types (vectors/matrices) are three.js; higher-level types
   (scene/objects) are ODM-owned API. Vendor only the three.js subset the
   framework actually uses.
