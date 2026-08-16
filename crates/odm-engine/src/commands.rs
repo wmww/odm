@@ -172,6 +172,15 @@ impl EngineState {
                 };
                 self.cmd_raycast(view, &r.rays, r.stats)
             }
+            Request::Clearance(r) => {
+                let view = ViewReq {
+                    path: r.path,
+                    inputs: r.inputs,
+                    preset: r.preset,
+                    view: r.view,
+                };
+                self.cmd_clearance(view, &r.pairs, r.stats)
+            }
             Request::Poll(_) | Request::Say(_) | Request::Ack => {
                 unreachable!("handled above")
             }
@@ -576,6 +585,28 @@ impl EngineState {
             .collect();
         let mut o = Map::new();
         o.insert("hits".into(), json!(hits));
+        Ok(view_response(&view, &result, &report, stats, o))
+    }
+
+    fn cmd_clearance(
+        &self,
+        req: ViewReq,
+        pairs: &[[String; 2]],
+        stats: bool,
+    ) -> Result<Value, CmdError> {
+        let (_sync, view, result, report) = self.query_view(&req)?;
+        let root = self.root_node(&result)?;
+        let engine = self.build_engine();
+        let clearances: Vec<Value> = pairs
+            .iter()
+            .map(|[a, b]| {
+                let c = scene::clearance(&engine.store, &engine.kernel, &root, a, b)
+                    .map_err(CmdError::bad_request)?;
+                Ok(json!({ "overlap": c.overlap, "gap_lower_bound": c.gap_lower_bound }))
+            })
+            .collect::<Result<_, CmdError>>()?;
+        let mut o = Map::new();
+        o.insert("clearances".into(), json!(clearances));
         Ok(view_response(&view, &result, &report, stats, o))
     }
 

@@ -87,7 +87,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   extrude/revolve (around Z), booleans/hull with per-operand transforms,
   weld with boundary-edge diagnosis (Manifold's own error is bare
   NotManifold), raycast (Manifold returns distance as a *fraction* of the
-  segment; kernel converts), volume/area/bounds, CancelToken
+  segment; kernel converts), clearance (exact overlap + AABB gap lower
+  bound; see notes/agent-surface.md), volume/area/bounds, CancelToken
   (ExecutionContext), Hash→Manifold cache with rebuild-from-store fallback.
   Segments are always explicit — kernel rejects <3; framework defaults:
   cylinder 64, sphere 48, revolve 64.
@@ -205,7 +206,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   headless), i.e. on every `published` change. It also owns its winit event
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
-  Commands: status/inspect/render/raycast, and poll/say/ack (see
+  Commands: status/inspect/render/raycast/clearance, and poll/say/ack (see
   "Talking to the agent"); every command except those three syncs first
   (no standalone `sync` — folded into `status` 2026-08). One grammar
   (2026-08, plans/cli-json-args.md): a CLI command's argument is the JSON

@@ -520,6 +520,65 @@ fn decompose(m: &Mat4) -> ([f64; 3], [f64; 3], [f64; 3]) {
     (position, rotation, scale)
 }
 
+// --- clearance ----------------------------------------------------------
+
+/// Mesh instances (hash + world transform) of a whole subtree. None if a
+/// child hash is missing from the store.
+fn collect_meshes(
+    store: &Store,
+    node: &Node,
+    parent: &Mat4,
+    out: &mut Vec<(Hash, Transform)>,
+) -> Option<()> {
+    let world = world_of(node, parent);
+    if let Some(h) = node.mesh {
+        out.push((h, Transform(world)));
+    }
+    for &c in &node.children {
+        let child = child_node(store, c)?;
+        collect_meshes(store, &child, &world, out)?;
+    }
+    Some(())
+}
+
+/// One `clearance` pair: both addresses resolved the way `inspect` resolves
+/// them, each node standing for its whole subtree. Errors are agent-facing.
+pub fn clearance(
+    store: &Store,
+    kernel: &Kernel,
+    root: &Node,
+    a: &str,
+    b: &str,
+) -> Result<odm_kernel::Clearance, String> {
+    let (id_a, node_a, parent_a) = locate(store, root, a)?;
+    let (id_b, node_b, parent_b) = locate(store, root, b)?;
+    if id_a == id_b {
+        return Err(format!("{a:?} and {b:?} are the same node (id {id_a:?})"));
+    }
+    // A node against its own ancestor shares that subtree's geometry —
+    // the question is malformed, not answerable.
+    let contains =
+        |outer: &str, inner: &str| outer.is_empty() || inner.starts_with(&format!("{outer}/"));
+    if contains(&id_a, &id_b) {
+        return Err(format!("{a:?} contains {b:?} — clearance needs disjoint nodes"));
+    }
+    if contains(&id_b, &id_a) {
+        return Err(format!("{b:?} contains {a:?} — clearance needs disjoint nodes"));
+    }
+    let meshes = |node: &Node, parent: &Mat4, addr: &str| -> Result<Vec<(Hash, Transform)>, String> {
+        let mut out = Vec::new();
+        collect_meshes(store, node, parent, &mut out)
+            .ok_or_else(|| "scene node missing from store".to_string())?;
+        if out.is_empty() {
+            return Err(format!("{addr:?} has no geometry"));
+        }
+        Ok(out)
+    };
+    let ma = meshes(&node_a, &parent_a, a)?;
+    let mb = meshes(&node_b, &parent_b, b)?;
+    kernel.clearance(&ma, &mb, None).map_err(|e| e.to_string())
+}
+
 // --- raycast ------------------------------------------------------------
 
 /// Inverse of an affine matrix (last row assumed [0,0,0,1]).
@@ -704,6 +763,50 @@ mod tests {
         assert_eq!(node.name.as_deref(), Some("link"));
         assert_eq!(parent, odm_render::math::IDENTITY);
         assert!(locate(&store, &root, "9").unwrap_err().contains("index path"));
+    }
+
+    #[test]
+    fn clearance_measures_named_subtrees() {
+        // Real solids: the kernel rebuilds Manifolds from stored meshes.
+        let store = Store::new();
+        let kernel = Kernel::new(store.clone());
+        let cube = kernel.cube(2.0, 2.0, 2.0, true).unwrap();
+        let part = |name: &str, x: f64| {
+            store.put(Object::Node(Node {
+                name: Some(name.into()),
+                transform: moved(x),
+                mesh: Some(cube),
+                ..Node::default()
+            }))
+        };
+        // A group's transform composes with its children's: "chain" is a
+        // subtree whose cube sits at world x = 7.
+        let chain = store.put(Object::Node(Node {
+            name: Some("chain".into()),
+            transform: moved(5.0),
+            children: vec![part("link", 2.0)],
+            ..Node::default()
+        }));
+        let empty = store.put(Object::Node(Node { name: Some("ghost".into()), ..Node::default() }));
+        let root =
+            Node { children: vec![part("seat", 0.0), chain, empty], ..Node::default() };
+
+        let c = clearance(&store, &kernel, &root, "seat", "chain").unwrap();
+        assert!(!c.overlap);
+        assert!((c.gap_lower_bound - 5.0).abs() < 1e-9, "{c:?}");
+        let c = clearance(&store, &kernel, &root, "seat", "1/0").unwrap();
+        assert!((c.gap_lower_bound - 5.0).abs() < 1e-9, "index paths address too: {c:?}");
+
+        let e = clearance(&store, &kernel, &root, "seat", "seat").unwrap_err();
+        assert!(e.contains("same node"), "{e}");
+        let e = clearance(&store, &kernel, &root, "chain", "link").unwrap_err();
+        assert!(e.contains("contains"), "{e}");
+        let e = clearance(&store, &kernel, &root, "", "seat").unwrap_err();
+        assert!(e.contains("contains"), "{e}");
+        let e = clearance(&store, &kernel, &root, "seat", "ghost").unwrap_err();
+        assert!(e.contains("no geometry"), "{e}");
+        let e = clearance(&store, &kernel, &root, "seat", "nope").unwrap_err();
+        assert!(e.contains("no node named"), "{e}");
     }
 
     #[test]

@@ -16,6 +16,7 @@ odm status                    # files, view slots and their build state
 odm inspect ['{…}']           # measure the scene / one node
 odm render  ['{…}']           # PNG → prints path
 odm raycast '{…}'             # nearest surface hit along rays
+odm clearance '{…}'           # per node pair: overlap? + gap lower bound
 odm poll [--timeout <sec>] [--follow]   # wait for messages from the user
 odm say <text>                # send a message to the user
 odm docs [<topic>]            # full reference (list topics when bare)
@@ -62,6 +63,12 @@ group's are the group's. Runs of identical siblings collapse into one
 entry with `repeat: N`; they differ only in placement. `"full": true`
 adds `verts`, `volume`, `area` and the node's own placement, and
 expands the repeats; `"fields"` picks exactly the columns you want.
+
+A misplaced part can look right from one camera angle. After assembly
+edits, `odm clearance '{"pairs": [["seat", "frame"]]}'` checks that
+parts actually meet: per pair, exact `overlap` and `gap_lower_bound`
+(a positive bound means they are at least that far apart; 0 only means
+their boxes touch). Details: `odm docs cli`.
 
 ## Rendering
 

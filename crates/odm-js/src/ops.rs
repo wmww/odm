@@ -221,6 +221,28 @@ pub fn op_raycast(
     Ok(hit.map(|h| RayHitJson { distance: h.distance, position: h.position, normal: h.normal }))
 }
 
+#[derive(Serialize)]
+struct ClearanceJson {
+    overlap: bool,
+    gap_lower_bound: f64,
+}
+
+#[op2]
+#[serde]
+pub fn op_clearance(
+    state: &mut OpState,
+    #[string] a: &str,
+    #[string] b: &str,
+) -> Result<ClearanceJson, JsErrorBox> {
+    let (a, b) = (parse_hash(a)?, parse_hash(b)?);
+    let s = sess(state);
+    let c = s
+        .kernel
+        .clearance(&[(a, Transform::IDENTITY)], &[(b, Transform::IDENTITY)], s.cancel.as_ref())
+        .map_err(kerr)?;
+    Ok(ClearanceJson { overlap: c.overlap, gap_lower_bound: c.gap_lower_bound })
+}
+
 // ---------- cascade / invoke / log ----------
 
 #[derive(Serialize)]
@@ -308,6 +330,7 @@ deno_core::extension!(
         op_area,
         op_bounds,
         op_raycast,
+        op_clearance,
         op_cascade_read,
         op_invoke,
         op_log,

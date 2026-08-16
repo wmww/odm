@@ -31,6 +31,37 @@ const b = part.bounds();
 const onTop = other.translate(0, 0, b.max.z - other.bounds().min.z);
 ```
 
+## s.clearance(other)
+
+Assembly check against another Solid — "are these attached / colliding":
+
+```js
+export default function build(ctx) {
+  const seat = odm.box([30, 20, 4]).translate(0, 0, 20); // underside at z=18
+  const post = odm.cylinder(2, 18, { center: false }); // reaches z=18
+  const c = seat.clearance(post);
+  // → { overlap: false, gap_lower_bound: 0 }
+  if (!c.overlap && c.gap_lower_bound > 0) {
+    throw new Error(`seat is floating ${c.gap_lower_bound} away from its post`);
+  }
+  return [seat, post];
+}
+```
+
+- `overlap` is exact: `true` iff the two solids share volume
+  (interpenetrate). Exact surface contact is not overlap.
+- `gap_lower_bound` only bounds the gap from below — it comes from
+  bounding boxes, so it is 0 whenever the boxes touch: contact,
+  interpenetration, *and* interlocking parts with real clearance all
+  read 0. A **positive** value is a guarantee: the parts are at least
+  that far apart — the "seat drifted 15 cm off its mounts" answer.
+- There is no signed distance: overlap depth is a different, harder
+  query than gap.
+
+Throwing on a failed fit (as above) makes a doohickey assert its own
+assembly. The CLI twin is `odm clearance` — same result shape, node
+pairs by name, whole subtrees per node (`odm docs cli`).
+
 ## s.raycast(origin, dir, maxDist?)
 
 Nearest surface hit of the ray from `origin` along `dir`, within

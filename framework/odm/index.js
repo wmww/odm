@@ -257,6 +257,21 @@ export class Solid extends transformable(SceneValue) {
     };
   }
 
+  /**
+   * Assembly check against another Solid: `{ overlap, gap_lower_bound }`.
+   * `overlap` is exact (shared volume); `gap_lower_bound` only bounds the
+   * gap from below (from bounding boxes), so 0 means "close or touching",
+   * not necessarily contact. Both solids in their current frames.
+   */
+  clearance(other) {
+    if (!(other instanceof Solid)) {
+      throw new TypeError(
+        `clearance takes a Solid (got ${other?.constructor?.name ?? typeof other})`,
+      );
+    }
+    return ops().op_clearance(this._baked(), other._baked());
+  }
+
   _toIR() {
     return {
       ...(this._name !== null && { name: this._name }),

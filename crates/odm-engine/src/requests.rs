@@ -18,6 +18,7 @@ pub(crate) enum Request {
     Inspect(InspectReq),
     Render(RenderReq),
     Raycast(RaycastReq),
+    Clearance(ClearanceReq),
     Poll(PollReq),
     Say(SayReq),
     /// "I have the messages the last poll on this connection gave me." Sent by
@@ -128,6 +129,20 @@ pub(crate) struct Ray {
 
 fn default_max_dist() -> f64 {
     1e9
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ClearanceReq {
+    pub path: Option<String>,
+    #[serde(default)]
+    pub inputs: Map<String, Value>,
+    pub preset: Option<String>,
+    pub view: Option<ViewSel>,
+    /// Node pairs, addressed the way `inspect` addresses nodes.
+    pub pairs: Vec<[String; 2]>,
+    #[serde(default)]
+    pub stats: bool,
 }
 
 #[derive(Deserialize)]
@@ -311,6 +326,27 @@ const SPECS: &[CommandSpec] = &[
         hidden: false,
     },
     CommandSpec {
+        name: "clearance",
+        summary: "assembly check: per pair of nodes, do they overlap, and at least how far \
+                  apart are they",
+        view: true,
+        fields: &[f(
+            "pairs",
+            "array",
+            "node pairs to check, each `[\"a\", \"b\"]` (names or index paths, as `inspect` \
+             addresses them; each node stands for its whole subtree); all against the \
+             request's one view, answered in order — `clearances` holds `{overlap, \
+             gap_lower_bound}` per pair. `overlap` is exact (shared volume); \
+             `gap_lower_bound` is from bounding boxes, so 0 means \"close or touching\", not \
+             necessarily contact",
+        )],
+        js_twin: Some(
+            "`a.clearance(b)` on Solids — same result shape; the CLI addresses nodes and \
+             maps over `pairs`",
+        ),
+        hidden: false,
+    },
+    CommandSpec {
         name: "poll",
         summary: "wait for messages the user typed in the viewer",
         view: false,
@@ -423,6 +459,7 @@ pub(crate) fn parse(req: Value) -> Result<Request, CmdError> {
         "inspect" => Request::Inspect(de(cmd, obj)?),
         "render" => Request::Render(de(cmd, obj)?),
         "raycast" => Request::Raycast(de(cmd, obj)?),
+        "clearance" => Request::Clearance(de(cmd, obj)?),
         "poll" => Request::Poll(de(cmd, obj)?),
         "say" => Request::Say(de(cmd, obj)?),
         "ack" => Request::Ack,
@@ -569,6 +606,22 @@ mod tests {
     }
 
     #[test]
+    fn clearance_takes_pairs_of_addresses() {
+        match parse_str(r#"{"cmd":"clearance","pairs":[["seat","chainL"],["seat","1/0"]]}"#) {
+            Ok(Request::Clearance(r)) => {
+                assert_eq!(r.pairs.len(), 2);
+                assert_eq!(r.pairs[0], ["seat".to_string(), "chainL".to_string()]);
+            }
+            other => panic!("{:?}", other.err()),
+        }
+        let e = parse_str(r#"{"cmd":"clearance"}"#).err().unwrap();
+        assert!(e.contains("pairs"), "{e}");
+        // A pair is exactly two addresses.
+        let e = parse_str(r#"{"cmd":"clearance","pairs":[["a","b","c"]]}"#).err().unwrap();
+        assert!(e.contains("pairs[0]"), "{e}");
+    }
+
+    #[test]
     fn view_takes_true_or_a_slot() {
         assert!(matches!(
             parse_str(r#"{"cmd":"inspect","view":true}"#),
@@ -608,6 +661,7 @@ mod tests {
                 "inputs" => json!({"t": 1.5}),
                 "view" => json!(true),
                 "rays" => json!([{"origin": [0.0, 0.0, 9.0], "dir": [0.0, 0.0, -1.0]}]),
+                "pairs" => json!([["seat", "chainL"]]),
                 "fields" => json!(["name", "bounds"]),
                 _ if f.ty == "number" => json!(32.0),
                 _ if f.ty == "bool" => json!(true),

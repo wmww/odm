@@ -60,7 +60,7 @@ they never change what the viewer shows.
 ## Commands
 
 <!--- BEGIN GENERATED COMMAND REFERENCE --->
-Request fields every view-targeting command (inspect, render, raycast) shares:
+Request fields every view-targeting command (inspect, render, raycast, clearance) shares:
 
 - `path` (string) — the doohickey to build (default `root.js`)
 - `inputs` (object) — input values by name, e.g. `{"t": 1.5}`; plain inputs of the target become view args, everything else a view-level cascade value — a name nothing reads is an error listing the settable inputs
@@ -110,6 +110,14 @@ nearest surface hit along each ray.
 - `rays` (array) — rays to fire, each `{"origin": [x,y,z], "dir": [x,y,z]}` (optional `"max_dist"`); all against the request's one view, answered in order — `hits` holds `{id, name, distance, point, normal}` or `null` per ray
 
 JS twin: `s.raycast(origin, dir, maxDist?)` — same query, same result shape; the CLI adds `id`/`name` per hit and maps over `rays`.
+
+### clearance
+
+assembly check: per pair of nodes, do they overlap, and at least how far apart are they.
+
+- `pairs` (array) — node pairs to check, each `["a", "b"]` (names or index paths, as `inspect` addresses them; each node stands for its whole subtree); all against the request's one view, answered in order — `clearances` holds `{overlap, gap_lower_bound}` per pair. `overlap` is exact (shared volume); `gap_lower_bound` is from bounding boxes, so 0 means "close or touching", not necessarily contact
+
+JS twin: `a.clearance(b)` on Solids — same result shape; the CLI addresses nodes and maps over `pairs`.
 
 ### poll
 
@@ -234,6 +242,7 @@ not in this set: it has no JS twin (in JS you hold the object graph).
 | CLI | JS twin |
 |-----|---------|
 | `raycast` | `s.raycast(origin, dir, maxDist?)` (`odm docs queries`) |
+| `clearance` | `a.clearance(b)` (`odm docs queries`) |
 
 ### raycast
 
@@ -247,6 +256,28 @@ part", `inspect` is the better tool.
 odm raycast '{"rays": [{"origin": [0, 0, 50], "dir": [0, 0, -1]},
                        {"origin": [40, 0, 8], "dir": [-1, 0, 0], "max_dist": 25}]}'
 ```
+
+### clearance
+
+The assembly self-check: "is A attached to B / do these collide". Each
+pair is two nodes (names or index paths, as `inspect` addresses them),
+each standing for its whole subtree; `clearances` answers per pair, in
+order:
+
+```
+odm clearance '{"pairs": [["seat", "chainL"], ["seat", "chainR"]], "inputs": {"t": 1.5}}'
+```
+
+Per pair: `{"overlap": bool, "gap_lower_bound": n}`. `overlap` is exact
+(the solids share volume — exact surface contact is not overlap).
+`gap_lower_bound` only bounds the gap from below (bounding boxes): a
+**positive** value guarantees the parts are at least that far apart —
+misplaced-part bugs read as a surprising gap here — while 0 just means
+the boxes touch (contact, interpenetration, and interlocking parts with
+real clearance all read 0). There is no signed distance.
+
+One command checks a whole assembly's contact pairs after an edit, and
+`inputs` lets you check at animation extremes.
 
 ## Talking with the user
 

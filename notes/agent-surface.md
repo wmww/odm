@@ -41,9 +41,9 @@ use; "set" read imperative).
 
 ## Geometry queries: flat toplevel, JS parity
 
-Kernel geometry queries (`raycast` today; distances, sections, mass
-properties later — see plans/clearance.md) are plain toplevel commands
-sharing the JSON grammar. Standing decisions:
+Kernel geometry queries (`raycast`, `clearance` today; sections, mass
+properties maybe later) are plain toplevel commands sharing the JSON
+grammar. Standing decisions:
 
 - **No `query` namespace** — a prefix is a classification the agent must
   remember, costs a word per call; command count is the cheapest surface
@@ -62,6 +62,24 @@ sharing the JSON grammar. Standing decisions:
   memoized build makes the second nearly free.
 - `inspect` is not in the parity set — no JS twin (in JS you hold the
   object graph); simply absent from the JS-twin table.
+- **`clearance` is honest per tier** (2026-08, from plans/clearance.md;
+  motivated by the live-test bug where a seat sat 15 cm from its chains
+  and rendered fine from the default angle): per pair `{overlap,
+  gap_lower_bound}` — overlap exact (Manifold intersection volume,
+  pairwise over the operands whose AABBs touch), the gap only bounded
+  from below by AABB distance (0 = boxes touch, NOT contact — think
+  interlocking L-shapes). Deliberately no signed distance and no exact
+  min distance: exact distance needs a custom triangle-BVH in
+  odm-kernel (manifold-csg 0.3.3 has no distance query) — build it only
+  if tiers 1+2 prove insufficient in practice, and even then min
+  distance is 0 under overlap, never negative (penetration depth is a
+  different, harder query). Result keys are `gap_lower_bound` in *both*
+  surfaces — parity of result shape beats JS camelCase. CLI errors on a
+  pair where one node contains the other, and on nodes with no
+  geometry. A weaker complementary idea (build-report lint flagging
+  subtrees whose bounds touch nothing — "floating part") was left
+  unbuilt: heuristic, false-positives on grounded/intentionally-gapped
+  parts.
 
 ## Standing cuts (don't reintroduce)
 

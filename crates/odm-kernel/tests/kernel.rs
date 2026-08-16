@@ -143,6 +143,66 @@ fn raycast_hits_and_misses() {
 }
 
 #[test]
+fn clearance_gap_overlap_and_touch() {
+    let store = Store::new();
+    let k = Kernel::new(store);
+    let cube = k.cube(2.0, 2.0, 2.0, true).unwrap();
+    let id = Transform::IDENTITY;
+
+    // Separated along x by 3 between face planes: the AABB gap is exact here.
+    let c = k.clearance(&[(cube, id)], &[(cube, translation(5.0, 0.0, 0.0))], None).unwrap();
+    assert!(!c.overlap);
+    assert!((c.gap_lower_bound - 3.0).abs() < 1e-9, "{c:?}");
+
+    // Diagonal separation: componentwise distance, still a true lower bound.
+    let c = k.clearance(&[(cube, id)], &[(cube, translation(5.0, 6.0, 0.0))], None).unwrap();
+    assert!(!c.overlap);
+    assert!((c.gap_lower_bound - (9.0f64 + 16.0).sqrt()).abs() < 1e-9, "{c:?}");
+
+    // Interpenetrating.
+    let c = k.clearance(&[(cube, id)], &[(cube, translation(1.0, 0.0, 0.0))], None).unwrap();
+    assert!(c.overlap && c.gap_lower_bound == 0.0, "{c:?}");
+
+    // Exact face contact: no shared volume, and the boxes touch.
+    let c = k.clearance(&[(cube, id)], &[(cube, translation(2.0, 0.0, 0.0))], None).unwrap();
+    assert!(!c.overlap && c.gap_lower_bound == 0.0, "{c:?}");
+
+    // AABBs overlap while the solids don't (sphere in a box corner region):
+    // overlap must be decided on real geometry, not boxes.
+    // Center 1.386 from the cube's corner (radius 1), AABBs overlapping.
+    let ball = k.sphere(1.0, 32).unwrap();
+    let c = k.clearance(&[(cube, id)], &[(ball, translation(1.8, 1.8, 1.8))], None).unwrap();
+    assert!(!c.overlap && c.gap_lower_bound == 0.0, "{c:?}");
+
+    // Multi-operand sides: only the near pair decides.
+    let c = k
+        .clearance(
+            &[(cube, id), (cube, translation(-10.0, 0.0, 0.0))],
+            &[(cube, translation(1.5, 0.0, 0.0)), (cube, translation(20.0, 0.0, 0.0))],
+            None,
+        )
+        .unwrap();
+    assert!(c.overlap, "{c:?}");
+}
+
+#[test]
+fn clearance_rejects_empty_sides() {
+    let store = Store::new();
+    let k = Kernel::new(store);
+    let cube = k.cube(1.0, 1.0, 1.0, true).unwrap();
+    // An empty solid (a difference that removes everything) has no bounds.
+    let empty = k
+        .boolean(
+            BoolOp::Difference,
+            &[(cube, Transform::IDENTITY), (k.cube(9.0, 9.0, 9.0, true).unwrap(), Transform::IDENTITY)],
+            None,
+        )
+        .unwrap();
+    let e = k.clearance(&[(cube, Transform::IDENTITY)], &[(empty, Transform::IDENTITY)], None);
+    assert!(e.unwrap_err().to_string().contains("non-empty"), "empty side must error");
+}
+
+#[test]
 fn cache_reconstruction_from_store() {
     let store = Store::new();
     let k = Kernel::new(store.clone());

@@ -95,6 +95,16 @@ pub struct Bounds {
     pub max: [f64; 3],
 }
 
+/// The `clearance` answer. `overlap` is exact (shared volume); the gap is
+/// only bounded from below, from bounding boxes — 0 means "boxes touch",
+/// which covers contact, interpenetration *and* interlocking parts with
+/// real clearance between them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Clearance {
+    pub overlap: bool,
+    pub gap_lower_bound: f64,
+}
+
 pub struct Kernel {
     store: Arc<Store>,
     cache: Mutex<HashMap<Hash, Arc<Manifold>>>,
@@ -245,6 +255,59 @@ impl Kernel {
         Ok(self.manifold(h)?.surface_area())
     }
 
+    /// Clearance between two sets of (transformed) solids: do they share
+    /// volume, and a lower bound on the gap between them. The bound comes
+    /// from world AABBs, so it is cheap and safe but weak: 0 only means the
+    /// boxes touch. `overlap` is exact — decided pairwise on the operands
+    /// whose boxes touch (intersection distributes over each side's union),
+    /// so far-apart sides never pay for CSG.
+    pub fn clearance(
+        &self,
+        a: &[(Hash, Transform)],
+        b: &[(Hash, Transform)],
+        cancel: Option<&CancelToken>,
+    ) -> Result<Clearance> {
+        let boxes = |ops: &[(Hash, Transform)]| -> Result<Vec<Option<Bounds>>> {
+            ops.iter().map(|(h, t)| Ok(self.bounds(*h)?.map(|b| transformed_aabb(&b, t)))).collect()
+        };
+        let (ba, bb) = (boxes(a)?, boxes(b)?);
+        let merge = |bs: &[Option<Bounds>]| -> Option<Bounds> {
+            bs.iter().flatten().copied().reduce(|mut acc, b| {
+                for k in 0..3 {
+                    acc.min[k] = acc.min[k].min(b.min[k]);
+                    acc.max[k] = acc.max[k].max(b.max[k]);
+                }
+                acc
+            })
+        };
+        let (Some(abox), Some(bbox)) = (merge(&ba), merge(&bb)) else {
+            return Err(KernelError::Other("clearance needs non-empty solids on both sides".into()));
+        };
+        let gap = aabb_gap(&abox, &bbox);
+        if gap > 0.0 {
+            return Ok(Clearance { overlap: false, gap_lower_bound: gap });
+        }
+        for (i, (ha, ta)) in a.iter().enumerate() {
+            let Some(ka) = ba[i] else { continue };
+            let touching: Vec<usize> = (0..b.len())
+                .filter(|&j| bb[j].is_some_and(|kb| aabb_gap(&ka, &kb) == 0.0))
+                .collect();
+            if touching.is_empty() {
+                continue;
+            }
+            let ma = self.transformed_manifold(*ha, *ta)?;
+            for j in touching {
+                let (hb, tb) = b[j];
+                let mb = self.transformed_manifold(hb, tb)?;
+                let inter = self.evaluated(ma.boolean(&mb, OpType::Intersect), cancel)?;
+                if inter.volume() > 0.0 {
+                    return Ok(Clearance { overlap: true, gap_lower_bound: 0.0 });
+                }
+            }
+        }
+        Ok(Clearance { overlap: false, gap_lower_bound: 0.0 })
+    }
+
     /// Nearest hit of the ray `origin + t*dir` for `t in [0, max_dist]`, in
     /// the solid's local space.
     pub fn raycast(
@@ -292,19 +355,25 @@ impl Kernel {
 
     // --- internals ---
 
-    /// Evaluate a manifold, store its mesh, cache it, return the hash.
-    fn intern(&self, m: Manifold, cancel: Option<&CancelToken>) -> Result<Hash> {
-        let evaluated = match cancel {
+    /// Force evaluation (under the cancel context when given) and surface
+    /// CSG failures.
+    fn evaluated(&self, m: Manifold, cancel: Option<&CancelToken>) -> Result<Manifold> {
+        match cancel {
             Some(tok) => {
                 let ctx_bound = m.with_context(&tok.0);
                 ctx_bound.status().map_err(|e| csg_err(e, Some(tok)))?;
-                ctx_bound
+                Ok(ctx_bound)
             }
             None => {
                 m.status().map_err(|e| csg_err(e, None))?;
-                m
+                Ok(m)
             }
-        };
+        }
+    }
+
+    /// Evaluate a manifold, store its mesh, cache it, return the hash.
+    fn intern(&self, m: Manifold, cancel: Option<&CancelToken>) -> Result<Hash> {
+        let evaluated = self.evaluated(m, cancel)?;
         let gl = evaluated.to_meshgl();
         // A cancel landing between status() and to_meshgl() may truncate the
         // mesh; don't intern junk into the content store.
@@ -354,6 +423,40 @@ impl Kernel {
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|h, _| self.store.contains(*h));
     }
+}
+
+/// AABB of a transformed AABB (all 8 corners through the affine matrix;
+/// column-major, translation in elements 12..15).
+fn transformed_aabb(b: &Bounds, t: &Transform) -> Bounds {
+    if t.is_identity() {
+        return *b;
+    }
+    let e = &t.0;
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for i in 0..8 {
+        let c = [
+            if i & 1 == 0 { b.min[0] } else { b.max[0] },
+            if i & 2 == 0 { b.min[1] } else { b.max[1] },
+            if i & 4 == 0 { b.min[2] } else { b.max[2] },
+        ];
+        for k in 0..3 {
+            let p = e[k] * c[0] + e[4 + k] * c[1] + e[8 + k] * c[2] + e[12 + k];
+            min[k] = min[k].min(p);
+            max[k] = max[k].max(p);
+        }
+    }
+    Bounds { min, max }
+}
+
+/// Distance between two AABBs (0 when they touch or overlap).
+fn aabb_gap(a: &Bounds, b: &Bounds) -> f64 {
+    let mut sq = 0.0;
+    for k in 0..3 {
+        let d = (a.min[k] - b.max[k]).max(b.min[k] - a.max[k]).max(0.0);
+        sq += d * d;
+    }
+    sq.sqrt()
 }
 
 fn check_segments(segments: i32) -> Result<()> {

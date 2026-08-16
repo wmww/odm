@@ -57,7 +57,9 @@ Rotations and scales happen about the **origin** unless you pass
 parts relative to computed geometry, never eyeball dimensions:
 `.volume()`, `.area()`, `.bounds()` → `THREE.Box3 | null`,
 `.raycast(origin, dir, maxDist?)` →
-`{distance, point: Vector3, normal: Vector3} | null`.
+`{distance, point: Vector3, normal: Vector3} | null`,
+`.clearance(other)` → `{overlap, gap_lower_bound}` (overlap exact; the
+gap only bounded from below — assert your assembly's fit).
 
 ## Composition
 

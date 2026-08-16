@@ -7,7 +7,8 @@ discussions that followed. Cross-references note where plans touch.
   partial requests merged over the base, one captioned tiled PNG.
 - `render-camera.md` — `look` as the one camera field; render adopts the
   viewer tab's camera on `view`.
-- `clearance.md` — "do these parts touch" assembly queries.
+- `agent-activity-view.md` — viewer cards showing the agent's last CLI
+  action (render/raycast/inspect) behind the chat transcript.
 
 Done and deleted: `cli-diet.md` (surface cuts + the prompt-vs-docs policy —
 now `notes/agent-surface.md`); `render-workflow.md` (superseded by
@@ -16,4 +17,7 @@ now `notes/agent-surface.md`); `render-workflow.md` (superseded by
 `selection`/`prompt` removed, `set` → `inputs`; the standing rules are
 in `notes/agent-surface.md`); `renderer-transparency.md` (executed
 2026-08-16 — depth-peeled translucency, no MSAA, unified line path; see
-notes/architecture.md's odm-render entry).
+notes/architecture.md's odm-render entry); `clearance.md` (landed
+2026-08-16 — `odm clearance` + `a.clearance(b)`, tiers 1+2 only; the tier
+rationale and the deferred exact-distance tier are in
+`notes/agent-surface.md`).

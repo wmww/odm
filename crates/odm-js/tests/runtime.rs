@@ -607,6 +607,11 @@ fn queries_work_inside_build() {
             if (Math.abs(hit.distance - 4) > 1e-9) throw new Error('ray ' + JSON.stringify(hit));
             const miss = s.translate(10, 0, 0).raycast([0, 0, 5], [0, 0, -1]);
             if (miss !== null) throw new Error('expected miss');
+            const c = s.clearance(s.translate(5, 0, 0));
+            if (c.overlap || Math.abs(c.gap_lower_bound - 3) > 1e-9) {
+                throw new Error('clearance ' + JSON.stringify(c));
+            }
+            if (!s.clearance(s.translate(1, 0, 0)).overlap) throw new Error('expected overlap');
             return s;
         }
         "#,
