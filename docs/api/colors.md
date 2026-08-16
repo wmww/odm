@@ -29,5 +29,5 @@ half strength, whatever colors they have. Effective alpha of a solid =
 its color's alpha × the product of its ancestors' opacities. Chained
 calls multiply: `.opacity(0.5).opacity(0.5)` is `.opacity(0.25)`.
 
-For a whole-render x-ray, prefer `odm render --opacity 0.3` (or the
+For a whole-render x-ray, prefer `odm render '{"opacity": 0.3}'` (or the
 viewer's View ▸ X-Ray) over touching the model.

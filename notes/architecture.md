@@ -166,17 +166,17 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   depth discards — no double-darkening, but stacked identical surfaces
   don't accumulate). Translucent mesh passes cull back faces: a 30% solid
   reads as one veil. Effective alpha = color.a × opacity product ×
-  `RenderOptions.opacity` (x-ray; CLI `--opacity`, viewer View ▸ X-Ray at
-  0.3); partition ≥1 → opaque, <1 → peeled. **All lines are translucent**:
-  wires and grid share one line-quad path (instance = endpoint pair,
-  widened to per-slot pixel width + half-pixel analytic-AA feather;
+  `RenderOptions.opacity` (x-ray; render request `opacity`, viewer
+  View ▸ X-Ray at 0.3); partition ≥1 → opaque, <1 → peeled. **All lines
+  are translucent**: wires and grid share one line-quad path (instance =
+  endpoint pair, widened to per-slot pixel width + half-pixel AA feather;
   coverage alpha; grid minors also fade by projected line spacing —
   smoothstep 2..8 output px — so dense regions melt instead of moiréing);
   `pick_wire` does the matching screen-space selection. Wireframe mode =
   skip the fill passes. **No MSAA** (dropped deliberately — silhouettes
   stay aliased for the retro look; the artifacts that hurt were grid moiré
   and wireframe speckle, fixed by the AA/fade above, not by MSAA);
-  `RenderOptions.supersample` (CLI `--supersample`, default 1) renders k×
+  `RenderOptions.supersample` (request `supersample`, default 1) renders k×
   larger internally (premultiplied compose → box downsample; internal size
   validated against the device texture cap) for AA on demand. Perf (debug
   build, 2026-08-16): 400-sphere full x-ray ≈ same ~80 ms CLI round-trip
