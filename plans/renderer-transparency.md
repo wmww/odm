@@ -21,7 +21,8 @@ shine through) all compose without hacks.
   speckle) are *not* fixed by 4× MSAA and need shader-level treatment.
   Door left open via an optional integer `supersample` render option
   (default 1) — render k× larger, box-downsample at the end. Orthogonal to
-  everything else.
+  everything else. Validate k×width/height (the internal target, not the
+  requested size) against the device max texture dimension.
 - **The grid stops being special** — same kind of thing as a wireframe.
   Grid and wires render through one line-quad path as ordinary geometry.
   Grid lines get analytic AA (coverage alpha) + per-fragment density fade
@@ -40,19 +41,42 @@ shine through) all compose without hacks.
 ### Pass list
 1. **Opaque**: opaque instances → color + depth. Single-sample everything.
 2. **Translucent peel**: the translucent set = translucent surfaces + all
-   line geometry (grid, wires). N front-to-back peel passes (start N=4):
-   pass i discards fragments at-or-nearer-than peel depth i−1 (sampled from
-   a texture) or behind the opaque depth; depth test picks the nearest
-   remaining layer; composite each layer *under* the accumulated
-   premultiplied color. Two peel-depth textures ping-pong (can't sample the
-   depth being written). Tail: one final unsorted blended pass for layers
-   past N, so worst cases degrade gracefully instead of dropping geometry.
+   line geometry (grid, wires). N front-to-back peel layers (start N=4),
+   each layer being *two* passes:
+   - Geometry pass into a scratch layer texture (cleared transparent,
+     blend **replace**): discard fragments at-or-nearer-than peel depth
+     i−1 (sampled from a texture) or at-or-behind the opaque depth; depth
+     test picks the nearest remaining fragment. Replace + depth write is
+     what isolates the single nearest fragment — blending *during* this
+     pass would be wrong (every fragment that passes the depth test blends,
+     not just the final winner, double-compositing within one layer).
+   - Fullscreen pass compositing the scratch layer *under* the accumulated
+     premultiplied color.
+   Two peel-depth textures ping-pong (can't sample the depth being
+   written). Tail: one final unsorted geometry pass for layers past N,
+   blending under the accumulation directly (order = draw order), so worst
+   cases degrade gracefully instead of dropping geometry.
 3. **Overlays** (future, not this plan): outline/gizmo composites sampling
    opaque depth for visible-vs-hidden styling.
 4. **Downsample** when `supersample > 1`.
 
 Deterministic throughout: fixed draw order, peeling exact per pixel;
 equal-depth ties resolve by draw order, which is stable.
+
+**Depth invariance is load-bearing**: peeling only works if the same
+triangle produces bit-identical depths in every pass — a ±1ulp difference
+and the already-peeled surface re-wins each layer (duplicated/darkened
+layers). WebGPU guarantees position invariance only within one pipeline, so:
+one peel geometry pipeline reused for all N layers (only bind groups
+ping-pong), and `@invariant` on the position builtin so the tail pipeline
+(different blend state) agrees too.
+
+**Coplanar ties collapse to one layer, by design**: a fragment exactly at
+the peel depth is discarded in every later layer *and* the tail, so
+coincident translucent surfaces render once, not darker. This is a feature
+— grid line crossings don't double-darken, z-fighting translucent faces
+don't stipple — but note it: stacked identical translucent geometry does
+not accumulate opacity.
 
 ### Lines
 One line-quad path (today's `vs_wire` screen-space quads) serves wires and
@@ -67,11 +91,14 @@ hidden-lines wireframe style is a future overlay, not this plan.
 ### Alpha semantics (confirm at implementation)
 - Node color stays RGBA with replace-wins inheritance; alpha now accepted
   (`[r,g,b,a]`, `#rrggbbaa`) — delete the parseColor guard.
-- New optional node `opacity`, **multiplicative down the tree** (SVG-like):
-  effective alpha = color.a × product of ancestor opacities. This is what
-  "make this subassembly translucent" means; color replace-wins alone can't
-  express it. JS: `.opacity(x)` on scene values. IR: optional f32 on Node,
-  hashes like color.
+- New optional node `opacity`, **multiplicative down the tree**: effective
+  alpha = color.a × product of ancestor opacities. This is what "make this
+  subassembly translucent" means; color replace-wins alone can't express
+  it. Note this is *not* SVG group opacity (which isolates the group via
+  offscreen compositing, hiding siblings from each other): here a 50%
+  subassembly shows its internals through each other — the x-ray behavior
+  we actually want, and far simpler. JS: `.opacity(x)` on scene values.
+  IR: optional f32 on Node, hashes like color.
 - X-ray: `RenderOptions.opacity` multiplier over all instances; an
   `opacity` field in the render request (`cli-json-args.md`); viewer menu
   toggle next to wireframe.
@@ -111,6 +138,10 @@ assumption only through this simpler signature.
   transparent-background PNG alpha values.
 - Determinism: repeat-render byte equality with interpenetrating translucent
   objects (the case sorting gets wrong and peeling must not).
+- Invariance canary: a single translucent surface must render identically at
+  N=1 and N=4 (layers 2..N empty). Catches the re-peel failure mode — if
+  depths aren't bit-identical across passes, the same surface composites
+  once per layer and the image darkens with N.
 - Perf sanity at CAD scale: translucent set drawn N+1 times is fine for
   target scenes; note measured numbers in spike-findings when done.
 
