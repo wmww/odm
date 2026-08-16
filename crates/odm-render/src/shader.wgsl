@@ -1,7 +1,8 @@
 struct Globals {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
-    // xy = viewport size in pixels; zw unused.
+    // xy = internal viewport size in pixels, z = supersample factor
+    // (screen-space pixel measures divide by z to stay in output pixels).
     viewport: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -23,6 +24,9 @@ struct InstanceData {
 @group(3) @binding(0) var layer_tex: texture_2d<f32>;
 @group(3) @binding(1) var accum_tex: texture_2d<f32>;
 @group(3) @binding(2) var opaque_tex: texture_2d<f32>;
+// Supersampled premultiplied compose result + its factor k.
+@group(3) @binding(3) var super_tex: texture_2d<f32>;
+@group(3) @binding(4) var<uniform> super_k: vec4<u32>;
 
 struct VsOut {
     // @invariant: peeling compares depths of the same triangle across
@@ -109,7 +113,7 @@ fn vs_wire(
         let cn = globals.view_proj * vec4<f32>(end + perp, 1.0);
         let here = clip.xy / max(clip.w, eps) * half_px;
         let there = cn.xy / max(cn.w, eps) * half_px;
-        out.fade = smoothstep(2.0, 8.0, distance(here, there));
+        out.fade = smoothstep(2.0, 8.0, distance(here, there) / globals.viewport.z);
     }
     return out;
 }
@@ -192,16 +196,43 @@ fn fs_layer(in: FsQuad) -> @location(0) vec4<f32> {
     return textureLoad(layer_tex, vec2<i32>(in.pos.xy), 0);
 }
 
+fn compose_at(px: vec2<i32>) -> vec4<f32> {
+    let acc = textureLoad(accum_tex, px, 0);
+    return acc + (1.0 - acc.a) * textureLoad(opaque_tex, px, 0);
+}
+
+fn unpremultiply(c: vec4<f32>) -> vec4<f32> {
+    if (c.a <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(c.rgb / c.a, c.a);
+}
+
 // Final compose: translucent accumulation over the opaque pass (both
 // premultiplied; the opaque target was cleared to the premultiplied
 // background), un-premultiplied for the sRGB target.
 @fragment
 fn fs_compose(in: FsQuad) -> @location(0) vec4<f32> {
-    let px = vec2<i32>(in.pos.xy);
-    let acc = textureLoad(accum_tex, px, 0);
-    let c = acc + (1.0 - acc.a) * textureLoad(opaque_tex, px, 0);
-    if (c.a <= 0.0) {
-        return vec4<f32>(0.0);
+    return unpremultiply(compose_at(vec2<i32>(in.pos.xy)));
+}
+
+// Supersampled variant: same compose, kept premultiplied linear so the
+// downsample can average correctly.
+@fragment
+fn fs_compose_premul(in: FsQuad) -> @location(0) vec4<f32> {
+    return compose_at(vec2<i32>(in.pos.xy));
+}
+
+// Box-downsample k x k premultiplied texels into one output pixel.
+@fragment
+fn fs_downsample(in: FsQuad) -> @location(0) vec4<f32> {
+    let k = super_k.x;
+    let base = vec2<u32>(in.pos.xy) * k;
+    var sum = vec4<f32>(0.0);
+    for (var y = 0u; y < k; y++) {
+        for (var x = 0u; x < k; x++) {
+            sum += textureLoad(super_tex, vec2<i32>(base + vec2<u32>(x, y)), 0);
+        }
     }
-    return vec4<f32>(c.rgb / c.a, c.a);
+    return unpremultiply(sum / f32(k * k));
 }

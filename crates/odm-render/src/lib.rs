@@ -83,6 +83,10 @@ pub struct RenderOptions {
     /// an unsorted tail pass). The default suits CAD scenes; tests use 1 to
     /// pin depth invariance.
     pub peel_layers: u32,
+    /// Render k x larger internally, box-downsample at the end (default 1 =
+    /// off; there is no AA otherwise). The internal target must fit the
+    /// device's max texture dimension.
+    pub supersample: u32,
 }
 
 impl RenderOptions {
@@ -96,6 +100,7 @@ impl RenderOptions {
             background: [0.055, 0.058, 0.065, 1.0],
             opacity: 1.0,
             peel_layers: 4,
+            supersample: 1,
         }
     }
 }

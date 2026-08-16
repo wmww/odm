@@ -80,6 +80,8 @@ pub(crate) struct RenderReq {
     pub no_grid: bool,
     /// X-ray: multiplied into every instance's alpha. 0..=1.
     pub opacity: Option<f64>,
+    /// Render k x larger internally, box-downsample at the end.
+    pub supersample: Option<f64>,
     #[serde(default)]
     pub ortho: bool,
     pub eye: Option<[f64; 3]>,
@@ -263,6 +265,13 @@ const SPECS: &[CommandSpec] = &[
                 "number",
                 "x-ray, 0..=1: multiplies every object's alpha, so everything turns \
                  translucent and interiors show through",
+            ),
+            f(
+                "supersample",
+                "number",
+                "render k\u{d7} larger internally and box-downsample: anti-aliasing on \
+                 demand, none by default (integer 1..=8; k\u{d7}width/height must fit \
+                 the GPU's texture limit)",
             ),
             f("ortho", "bool", "orthographic projection"),
             f(

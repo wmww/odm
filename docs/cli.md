@@ -94,6 +94,7 @@ render a PNG; prints its path.
 - `wireframe` (bool) — edges only, in each object's own color — surfaces are not drawn
 - `no_grid` (bool) — hide the ground grid
 - `opacity` (number) — x-ray, 0..=1: multiplies every object's alpha, so everything turns translucent and interiors show through
+- `supersample` (number) — render k× larger internally and box-downsample: anti-aliasing on demand, none by default (integer 1..=8; k×width/height must fit the GPU's texture limit)
 - `ortho` (bool) — orthographic projection
 - `direction` ([x,y,z]) — auto-framed camera looking along this vector (`[0,0,-1]` = top view); default isometric
 - `eye` ([x,y,z]) — explicit camera position (pairs with `target`)
@@ -195,6 +196,9 @@ reports the declared inputs and presets next to the error.
 
 `opacity` (0..1) is x-ray: it multiplies every object's alpha, so
 everything turns translucent and interiors show through.
+`supersample` (k) renders k× larger internally and box-downsamples:
+anti-aliasing on demand; there is none by default. The internal
+k×width/height must fit the GPU's texture limit.
 
 Camera, auto-framed (the model always fits the frame): the default is
 an isometric perspective; `direction` looks along that vector; `ortho`

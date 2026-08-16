@@ -34,7 +34,9 @@ struct GpuMesh {
 /// Renderer-owned intermediate targets, remade when the render size changes.
 /// Callers only ever hand in the one final single-sample color view.
 struct Targets {
+    /// Internal (supersampled) size + the factor that produced it.
     size: (u32, u32),
+    supersample: u32,
     /// Opaque pass: premultiplied color (cleared to the premultiplied
     /// background) + depth, both read by later passes.
     opaque_color: wgpu::TextureView,
@@ -51,6 +53,10 @@ struct Targets {
     layer_bg: wgpu::BindGroup,
     /// `accum` + `opaque_color` for the final compose.
     compose_bg: wgpu::BindGroup,
+    /// Supersampling only: the k-sized premultiplied compose target and the
+    /// downsample pass's inputs (that texture + a uniform holding k).
+    super_view: Option<wgpu::TextureView>,
+    super_bg: Option<wgpu::BindGroup>,
 }
 
 pub struct Renderer {
@@ -61,6 +67,7 @@ pub struct Renderer {
     peel_layout: wgpu::BindGroupLayout,
     layer_layout: wgpu::BindGroupLayout,
     compose_layout: wgpu::BindGroupLayout,
+    downsample_layout: wgpu::BindGroupLayout,
     pipe_fill: wgpu::RenderPipeline,
     /// Peel geometry: one pipeline per geometry family reused for all layers
     /// (only bind groups ping-pong) so the same primitive produces
@@ -72,6 +79,8 @@ pub struct Renderer {
     pipe_line_tail: wgpu::RenderPipeline,
     pipe_layer_under: wgpu::RenderPipeline,
     pipe_compose: wgpu::RenderPipeline,
+    pipe_compose_premul: wgpu::RenderPipeline,
+    pipe_downsample: wgpu::RenderPipeline,
     instance_stride: u64,
     mesh_cache: HashMap<Hash, GpuMesh>,
     targets: Option<Targets>,
@@ -129,6 +138,10 @@ impl Renderer {
             label: Some("compose"),
             entries: &[texture_entry(1), texture_entry(2)],
         });
+        let downsample_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("downsample"),
+            entries: &[texture_entry(3), uniform_entry(4, false)],
+        });
 
         let base_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("odm-base-layout"),
@@ -154,6 +167,12 @@ impl Renderer {
             bind_group_layouts: &[None, None, None, Some(&compose_layout)],
             immediate_size: 0,
         });
+        let downsample_pipe_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("odm-downsample-layout"),
+                bind_group_layouts: &[None, None, None, Some(&downsample_layout)],
+                immediate_size: 0,
+            });
 
         let make = |layout: &wgpu::PipelineLayout, kind: PipelineKind| {
             make_pipeline(&device, layout, &shader, pipeline_desc(kind))
@@ -165,6 +184,8 @@ impl Renderer {
         let pipe_line_tail = make(&peel_pipe_layout, PipelineKind::LineTail);
         let pipe_layer_under = make(&layer_pipe_layout, PipelineKind::LayerUnder);
         let pipe_compose = make(&compose_pipe_layout, PipelineKind::Compose);
+        let pipe_compose_premul = make(&compose_pipe_layout, PipelineKind::ComposePremul);
+        let pipe_downsample = make(&downsample_pipe_layout, PipelineKind::Downsample);
 
         let instance_stride =
             INSTANCE_SIZE.max(device.limits().min_uniform_buffer_offset_alignment as u64);
@@ -177,6 +198,7 @@ impl Renderer {
             peel_layout,
             layer_layout,
             compose_layout,
+            downsample_layout,
             pipe_fill,
             pipe_mesh_peel,
             pipe_line_peel,
@@ -184,6 +206,8 @@ impl Renderer {
             pipe_line_tail,
             pipe_layer_under,
             pipe_compose,
+            pipe_compose_premul,
+            pipe_downsample,
             instance_stride,
             mesh_cache: HashMap::new(),
             targets: None,
@@ -223,9 +247,14 @@ impl Renderer {
         encode_png(&rgba, opts.width, opts.height)
     }
 
-    /// Intermediate targets for this render size, remade only on resize.
-    fn ensure_targets(&mut self, width: u32, height: u32) {
-        if self.targets.as_ref().is_some_and(|t| t.size == (width, height)) {
+    /// Intermediate targets for this render's internal (supersampled) size,
+    /// remade only when it changes.
+    fn ensure_targets(&mut self, width: u32, height: u32, supersample: u32) {
+        if self
+            .targets
+            .as_ref()
+            .is_some_and(|t| t.size == (width, height) && t.supersample == supersample)
+        {
             return;
         }
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
@@ -279,8 +308,32 @@ impl Renderer {
             ],
         });
 
+        let (super_view, super_bg) = if supersample > 1 {
+            let view = view(ACCUM_FORMAT);
+            let k = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("super-k"),
+                contents: bytemuck::cast_slice(&[supersample, 0, 0, 0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("downsample"),
+                layout: &self.downsample_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry { binding: 4, resource: k.as_entire_binding() },
+                ],
+            });
+            (Some(view), Some(bg))
+        } else {
+            (None, None)
+        };
+
         self.targets = Some(Targets {
             size: (width, height),
+            supersample,
             opaque_color,
             opaque_depth,
             accum,
@@ -289,6 +342,8 @@ impl Renderer {
             peel_bg,
             layer_bg,
             compose_bg,
+            super_view,
+            super_bg,
         });
     }
 
@@ -305,7 +360,19 @@ impl Renderer {
         opts: &RenderOptions,
         target: &wgpu::TextureView,
     ) -> Result<(), RenderError> {
-        self.ensure_targets(opts.width, opts.height);
+        // Supersampling: geometry renders k x larger, box-downsampled at the
+        // end. Validated against the *internal* target, not the requested
+        // size.
+        let k = opts.supersample.max(1);
+        let (in_w, in_h) = (opts.width * k, opts.height * k);
+        let max_dim = self.device.limits().max_texture_dimension_2d;
+        if in_w > max_dim || in_h > max_dim {
+            return Err(RenderError::BadOptions(format!(
+                "supersample {k} needs a {in_w}x{in_h} internal target; \
+                 this device caps textures at {max_dim}"
+            )));
+        }
+        self.ensure_targets(in_w, in_h, k);
         let cam = opts.camera.resolve(scene.bounds, opts.width as f64 / opts.height as f64);
 
         // Globals.
@@ -314,7 +381,7 @@ impl Renderer {
         globals[..64].copy_from_slice(bytemuck::cast_slice(&vp));
         let eye = [cam.eye[0] as f32, cam.eye[1] as f32, cam.eye[2] as f32, 1.0f32];
         globals[64..80].copy_from_slice(bytemuck::cast_slice(&eye));
-        let viewport = [opts.width as f32, opts.height as f32, 0.0, 0.0f32];
+        let viewport = [in_w as f32, in_h as f32, k as f32, 0.0f32];
         globals[80..96].copy_from_slice(bytemuck::cast_slice(&viewport));
         let globals_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("globals"),
@@ -399,8 +466,10 @@ impl Renderer {
             data[base + 64..base + 80].copy_from_slice(bytemuck::cast_slice(color));
             data[base + 80..base + 96].copy_from_slice(bytemuck::cast_slice(params));
         }
-        let wire_params = [crate::WIRE_WIDTH_PX / 2.0, 0.0, 0.0, 0.0];
-        let grid_params = [GRID_WIDTH_PX / 2.0, 0.0, 0.0, 0.0];
+        // Line widths are in *output* pixels: scale by k so a supersampled
+        // render downsamples to the same apparent width, smoother.
+        let wire_params = [k as f32 * crate::WIRE_WIDTH_PX / 2.0, 0.0, 0.0, 0.0];
+        let grid_params = [k as f32 * GRID_WIDTH_PX / 2.0, 0.0, 0.0, 0.0];
         // Partition by effective alpha: 1 -> opaque pass, <1 -> peeled.
         let mut opaque_set: Vec<usize> = Vec::with_capacity(n_inst);
         let mut translucent_set: Vec<usize> = Vec::new();
@@ -660,12 +729,18 @@ impl Renderer {
             }
         }
 
-        // Final compose into the caller's target.
-        {
+        // Final compose. At k = 1 straight into the caller's target; when
+        // supersampling, compose stays premultiplied in the k-sized texture
+        // and a box-downsample pass writes the target.
+        let fullscreen = |encoder: &mut wgpu::CommandEncoder,
+                          label: &str,
+                          view: &wgpu::TextureView,
+                          pipe: &wgpu::RenderPipeline,
+                          bg: &wgpu::BindGroup| {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("compose"),
+                label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -678,9 +753,23 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipe_compose);
-            pass.set_bind_group(3, &t.compose_bg, &[]);
+            pass.set_pipeline(pipe);
+            pass.set_bind_group(3, bg, &[]);
             pass.draw(0..3, 0..1);
+        };
+        if k == 1 {
+            fullscreen(&mut encoder, "compose", target, &self.pipe_compose, &t.compose_bg);
+        } else {
+            let super_view = t.super_view.as_ref().expect("supersample targets");
+            let super_bg = t.super_bg.as_ref().expect("supersample targets");
+            fullscreen(
+                &mut encoder,
+                "compose-super",
+                super_view,
+                &self.pipe_compose_premul,
+                &t.compose_bg,
+            );
+            fullscreen(&mut encoder, "downsample", target, &self.pipe_downsample, super_bg);
         }
 
         self.queue.submit([encoder.finish()]);
@@ -823,6 +912,12 @@ enum PipelineKind {
     /// Fullscreen: accumulation over opaque, un-premultiplied, into the
     /// caller's target.
     Compose,
+    /// Fullscreen: same compose kept premultiplied linear, into the k-sized
+    /// supersample texture.
+    ComposePremul,
+    /// Fullscreen: box-average k x k premultiplied texels into one output
+    /// pixel of the caller's target.
+    Downsample,
 }
 
 /// Everything that varies between pipelines.
@@ -977,6 +1072,26 @@ fn pipeline_desc<'a>(kind: PipelineKind) -> PipelineDesc<'a> {
         PipelineKind::Compose => PipelineDesc {
             vertex_entry: "vs_fullscreen",
             fragment_entry: "fs_compose",
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            vertex_buffers: vec![],
+            depth: None,
+            blend: None,
+            target_format: COLOR_FORMAT,
+            cull: None,
+        },
+        PipelineKind::ComposePremul => PipelineDesc {
+            vertex_entry: "vs_fullscreen",
+            fragment_entry: "fs_compose_premul",
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            vertex_buffers: vec![],
+            depth: None,
+            blend: None,
+            target_format: ACCUM_FORMAT,
+            cull: None,
+        },
+        PipelineKind::Downsample => PipelineDesc {
+            vertex_entry: "vs_fullscreen",
+            fragment_entry: "fs_downsample",
             topology: wgpu::PrimitiveTopology::TriangleList,
             vertex_buffers: vec![],
             depth: None,

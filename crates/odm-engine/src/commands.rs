@@ -407,6 +407,12 @@ impl EngineState {
             }
             opts.opacity = o as f32;
         }
+        if let Some(s) = req.supersample {
+            if s.fract() != 0.0 || !(1.0..=8.0).contains(&s) {
+                return Err(CmdError::bad_request("supersample must be an integer in 1..=8"));
+            }
+            opts.supersample = s as u32;
+        }
 
         let mut renderer_slot = self.renderer.lock().unwrap();
         if renderer_slot.is_none() {

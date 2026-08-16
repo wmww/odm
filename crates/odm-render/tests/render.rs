@@ -95,6 +95,7 @@ fn option_variants_render() {
         background: [0.0, 0.0, 0.0, 1.0],
         opacity: 1.0,
         peel_layers: 4,
+        supersample: 1,
     };
     renderer.render_png(&scene, &opts).unwrap();
 
@@ -267,6 +268,30 @@ fn translucent_determinism_and_depth_invariance() {
     opts.peel_layers = 4;
     let n4 = renderer.render_png(&scene, &opts).unwrap();
     assert_eq!(n1, n4, "peel layer count must not change a single-surface render");
+}
+
+#[test]
+fn supersample_renders_and_validates() {
+    let Some(mut renderer) = renderer_or_skip() else { return };
+    let (store, root) = stacked_scene(&[
+        (0.0, [1.0, 0.0, 0.0, 1.0]),
+        (3.0, [0.0, 1.0, 0.0, 0.5]),
+    ]);
+    let scene = flatten_scene(&store, root).unwrap();
+    // Blend math must hold through the k x internal render + downsample.
+    let mut opts = top_down_opts(160, 160);
+    opts.supersample = 2;
+    let png = renderer.render_png(&scene, &opts).unwrap();
+    let (w, h, _) = decode(&png);
+    assert_eq!((w, h), (160, 160), "output stays the requested size");
+    let want = srgb8(0.5);
+    assert_near(center_pixel(&png), [want, want, 0.0, 255.0], "supersampled blend");
+
+    // The *internal* target is what must fit the device limit.
+    let mut opts = top_down_opts(8000, 8000);
+    opts.supersample = 4;
+    let err = renderer.render_png(&scene, &opts).unwrap_err();
+    assert!(err.to_string().contains("supersample"), "{err}");
 }
 
 #[test]
