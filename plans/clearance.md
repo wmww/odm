@@ -1,6 +1,7 @@
-# Assembly checks: `query clearance`
+# Assembly checks: `odm clearance`
 
-Builds on `cli-json-args.md` (a `query` kind; no flag spelling ever exists).
+Builds on `cli-json-args.md` (a geometry query; no flag spelling ever
+exists).
 
 ## Why
 The one real modelling bug in the live test: a seat centred 15 cm forward of
@@ -11,11 +12,11 @@ correctness question, and there's no direct way to ask it — raycast only
 confirms after you've guessed where the part should be, which is backwards.
 
 ## Design
-A plural-native query kind: `pairs` of nodes (names / index paths, as
-`inspect` addresses them), all measured against the request's one view spec,
-answered in order:
+A plural-native geometry query (its own toplevel command, like all kinds):
+`pairs` of nodes (names / index paths, as `inspect` addresses them), all
+measured against the request's one view spec, answered in order:
 
-    odm query clearance '{"pairs": [["seat", "chainL"], ["seat", "chainR"]], "inputs": {"t": 1.5}}'
+    odm clearance '{"pairs": [["seat", "chainL"], ["seat", "chainR"]], "inputs": {"t": 1.5}}'
 
 One command checks a whole assembly's contact pairs after an edit — the
 scriptable self-check — and works at animation extremes for collision

@@ -26,13 +26,14 @@ stays bare, flags, or text.**
 
     odm status                # session/user state; never blocks, answers when broken
     odm inspect ['{…}']       # the built scene: tree, measurements; root fields carry the view interface
-    odm query <kind> '{…}'    # kernel queries with JS twins: raycast, clearance, …
+    odm raycast '{…}'         # geometry queries with JS twins, one toplevel
+    odm clearance '{…}'       #   command per kind; this set grows
     odm render  ['{…}']       # PNG
     odm poll / say            # user channel (flags / free text, unchanged)
     odm docs / run            # reference (incl. prompt topic) / engine
 
-- JSON-in-scope: `inspect`, `render`, and every `query` kind — the commands
-  that share the view-spec shape.
+- JSON-in-scope: `inspect`, `render`, and every geometry query — the
+  commands that share the view-spec shape.
 - Out of scope: `status` is bare. `poll` keeps `--timeout`/`--follow` — its
   args configure the CLI's own waiting behavior (`--follow` never reaches
   the engine), not a structured request. `say` keeps free text (prose; its
@@ -59,18 +60,24 @@ stays bare, flags, or text.**
   command's only remaining use is inspection — that's docs. Drops out of
   `--help` automatically (docs topics are listed by bare `odm docs`).
 
-## `odm query <kind>`
-The home of kernel geometry queries: `raycast`, `clearance` (see
-`clearance.md`), and whatever comes later (distances, sections, mass
-properties, containment…). Adding a kind never grows the toplevel surface.
+## Geometry queries: toplevel, one command per kind
+Kernel geometry queries — `raycast`, `clearance` (see `clearance.md`), and
+whatever comes later (distances, sections, mass properties, containment…) —
+are plain toplevel commands sharing the JSON grammar. Deliberately no
+`query` namespace: a prefix is a classification the agent must remember
+(why `query clearance` but plain `inspect`?), costs a word per call, and
+command count is the cheapest surface there is (`notes/agent-surface.md` —
+fields ≫ concepts ≫ commands). The set-ness lives in docs, not grammar:
+`docs/cli.md` groups them in one "geometry queries" section, each kind
+naming its JS twin, and `--help` groups the one-liners the same way.
 
 - **JS parity rule**: every kind is defined once — name, parameters, result
   shape — and exists in both surfaces: JS as a method
-  (`solid.raycast(origin, dir)`, `a.clearance(b)`), CLI as
-  `odm query <kind>` with the same names and result shapes, plus what JS
-  gets free from object references (view spec, node addressing by name).
+  (`solid.raycast(origin, dir)`, `a.clearance(b)`), CLI as the command of
+  the same name with the same result shape, plus what JS gets free from
+  object references (view spec, node addressing by name).
   The API exposes kinds as separate functions and the CLI as separate
-  subcommands, so the tagged union exists in *neither* place — don't
+  commands, so the tagged union exists in *neither* place — don't
   reintroduce one "for generality"; per-kind serde structs with
   `deny_unknown_fields` are the point.
 - **Plural-native kinds**: where mapping is natural the request takes
@@ -80,8 +87,9 @@ properties, containment…). Adding a kind never grows the toplevel surface.
   this edit" is one command). Parity is about the unit query; the CLI form
   maps over it. No heterogeneous query arrays — a cross-kind mix is two
   commands, and the memoized build makes the second nearly free.
-- `inspect` stays outside `query`: it has no JS twin (in JS you hold the
-  object graph); it's the agent's window into the tree.
+- `inspect` is not in the parity set — no JS twin (in JS you hold the
+  object graph); it's the agent's window into the tree. Nothing in the
+  grammar marks that; it's simply absent from the JS-twin table in docs.
 
 ## One error path
 Any view-targeting command whose build fails returns the build error (JS
@@ -113,7 +121,7 @@ outcomes and never waits on builds.
   machinery doohickey inputs already use; `docs/cli.md`'s per-command
   reference prints from the same source that validates, so docs can't
   drift. `odm --help` shrinks to a command list, one line each; `odm docs`
-  gets one section per query kind.
+  gets one section per geometry query.
 - Prompt: core-loop examples switch to JSON form
   (`odm render '{"inputs": {"t": 1.5}}'`); concept count drops — "view
   commands take one JSON request" replaces every flag ever taught.
@@ -134,6 +142,6 @@ not as v1 scope.
   here — one line in docs, not a design driver.
 - `render-frames.md`, `render-camera.md`, `clearance.md` build on this; land
   this first so nothing ever grows a flag spelling.
-- On implementation, record in `notes/agent-surface.md`: the query-set/JS
-  parity rule, and the removals (`build`, `selection`, standalone `prompt`)
-  as standing cuts.
+- On implementation, record in `notes/agent-surface.md`: the JS parity rule
+  for geometry queries (flat toplevel, no `query` namespace), and the
+  removals (`build`, `selection`, standalone `prompt`) as standing cuts.
