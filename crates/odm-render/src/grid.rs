@@ -4,6 +4,8 @@ pub struct GridLines {
     /// Interleaved xyz line-list vertices.
     pub minor: Vec<f32>,
     pub major: Vec<f32>,
+    /// Spacing between minor lines, for the shader's density fade.
+    pub minor_step: f64,
 }
 
 pub fn build_grid(bounds: Option<([f64; 3], [f64; 3])>) -> GridLines {
@@ -34,7 +36,7 @@ pub fn build_grid(bounds: Option<([f64; 3], [f64; 3])>) -> GridLines {
         target.extend_from_slice(&[v as f32, -half as f32, 0.0, v as f32, half as f32, 0.0]);
         target.extend_from_slice(&[-half as f32, v as f32, 0.0, half as f32, v as f32, 0.0]);
     }
-    GridLines { minor, major }
+    GridLines { minor, major, minor_step }
 }
 
 #[cfg(test)]

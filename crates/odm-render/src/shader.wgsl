@@ -41,26 +41,40 @@ fn vs_main(@location(0) pos: vec3<f32>) -> VsOut {
     return out;
 }
 
+struct WireOut {
+    // Same invariance need as VsOut: line depths must agree between the
+    // peel and tail pipelines.
+    @invariant @builtin(position) clip: vec4<f32>,
+    // Signed pixel distance from the line centerline; +-(half_width + 0.5)
+    // at the quad edges. Coverage alpha comes from this.
+    @location(0) edge: f32,
+    // Grid minor density fade: 1 where lines are sparse enough to draw, 0
+    // where they would moire into each other.
+    @location(1) fade: f32,
+};
+
 // One line segment: an instance holding both endpoints, drawn as a 4-vertex
-// triangle strip expanded to a fixed pixel width across the segment. Line
-// primitives are always one pixel wide in WebGPU, hence the quad.
+// triangle strip expanded across the segment to the slot's pixel width plus
+// half a pixel of analytic-AA feather each side. Line primitives are always
+// one pixel wide in WebGPU, hence the quad.
 @vertex
 fn vs_wire(
     @builtin(vertex_index) vi: u32,
     @location(0) a: vec3<f32>,
     @location(1) b: vec3<f32>,
-) -> VsOut {
+) -> WireOut {
     let wa = inst.world * vec4<f32>(a, 1.0);
     let wb = inst.world * vec4<f32>(b, 1.0);
     var ca = globals.view_proj * wa;
     var cb = globals.view_proj * wb;
 
-    var out: VsOut;
+    var out: WireOut;
+    out.edge = 0.0;
+    out.fade = 1.0;
     // Both ends at or behind the eye: emit an off-range triangle to be clipped.
     let eps = 1e-6;
     if (ca.w < eps && cb.w < eps) {
         out.clip = vec4<f32>(0.0, 0.0, -1.0, 1.0);
-        out.world_pos = wa.xyz;
         return out;
     }
     // One end behind: pull it up to the near plane so the segment stays sane.
@@ -76,12 +90,27 @@ fn vs_wire(
     let len = length(delta);
     let dir = select(vec2<f32>(1.0, 0.0), delta / len, len > 1e-6);
     let side = select(-1.0, 1.0, (vi & 1u) == 1u);
-    let offset = vec2<f32>(-dir.y, dir.x) * inst.params.x * side;
+    let reach = inst.params.x + 0.5;
+    let offset = vec2<f32>(-dir.y, dir.x) * reach * side;
 
     let at_b = vi >= 2u;
     let clip = select(ca, cb, at_b);
     out.clip = vec4<f32>(clip.xy + offset / half_px * clip.w, clip.zw);
-    out.world_pos = select(wa.xyz, wb.xyz, at_b);
+    out.edge = reach * side;
+
+    // Density fade: params.y is the world-space spacing to the neighbouring
+    // parallel line (grid minors). Project that offset at this end; when it
+    // lands under a few pixels the lines would moire, so they melt away.
+    let spacing = inst.params.y;
+    if (spacing > 0.0) {
+        let end = select(wa.xyz, wb.xyz, at_b);
+        let along = wb.xyz - wa.xyz;
+        let perp = normalize(cross(along, vec3<f32>(0.0, 0.0, 1.0))) * spacing;
+        let cn = globals.view_proj * vec4<f32>(end + perp, 1.0);
+        let here = clip.xy / max(clip.w, eps) * half_px;
+        let there = cn.xy / max(cn.w, eps) * half_px;
+        out.fade = smoothstep(2.0, 8.0, distance(here, there));
+    }
     return out;
 }
 
@@ -101,9 +130,20 @@ fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(inst.color.rgb * mesh_shade(in.world_pos), 1.0);
 }
 
+// Line fragments are translucent by construction: coverage alpha is the
+// analytic AA. Fully covered fragments still carry the slot's alpha, and
+// faded-out grid minors discard so they don't occupy a peel layer.
 @fragment
-fn fs_flat(in: VsOut) -> @location(0) vec4<f32> {
-    return vec4<f32>(inst.color.rgb, 1.0);
+fn fs_line_translucent(in: WireOut) -> @location(0) vec4<f32> {
+    if (peeled_or_hidden(in.clip)) {
+        discard;
+    }
+    let coverage = clamp(inst.params.x + 0.5 - abs(in.edge), 0.0, 1.0);
+    let a = inst.color.a * coverage * in.fade;
+    if (a <= 0.0) {
+        discard;
+    }
+    return vec4<f32>(inst.color.rgb * a, a);
 }
 
 // True where a translucent fragment was already composited (at or nearer

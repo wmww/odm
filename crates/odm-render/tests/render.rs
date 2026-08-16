@@ -248,6 +248,14 @@ fn translucent_determinism_and_depth_invariance() {
     let b = renderer.render_png(&scene, &opts).unwrap();
     assert_eq!(a, b, "translucent renders must be byte-identical");
 
+    // Wireframe + grid: all-line scenes go through the same peeler (AA
+    // coverage alpha makes every line translucent) and must be as stable.
+    let mut opts = RenderOptions::default_with(200, 150);
+    opts.wireframe = true;
+    let a = renderer.render_png(&scene, &opts).unwrap();
+    let b = renderer.render_png(&scene, &opts).unwrap();
+    assert_eq!(a, b, "wire-and-grid renders must be byte-identical");
+
     // Invariance canary: a single translucent surface must render identically
     // at N=1 and N=4 — if depths are not bit-identical across passes, the
     // surface re-composites once per layer and the image darkens with N.

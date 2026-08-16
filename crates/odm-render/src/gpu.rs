@@ -62,12 +62,14 @@ pub struct Renderer {
     layer_layout: wgpu::BindGroupLayout,
     compose_layout: wgpu::BindGroupLayout,
     pipe_fill: wgpu::RenderPipeline,
-    pipe_wire: wgpu::RenderPipeline,
-    /// Peel geometry: one pipeline reused for all layers (only bind groups
-    /// ping-pong) so the same triangle produces bit-identical depths.
+    /// Peel geometry: one pipeline per geometry family reused for all layers
+    /// (only bind groups ping-pong) so the same primitive produces
+    /// bit-identical depths.
     pipe_mesh_peel: wgpu::RenderPipeline,
-    /// Layers past PEEL_LAYERS: blend under in draw order, no depth.
+    pipe_line_peel: wgpu::RenderPipeline,
+    /// Layers past the last peel: blend under in draw order, no depth.
     pipe_mesh_tail: wgpu::RenderPipeline,
+    pipe_line_tail: wgpu::RenderPipeline,
     pipe_layer_under: wgpu::RenderPipeline,
     pipe_compose: wgpu::RenderPipeline,
     instance_stride: u64,
@@ -157,9 +159,10 @@ impl Renderer {
             make_pipeline(&device, layout, &shader, pipeline_desc(kind))
         };
         let pipe_fill = make(&base_layout, PipelineKind::Fill);
-        let pipe_wire = make(&base_layout, PipelineKind::Wire);
         let pipe_mesh_peel = make(&peel_pipe_layout, PipelineKind::MeshPeel);
+        let pipe_line_peel = make(&peel_pipe_layout, PipelineKind::LinePeel);
         let pipe_mesh_tail = make(&peel_pipe_layout, PipelineKind::MeshTail);
+        let pipe_line_tail = make(&peel_pipe_layout, PipelineKind::LineTail);
         let pipe_layer_under = make(&layer_pipe_layout, PipelineKind::LayerUnder);
         let pipe_compose = make(&compose_pipe_layout, PipelineKind::Compose);
 
@@ -175,9 +178,10 @@ impl Renderer {
             layer_layout,
             compose_layout,
             pipe_fill,
-            pipe_wire,
             pipe_mesh_peel,
+            pipe_line_peel,
             pipe_mesh_tail,
+            pipe_line_tail,
             pipe_layer_under,
             pipe_compose,
             instance_stride,
@@ -411,10 +415,20 @@ impl Renderer {
                 translucent_set.push(i);
             }
         }
+        // Grid geometry: endpoint pairs, drawn as line-quad instances
+        // (6 floats per line = one WIRE_STRIDE instance). Minor lines carry
+        // their spacing in params.y for the shader's density fade.
+        let grid = opts.grid.then(|| build_grid(scene.bounds));
         let identity = math::to_f32_cols(&math::IDENTITY);
         let grid_minor_slot = n_inst;
         let grid_major_slot = grid_minor_slot + 1;
-        write_slot(&mut inst_data, stride, grid_minor_slot, &identity, &GRID_MINOR_COLOR, &grid_params);
+        let minor_params = [
+            grid_params[0],
+            grid.as_ref().map_or(0.0, |g| g.minor_step as f32),
+            0.0,
+            0.0,
+        ];
+        write_slot(&mut inst_data, stride, grid_minor_slot, &identity, &GRID_MINOR_COLOR, &minor_params);
         write_slot(&mut inst_data, stride, grid_major_slot, &identity, &GRID_MAJOR_COLOR, &grid_params);
 
         let inst_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -435,9 +449,6 @@ impl Renderer {
             }],
         });
 
-        // Grid geometry: endpoint pairs, drawn as wire-quad instances
-        // (6 floats per line = one WIRE_STRIDE instance).
-        let grid = opts.grid.then(|| build_grid(scene.bounds));
         let grid_bufs = grid.as_ref().map(|g| {
             let minor = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("grid-minor"),
@@ -452,14 +463,18 @@ impl Renderer {
             (minor, g.minor.len() as u32 / 6, major, g.major.len() as u32 / 6)
         });
 
-        // Wireframe mode has no fills at all, so nothing to peel.
+        // Wireframe mode has no fills at all; its wires are line geometry.
         let translucent_set = if opts.wireframe { Vec::new() } else { translucent_set };
+        // All line geometry is translucent by construction (analytic AA
+        // coverage alpha), so it composites through the peeler like any
+        // translucent surface — "wire behind grid" just works.
+        let has_lines = grid_bufs.is_some() || opts.wireframe;
 
         let t = self.targets.as_ref().expect("ensure_targets ran");
         let mut encoder =
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        // Opaque pass: opaque fills + (for now) all line geometry.
+        // Opaque pass: opaque fills only.
         {
             let bg = [
                 opts.background[0] as f64 * opts.background[3] as f64,
@@ -511,29 +526,6 @@ impl Renderer {
                 }
             }
 
-            // Grid: same wire-quad path as everything line-shaped, after the
-            // fill so depth testing occludes it.
-            if let Some((minor_buf, minor_n, major_buf, major_n)) = &grid_bufs {
-                pass.set_pipeline(&self.pipe_wire);
-                pass.set_bind_group(1, &inst_bg, &[(grid_minor_slot * stride) as u32]);
-                pass.set_vertex_buffer(0, minor_buf.slice(..));
-                pass.draw(0..4, 0..*minor_n);
-                pass.set_bind_group(1, &inst_bg, &[(grid_major_slot * stride) as u32]);
-                pass.set_vertex_buffer(0, major_buf.slice(..));
-                pass.draw(0..4, 0..*major_n);
-            }
-
-            // Wires, in each instance's own color, nothing hidden.
-            if opts.wireframe {
-                pass.set_pipeline(&self.pipe_wire);
-                for (i, inst) in scene.instances.iter().enumerate() {
-                    let mesh = &self.mesh_cache[&inst.mesh];
-                    let Some((wire_buf, wire_count)) = &mesh.wires else { continue };
-                    pass.set_bind_group(1, &inst_bg, &[(i * stride) as u32]);
-                    pass.set_vertex_buffer(0, wire_buf.slice(..));
-                    pass.draw(0..4, 0..*wire_count);
-                }
-            }
         }
 
         // Translucent peel: exact front-to-back layers, each a geometry pass
@@ -541,7 +533,7 @@ impl Renderer {
         // test) then a fullscreen under-composite; a final unsorted tail pass
         // catches anything deeper.
         let peel_layers = opts.peel_layers.max(1) as usize;
-        if translucent_set.is_empty() {
+        if translucent_set.is_empty() && !has_lines {
             clear_color_pass(&mut encoder, &t.accum, "accum-clear");
         } else {
             // The previous-layer depth for layer 0: nothing peeled yet.
@@ -556,6 +548,27 @@ impl Renderer {
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                }
+            };
+            let draw_lines = |pass: &mut wgpu::RenderPass,
+                              mesh_cache: &HashMap<Hash, GpuMesh>| {
+                if let Some((minor_buf, minor_n, major_buf, major_n)) = &grid_bufs {
+                    pass.set_bind_group(1, &inst_bg, &[(grid_minor_slot * stride) as u32]);
+                    pass.set_vertex_buffer(0, minor_buf.slice(..));
+                    pass.draw(0..4, 0..*minor_n);
+                    pass.set_bind_group(1, &inst_bg, &[(grid_major_slot * stride) as u32]);
+                    pass.set_vertex_buffer(0, major_buf.slice(..));
+                    pass.draw(0..4, 0..*major_n);
+                }
+                // Wires, in each instance's own color.
+                if opts.wireframe {
+                    for (i, inst) in scene.instances.iter().enumerate() {
+                        let mesh = &mesh_cache[&inst.mesh];
+                        let Some((wire_buf, wire_count)) = &mesh.wires else { continue };
+                        pass.set_bind_group(1, &inst_bg, &[(i * stride) as u32]);
+                        pass.set_vertex_buffer(0, wire_buf.slice(..));
+                        pass.draw(0..4, 0..*wire_count);
+                    }
                 }
             };
 
@@ -585,10 +598,12 @@ impl Renderer {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    pass.set_pipeline(&self.pipe_mesh_peel);
                     pass.set_bind_group(0, &globals_bg, &[]);
                     pass.set_bind_group(2, &t.peel_bg[p], &[]);
+                    pass.set_pipeline(&self.pipe_mesh_peel);
                     draw_translucent(&mut pass, &self.mesh_cache);
+                    pass.set_pipeline(&self.pipe_line_peel);
+                    draw_lines(&mut pass, &self.mesh_cache);
                 }
                 {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -636,10 +651,12 @@ impl Renderer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                pass.set_pipeline(&self.pipe_mesh_tail);
                 pass.set_bind_group(0, &globals_bg, &[]);
                 pass.set_bind_group(2, &t.peel_bg[peel_layers % 2], &[]);
+                pass.set_pipeline(&self.pipe_mesh_tail);
                 draw_translucent(&mut pass, &self.mesh_cache);
+                pass.set_pipeline(&self.pipe_line_tail);
+                draw_lines(&mut pass, &self.mesh_cache);
             }
         }
 
@@ -789,16 +806,18 @@ fn clear_depth_pass(
 enum PipelineKind {
     /// Shaded triangles, opaque pass.
     Fill,
-    /// Flat-colored line quads: one instance per segment (both endpoints),
-    /// widened to the slot's pixel width in the vertex shader. Serves wires
-    /// and the grid alike.
-    Wire,
     /// One peel layer: blend replace + depth test isolate the single nearest
     /// not-yet-peeled fragment per pixel.
     MeshPeel,
+    /// Line quads in a peel layer: one instance per segment (both
+    /// endpoints), widened to the slot's pixel width plus AA feather in the
+    /// vertex shader. Serves wires and the grid alike; coverage alpha makes
+    /// every line translucent.
+    LinePeel,
     /// Translucent geometry past the last peel layer: blend under the
     /// accumulation in draw order, no depth attachment.
     MeshTail,
+    LineTail,
     /// Fullscreen: one peel layer under the accumulation.
     LayerUnder,
     /// Fullscreen: accumulation over opaque, un-premultiplied, into the
@@ -902,15 +921,26 @@ fn pipeline_desc<'a>(kind: PipelineKind) -> PipelineDesc<'a> {
             target_format: ACCUM_FORMAT,
             cull: None,
         },
-        PipelineKind::Wire => PipelineDesc {
+        PipelineKind::LinePeel => PipelineDesc {
             vertex_entry: "vs_wire",
-            fragment_entry: "fs_flat",
+            fragment_entry: "fs_line_translucent",
             topology: wgpu::PrimitiveTopology::TriangleStrip,
             vertex_buffers: vec![wire_buffer],
-            // Line quads write depth: crossing lines resolve near-first
-            // instead of by draw order — matching what `pick_wire` selects.
+            // Line quads write peel depth like any translucent surface:
+            // crossing lines resolve near-first instead of by draw order —
+            // matching what `pick_wire` selects.
             depth: Some(true),
             blend: None,
+            target_format: ACCUM_FORMAT,
+            cull: None,
+        },
+        PipelineKind::LineTail => PipelineDesc {
+            vertex_entry: "vs_wire",
+            fragment_entry: "fs_line_translucent",
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            vertex_buffers: vec![wire_buffer],
+            depth: None,
+            blend: Some(BLEND_UNDER),
             target_format: ACCUM_FORMAT,
             cull: None,
         },
