@@ -299,6 +299,10 @@ impl<'a> Inspector<'a> {
         if f.color && let Some(c) = node.color {
             obj.insert("color".into(), color_json(c));
         }
+        // Rides the color toggle: both answer "how does this node look".
+        if f.color && let Some(o) = node.opacity {
+            obj.insert("opacity".into(), json!(o));
+        }
         if f.bounds && let Some((min, max)) = agg.bounds {
             obj.insert("bounds".into(), json!({ "min": min, "max": max }));
         }

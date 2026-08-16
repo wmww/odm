@@ -8,14 +8,27 @@ struct Globals {
 
 struct InstanceData {
     world: mat4x4<f32>,
+    // Linear rgb + effective alpha (node alpha x render opacity).
     color: vec4<f32>,
     // Line-quad state: x = half line width in pixels; yzw unused.
     params: vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> inst: InstanceData;
 
+// Depth peeling inputs (peel geometry + tail passes).
+@group(2) @binding(0) var prev_peel: texture_depth_2d;
+@group(2) @binding(1) var opaque_depth: texture_depth_2d;
+
+// Fullscreen composite inputs.
+@group(3) @binding(0) var layer_tex: texture_2d<f32>;
+@group(3) @binding(1) var accum_tex: texture_2d<f32>;
+@group(3) @binding(2) var opaque_tex: texture_2d<f32>;
+
 struct VsOut {
-    @builtin(position) clip: vec4<f32>,
+    // @invariant: peeling compares depths of the same triangle across
+    // pipelines (peel layers vs tail); a ±1ulp drift would re-peel
+    // already-composited surfaces once per layer.
+    @invariant @builtin(position) clip: vec4<f32>,
     @location(0) world_pos: vec3<f32>,
 };
 
@@ -28,9 +41,9 @@ fn vs_main(@location(0) pos: vec3<f32>) -> VsOut {
     return out;
 }
 
-// One wire: an instance holding both endpoints, drawn as a 4-vertex triangle
-// strip expanded to a fixed pixel width across the segment. Line primitives
-// are always one pixel wide in WebGPU, hence the quad.
+// One line segment: an instance holding both endpoints, drawn as a 4-vertex
+// triangle strip expanded to a fixed pixel width across the segment. Line
+// primitives are always one pixel wide in WebGPU, hence the quad.
 @vertex
 fn vs_wire(
     @builtin(vertex_index) vi: u32,
@@ -73,18 +86,82 @@ fn vs_wire(
 }
 
 // Flat shading from screen-space derivatives; no vertex normals needed.
-@fragment
-fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
-    var n = normalize(cross(dpdx(in.world_pos), dpdy(in.world_pos)));
-    let v = normalize(globals.camera_pos.xyz - in.world_pos);
+fn mesh_shade(world_pos: vec3<f32>) -> f32 {
+    var n = normalize(cross(dpdx(world_pos), dpdy(world_pos)));
+    let v = normalize(globals.camera_pos.xyz - world_pos);
     if (dot(n, v) < 0.0) {
         n = -n;
     }
-    let shade = 0.35 + 0.65 * max(dot(n, v), 0.0);
-    return vec4<f32>(inst.color.rgb * shade, 1.0);
+    return 0.35 + 0.65 * max(dot(n, v), 0.0);
+}
+
+// Opaque pass outputs are premultiplied (alpha 1 makes that a no-op).
+@fragment
+fn fs_mesh(in: VsOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(inst.color.rgb * mesh_shade(in.world_pos), 1.0);
 }
 
 @fragment
 fn fs_flat(in: VsOut) -> @location(0) vec4<f32> {
-    return inst.color;
+    return vec4<f32>(inst.color.rgb, 1.0);
+}
+
+// True where a translucent fragment was already composited (at or nearer
+// than the previous peel depth) or is hidden behind opaque geometry. Exact
+// equality is what collapses coplanar translucent surfaces into one layer.
+fn peeled_or_hidden(clip: vec4<f32>) -> bool {
+    let px = vec2<i32>(clip.xy);
+    return clip.z <= textureLoad(prev_peel, px, 0)
+        || clip.z >= textureLoad(opaque_depth, px, 0);
+}
+
+// Translucent mesh fragments, premultiplied. Used by both the per-layer peel
+// pipeline (blend replace + depth picks the single nearest fragment) and the
+// tail pipeline (blend under, no depth).
+@fragment
+fn fs_mesh_translucent(in: VsOut) -> @location(0) vec4<f32> {
+    if (peeled_or_hidden(in.clip)) {
+        discard;
+    }
+    let a = inst.color.a;
+    return vec4<f32>(inst.color.rgb * mesh_shade(in.world_pos) * a, a);
+}
+
+// ---------- fullscreen passes ----------
+
+struct FsQuad {
+    @builtin(position) pos: vec4<f32>,
+};
+
+@vertex
+fn vs_fullscreen(@builtin(vertex_index) vi: u32) -> FsQuad {
+    var out: FsQuad;
+    out.pos = vec4<f32>(
+        select(-1.0, 3.0, vi == 1u),
+        select(-1.0, 3.0, vi == 2u),
+        0.0,
+        1.0,
+    );
+    return out;
+}
+
+// One peel layer composited under the accumulation; the under-blend state
+// does the math (dst + (1 - dst.a) * src).
+@fragment
+fn fs_layer(in: FsQuad) -> @location(0) vec4<f32> {
+    return textureLoad(layer_tex, vec2<i32>(in.pos.xy), 0);
+}
+
+// Final compose: translucent accumulation over the opaque pass (both
+// premultiplied; the opaque target was cleared to the premultiplied
+// background), un-premultiplied for the sRGB target.
+@fragment
+fn fs_compose(in: FsQuad) -> @location(0) vec4<f32> {
+    let px = vec2<i32>(in.pos.xy);
+    let acc = textureLoad(accum_tex, px, 0);
+    let c = acc + (1.0 - acc.a) * textureLoad(opaque_tex, px, 0);
+    if (c.a <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(c.rgb / c.a, c.a);
 }

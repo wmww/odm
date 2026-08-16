@@ -122,6 +122,11 @@ pub struct Node {
     pub transform: Transform,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Color>,
+    /// Multiplicative down the tree: a subtree's effective alpha is its
+    /// color's alpha times the product of ancestor opacities (unlike color,
+    /// which replace-wins). 0..=1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<Hash>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -148,6 +153,13 @@ impl Canonical for Node {
         }
         self.transform.write(w);
         w.opt(&self.color);
+        match self.opacity {
+            None => w.u8(0),
+            Some(o) => {
+                w.u8(1);
+                w.f32(o);
+            }
+        }
         w.opt(&self.mesh);
         w.len(self.children.len());
         for c in &self.children {

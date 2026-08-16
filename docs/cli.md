@@ -93,6 +93,7 @@ render a PNG; prints its path.
 - `out` (string) — output file (default under `.odm/renders/`); the CLI resolves it against its own cwd, and the engine refuses to overwrite project source files
 - `wireframe` (bool) — edges only, in each object's own color — surfaces are not drawn
 - `no_grid` (bool) — hide the ground grid
+- `opacity` (number) — x-ray, 0..=1: multiplies every object's alpha, so everything turns translucent and interiors show through
 - `ortho` (bool) — orthographic projection
 - `direction` ([x,y,z]) — auto-framed camera looking along this vector (`[0,0,-1]` = top view); default isometric
 - `eye` ([x,y,z]) — explicit camera position (pairs with `target`)
@@ -192,6 +193,9 @@ reports the declared inputs and presets next to the error.
 
 `odm render` renders a PNG and prints its path.
 
+`opacity` (0..1) is x-ray: it multiplies every object's alpha, so
+everything turns translucent and interiors show through.
+
 Camera, auto-framed (the model always fits the frame): the default is
 an isometric perspective; `direction` looks along that vector; `ortho`
 makes either orthographic. Explicit placement (when framing must be
@@ -203,6 +207,7 @@ odm render                                                   # framed isometric
 odm render '{"direction": [0, 0, -1], "ortho": true}'        # top view (plan)
 odm render '{"direction": [-1, 0, 0], "ortho": true}'        # side elevation
 odm render '{"wireframe": true, "width": 1600}'              # inspect topology
+odm render '{"opacity": 0.3}'                                # x-ray: see inside
 odm render '{"inputs": {"t": 2.5}, "out": "/tmp/frame.png"}' # one animation moment
 odm render '{"path": "parts/wheel.js", "inputs": {"radius": 12}}'  # one part alone
 odm render '{"eye": [60, -80, 40], "target": [0, 0, 10], "fov": 30}'  # exact framing

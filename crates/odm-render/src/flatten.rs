@@ -33,8 +33,9 @@ pub fn flatten_scene(store: &Store, root: Hash) -> Result<RenderScene, RenderErr
 }
 
 /// The single scene flattener: transforms accumulate in f64; a node's own
-/// color wins over inherited ancestor color; empty meshes are skipped. Used by
-/// headless renders, the viewer, and CLI raycasts so they can never drift apart.
+/// color wins over inherited ancestor color; node opacity multiplies down the
+/// tree into instance alpha; empty meshes are skipped. Used by headless
+/// renders, the viewer, and CLI raycasts so they can never drift apart.
 pub fn flatten_node(store: &Store, root: &Node) -> Result<RenderScene, RenderError> {
     let mut scene = RenderScene {
         instances: Vec::new(),
@@ -42,16 +43,18 @@ pub fn flatten_node(store: &Store, root: &Node) -> Result<RenderScene, RenderErr
         bounds: None,
     };
     let mut local_bounds: LocalBoundsCache = HashMap::new();
-    walk(store, root, "", &math::IDENTITY, None, &mut scene, &mut local_bounds)?;
+    walk(store, root, "", &math::IDENTITY, None, 1.0, &mut scene, &mut local_bounds)?;
     Ok(scene)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     store: &Store,
     node: &Node,
     id: &str,
     parent: &math::Mat4,
     inherited: Option<[f32; 4]>,
+    parent_opacity: f32,
     scene: &mut RenderScene,
     local_bounds: &mut LocalBoundsCache,
 ) -> Result<(), RenderError> {
@@ -61,6 +64,8 @@ fn walk(
         math::mul(parent, &node.transform.0)
     };
     let color = node.color.map(to_linear).or(inherited);
+    // Multiplicative, unlike color: a 50% subassembly halves everything in it.
+    let opacity = parent_opacity * node.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
 
     if let Some(mesh_hash) = node.mesh {
         let mesh: Arc<Mesh> = match scene.meshes.get(&mesh_hash) {
@@ -79,12 +84,14 @@ fn walk(
                 grow_bounds(&mut scene.bounds, &world, min, max);
             }
             scene.meshes.entry(mesh_hash).or_insert(mesh);
+            let mut color = color.unwrap_or(DEFAULT_COLOR);
+            color[3] *= opacity;
             scene.instances.push(Instance {
                 id: id.to_string(),
                 name: node.name.clone(),
                 mesh: mesh_hash,
                 world,
-                color: color.unwrap_or(DEFAULT_COLOR),
+                color,
             });
         }
     }
@@ -94,7 +101,7 @@ fn walk(
         let Object::Node(child_node) = &*obj else {
             return Err(RenderError::BadScene(format!("{child} is a mesh, not a scene node")));
         };
-        walk(store, child_node, &node_id(id, i), &world, color, scene, local_bounds)?;
+        walk(store, child_node, &node_id(id, i), &world, color, opacity, scene, local_bounds)?;
     }
     Ok(())
 }

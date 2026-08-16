@@ -136,29 +136,46 @@ const transformable = (Base) =>
     color(c) {
       return this._with({ color: parseColor(c) });
     }
+    /**
+     * Multiply this subtree's opacity by `x` (0..1). Unlike color (which
+     * children override), opacity is multiplicative down the tree: a 50%
+     * group shows its internals through each other — x-ray, not flattening.
+     */
+    opacity(x) {
+      const v = num(x, 'opacity');
+      if (v < 0 || v > 1) throw new TypeError(`opacity must be in 0..1, got ${v}`);
+      const prev = this._opacity ?? 1;
+      return this._with({ opacity: prev * v });
+    }
     name(n) {
       return this._with({ name: String(n) });
     }
   };
 
 class SceneValue {
-  constructor(matrix, color, label) {
+  constructor(matrix, color, label, opacity) {
     this._matrix = matrix; // THREE.Matrix4 | null (identity)
     this._color = color; // linear [r,g,b,a] | null
     this._name = label; // string | null
+    this._opacity = opacity ?? null; // number | null (1)
   }
 }
 
 /** A solid body: an engine-side geometry handle + pending transform/color. */
 export class Solid extends transformable(SceneValue) {
-  constructor(geom, matrix = null, color = null, label = null) {
-    super(matrix, color, label);
+  constructor(geom, matrix = null, color = null, label = null, opacity = null) {
+    super(matrix, color, label, opacity);
     this._geom = geom; // content-hash hex string
     this._bakedCache = null;
   }
 
-  _with({ matrix = this._matrix, color = this._color, name = this._name }) {
-    return new Solid(this._geom, matrix, color, name);
+  _with({
+    matrix = this._matrix,
+    color = this._color,
+    name = this._name,
+    opacity = this._opacity,
+  }) {
+    return new Solid(this._geom, matrix, color, name, opacity);
   }
 
   _operand() {
@@ -245,6 +262,7 @@ export class Solid extends transformable(SceneValue) {
       ...(this._name !== null && { name: this._name }),
       ...(!isIdentity(this._matrix) && { matrix: [...matElements(this._matrix)] }),
       ...(this._color !== null && { color: this._color }),
+      ...(this._opacity !== null && { opacity: this._opacity }),
       geom: this._geom,
     };
   }
@@ -252,13 +270,18 @@ export class Solid extends transformable(SceneValue) {
 
 /** A pure grouping of scene values under one transform/color. */
 export class Group extends transformable(SceneValue) {
-  constructor(children, matrix = null, color = null, label = null) {
-    super(matrix, color, label);
+  constructor(children, matrix = null, color = null, label = null, opacity = null) {
+    super(matrix, color, label, opacity);
     this._children = children;
   }
 
-  _with({ matrix = this._matrix, color = this._color, name = this._name }) {
-    return new Group(this._children, matrix, color, name);
+  _with({
+    matrix = this._matrix,
+    color = this._color,
+    name = this._name,
+    opacity = this._opacity,
+  }) {
+    return new Group(this._children, matrix, color, name, opacity);
   }
 
   get children() {
@@ -270,6 +293,7 @@ export class Group extends transformable(SceneValue) {
       ...(this._name !== null && { name: this._name }),
       ...(!isIdentity(this._matrix) && { matrix: [...matElements(this._matrix)] }),
       ...(this._color !== null && { color: this._color }),
+      ...(this._opacity !== null && { opacity: this._opacity }),
       children: this._children.map(toIRNode),
     };
   }
@@ -277,23 +301,34 @@ export class Group extends transformable(SceneValue) {
 
 /** The output of ctx.invoke(): another doohickey's built subtree. */
 export class Instance extends transformable(SceneValue) {
-  constructor(ref, matrix = null, color = null, label = null) {
-    super(matrix, color, label);
+  constructor(ref, matrix = null, color = null, label = null, opacity = null) {
+    super(matrix, color, label, opacity);
     this._ref = ref; // content hash of the built subtree
   }
 
-  _with({ matrix = this._matrix, color = this._color, name = this._name }) {
-    return new Instance(this._ref, matrix, color, name);
+  _with({
+    matrix = this._matrix,
+    color = this._color,
+    name = this._name,
+    opacity = this._opacity,
+  }) {
+    return new Instance(this._ref, matrix, color, name, opacity);
   }
 
   _toIR() {
-    if (this._name === null && isIdentity(this._matrix) && this._color === null) {
+    if (
+      this._name === null &&
+      isIdentity(this._matrix) &&
+      this._color === null &&
+      this._opacity === null
+    ) {
       return { ref: this._ref };
     }
     return {
       ...(this._name !== null && { name: this._name }),
       ...(!isIdentity(this._matrix) && { matrix: [...matElements(this._matrix)] }),
       ...(this._color !== null && { color: this._color }),
+      ...(this._opacity !== null && { opacity: this._opacity }),
       children: [{ ref: this._ref }],
     };
   }
@@ -488,6 +523,7 @@ function serializeValue(v) {
           matrix: isIdentity(raw._matrix) ? null : [...matElements(raw._matrix)],
           color: raw._color,
           name: raw._name,
+          opacity: raw._opacity,
         };
       }
       if (raw instanceof Group || raw instanceof Instance) {
@@ -516,6 +552,7 @@ function reviveValue(v) {
         v.matrix ? new THREE.Matrix4().fromArray(v.matrix) : null,
         v.color ?? null,
         v.name ?? null,
+        v.opacity ?? null,
       );
     }
     if (Array.isArray(v)) return v.map(reviveValue);

@@ -15,6 +15,7 @@ pub enum Action {
     Quit,
     Frame,
     Wireframe,
+    Xray,
     Grid,
 }
 
@@ -40,6 +41,7 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
                     MenuEntry::item(Action::Frame, "Frame Scene").shortcut("F"),
                     MenuEntry::separator(),
                     MenuEntry::check(Action::Wireframe, "Wireframe", app.wireframe),
+                    MenuEntry::check(Action::Xray, "X-Ray", app.xray),
                     MenuEntry::check(Action::Grid, "Grid", app.grid),
                 ],
             ));
@@ -70,6 +72,10 @@ fn apply(app: &mut ViewerApp, action: Action) {
         Action::Frame => app.frame_scene(),
         Action::Wireframe => {
             app.wireframe = !app.wireframe;
+            app.needs_render = true;
+        }
+        Action::Xray => {
+            app.xray = !app.xray;
             app.needs_render = true;
         }
         Action::Grid => {

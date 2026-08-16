@@ -49,6 +49,7 @@ s.translate(5, 0, 2).rotateZ(odm.deg(30)).scale(2, 2, 2); // world-frame, in cal
 s.rotateZ(0.5, { about: [5, 0, 0] });                     // pivot instead of the origin
 s.rotate([0, 1, 1], 0.5); s.applyMatrix4(new THREE.Matrix4()); // arbitrary axis / raw matrix
 s.color('#4682b4'); s.name('bolt');                    // names address parts in the CLI
+s.opacity(0.3);                                        // translucent subtree (multiplies down)
 ```
 
 Rotations and scales happen about the **origin** unless you pass
@@ -111,9 +112,10 @@ export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('
 
 ## Colors
 
-Hex `'#rrggbb'`/`'#rgb'`, or `[r, g, b]` in 0..1. No named colors,
-no numbers. Alpha must be 1: the renderer has no transparency, so a
-translucent color is rejected rather than silently drawn opaque.
+Hex `'#rrggbb'`/`'#rrggbbaa'`/`'#rgb'`, or `[r, g, b]`/`[r, g, b, a]`
+in 0..1. No named colors, no numbers. Alpha below 1 renders
+translucent. `.opacity(x)` multiplies a whole subtree's alpha
+(multiplicative down the tree, unlike color's replace-wins).
 
 ## THREE
 

@@ -78,6 +78,8 @@ pub(crate) struct RenderReq {
     pub wireframe: bool,
     #[serde(default)]
     pub no_grid: bool,
+    /// X-ray: multiplied into every instance's alpha. 0..=1.
+    pub opacity: Option<f64>,
     #[serde(default)]
     pub ortho: bool,
     pub eye: Option<[f64; 3]>,
@@ -256,6 +258,12 @@ const SPECS: &[CommandSpec] = &[
                 "edges only, in each object's own color — surfaces are not drawn",
             ),
             f("no_grid", "bool", "hide the ground grid"),
+            f(
+                "opacity",
+                "number",
+                "x-ray, 0..=1: multiplies every object's alpha, so everything turns \
+                 translucent and interiors show through",
+            ),
             f("ortho", "bool", "orthographic projection"),
             f(
                 "direction",

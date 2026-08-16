@@ -30,9 +30,9 @@ often a `THREE.Shape` (extrude it) or a plain object. Raw
 (`centre`, `segements`, …), so a typo'd option fails instead of being
 silently ignored. The message lists the valid keys.
 
-**"invalid color '…'"** / **"translucent colors are not supported"** —
-see [colors.md](colors.md); hex strings and `[r, g, b]` arrays only,
-alpha 1.
+**"invalid color '…'"** — see [colors.md](colors.md); hex strings
+(`'#rrggbb'`/`'#rrggbbaa'`/`'#rgb'`) and `[r, g, b]`/`[r, g, b, a]`
+arrays only.
 
 **"ODM engine ops unavailable: this code only runs inside a build"** —
 `odm.*` constructors were called outside `build()` (e.g. at module top

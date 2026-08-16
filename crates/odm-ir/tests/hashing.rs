@@ -17,12 +17,13 @@ fn hash_is_stable_across_runs() {
         name: Some("root".into()),
         transform: Transform::IDENTITY,
         color: Some(Color::WHITE),
+        opacity: Some(0.5),
         mesh: Some(test_mesh().hash()),
         children: vec![Node::default().hash()],
     };
     let node_hex = node.hash().to_hex();
-    insta_like(&mesh_hex, "a5ecc665878e63300bfc685174f8995062109075e4da6d1107e7e841da466717");
-    insta_like(&node_hex, "f281c62273ebf185efd3f044734e3e002c684320326db8aebf0b25d601533501");
+    insta_like(&mesh_hex, "145d08960a1c6b7501a09a7ca7e33f37761e7653c642f1b43cfead450a1abbc1");
+    insta_like(&node_hex, "0f3c679b6d8c48fc0ba36911b51f7fb47380aedb42dbbc78622bf151001cb3e3");
 }
 
 fn insta_like(got: &str, want: &str) {

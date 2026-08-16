@@ -9,8 +9,8 @@ export const meta = {
 };
 
 export default function build(ctx) {
-  // .color() also takes a 4-array as long as alpha is 1 (forward-compat
-  // slot; the *wire* form stays canonical: 3 numbers).
+  // .color() also takes a 4-array (alpha renders translucent — see
+  // colors-alpha.js; the *wire* form stays canonical: 3 numbers).
   odm.box(1).color([1, 0, 0, 1]);
   return odm.box(10).color(ctx.input('c'));
 }

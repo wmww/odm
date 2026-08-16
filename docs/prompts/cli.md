@@ -67,7 +67,8 @@ expands the repeats; `"fields"` picks exactly the columns you want.
 
 Request fields: `width`/`height` in pixels (default 1024×768), `out`
 (default under `.odm/renders/`), `wireframe: true` (edges only, in
-each object's own color — surfaces are not drawn), `no_grid`, `ortho`,
+each object's own color — surfaces are not drawn), `no_grid`,
+`opacity` (0..1: x-ray, everything translucent), `ortho`,
 `direction` (auto-framed view along that vector; default isometric).
 Exact camera placement exists too: `odm docs cli`.
 
@@ -76,6 +77,7 @@ odm render                                                   # framed isometric
 odm render '{"direction": [0, 0, -1], "ortho": true}'        # top view (plan)
 odm render '{"direction": [-1, 0, 0], "ortho": true}'        # side elevation
 odm render '{"wireframe": true, "width": 1600}'              # inspect topology
+odm render '{"opacity": 0.3}'                                # x-ray: see inside
 odm render '{"inputs": {"t": 2.5}, "out": "/tmp/frame.png"}' # one animation moment
 odm render '{"path": "parts/wheel.js", "inputs": {"radius": 12}}'  # one part alone
 ```

@@ -401,6 +401,12 @@ impl EngineState {
         if req.no_grid {
             opts.grid = false;
         }
+        if let Some(o) = req.opacity {
+            if !(0.0..=1.0).contains(&o) {
+                return Err(CmdError::bad_request("opacity must be in 0..=1"));
+            }
+            opts.opacity = o as f32;
+        }
 
         let mut renderer_slot = self.renderer.lock().unwrap();
         if renderer_slot.is_none() {

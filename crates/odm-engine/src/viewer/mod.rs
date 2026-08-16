@@ -42,6 +42,8 @@ pub(crate) struct Orbit {
 }
 
 const FOV_Y_DEG: f64 = 45.0;
+/// What View ▸ X-Ray renders everything at.
+const XRAY_OPACITY: f32 = 0.3;
 
 /// How far from a wire a click still counts, in UI points.
 const PICK_RADIUS_PT: f64 = 6.0;
@@ -147,6 +149,8 @@ pub struct ViewerApp {
     tab_counter: u64,
     tex: Option<ViewportTex>,
     wireframe: bool,
+    /// X-ray: render everything at `XRAY_OPACITY`.
+    xray: bool,
     grid: bool,
     needs_render: bool,
     /// The chat input line. The transcript itself lives in `EngineState`.
@@ -179,6 +183,7 @@ impl ViewerApp {
             tab_counter: 0,
             tex: None,
             wireframe: false,
+            xray: false,
             grid: true,
             needs_render: true,
             chat_input: String::new(),
@@ -673,6 +678,9 @@ impl ViewerApp {
         opts.camera = self.tab().orbit.camera();
         opts.wireframe = self.wireframe;
         opts.grid = self.grid;
+        if self.xray {
+            opts.opacity = XRAY_OPACITY;
+        }
         opts
     }
 

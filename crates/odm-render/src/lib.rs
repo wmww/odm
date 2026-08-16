@@ -77,6 +77,12 @@ pub struct RenderOptions {
     pub grid: bool,
     /// Linear RGBA clear color.
     pub background: [f32; 4],
+    /// Extra opacity multiplied into every instance's alpha (x-ray). 0..=1.
+    pub opacity: f32,
+    /// Exact depth-peel layers for translucency (deeper fragments fall into
+    /// an unsorted tail pass). The default suits CAD scenes; tests use 1 to
+    /// pin depth invariance.
+    pub peel_layers: u32,
 }
 
 impl RenderOptions {
@@ -88,6 +94,8 @@ impl RenderOptions {
             wireframe: false,
             grid: true,
             background: [0.055, 0.058, 0.065, 1.0],
+            opacity: 1.0,
+            peel_layers: 4,
         }
     }
 }

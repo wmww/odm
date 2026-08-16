@@ -60,6 +60,17 @@ pub fn node_from_json(store: &Store, v: &Value) -> Result<Hash, String> {
         }
     };
 
+    let opacity = match obj.get("opacity") {
+        None => None,
+        Some(o) => {
+            let v = o.as_f64().ok_or_else(|| format!("opacity must be a number, got {o}"))?;
+            if !(0.0..=1.0).contains(&v) {
+                return Err(format!("opacity must be in 0..=1, got {v}"));
+            }
+            Some(v as f32)
+        }
+    };
+
     let mesh = match obj.get("geom") {
         None => None,
         Some(Value::String(hex)) => {
@@ -81,5 +92,5 @@ pub fn node_from_json(store: &Store, v: &Value) -> Result<Hash, String> {
         Some(other) => return Err(format!("children must be an array, got {other}")),
     };
 
-    Ok(store.put(Object::Node(Node { name, transform, color, mesh, children })))
+    Ok(store.put(Object::Node(Node { name, transform, color, opacity, mesh, children })))
 }
