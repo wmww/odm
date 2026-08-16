@@ -7,8 +7,8 @@ use wgpu::util::DeviceExt;
 
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-/// mat4 + color, padded to uniform alignment.
-const INSTANCE_SIZE: u64 = 80;
+/// mat4 + color + params, padded to uniform alignment.
+const INSTANCE_SIZE: u64 = 96;
 /// view_proj + camera_pos + viewport.
 const GLOBALS_SIZE: u64 = 96;
 /// Two f32x3 endpoints per wire instance.
@@ -16,6 +16,8 @@ const WIRE_STRIDE: u64 = 24;
 
 const GRID_MINOR_COLOR: [f32; 4] = [0.16, 0.16, 0.18, 1.0];
 const GRID_MAJOR_COLOR: [f32; 4] = [0.28, 0.28, 0.32, 1.0];
+/// Grid line thickness in pixels (wires use `WIRE_WIDTH_PX`).
+const GRID_WIDTH_PX: f32 = 1.0;
 
 struct GpuMesh {
     vertices: wgpu::Buffer,
@@ -39,7 +41,6 @@ pub struct Renderer {
     globals_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
     pipe_fill: wgpu::RenderPipeline,
-    pipe_lines: wgpu::RenderPipeline,
     pipe_wire: wgpu::RenderPipeline,
     instance_stride: u64,
     mesh_cache: HashMap<Hash, GpuMesh>,
@@ -93,7 +94,6 @@ impl Renderer {
         });
 
         let pipe_fill = make_pipeline(&device, &pipeline_layout, &shader, PipelineKind::Fill);
-        let pipe_lines = make_pipeline(&device, &pipeline_layout, &shader, PipelineKind::Lines);
         let pipe_wire = make_pipeline(&device, &pipeline_layout, &shader, PipelineKind::Wire);
 
         let instance_stride =
@@ -105,7 +105,6 @@ impl Renderer {
             globals_layout,
             instance_layout,
             pipe_fill,
-            pipe_lines,
             pipe_wire,
             instance_stride,
             mesh_cache: HashMap::new(),
@@ -178,8 +177,7 @@ impl Renderer {
         globals[..64].copy_from_slice(bytemuck::cast_slice(&vp));
         let eye = [cam.eye[0] as f32, cam.eye[1] as f32, cam.eye[2] as f32, 1.0f32];
         globals[64..80].copy_from_slice(bytemuck::cast_slice(&eye));
-        let viewport =
-            [opts.width as f32, opts.height as f32, crate::WIRE_WIDTH_PX / 2.0, 0.0f32];
+        let viewport = [opts.width as f32, opts.height as f32, 0.0, 0.0f32];
         globals[80..96].copy_from_slice(bytemuck::cast_slice(&viewport));
         let globals_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("globals"),
@@ -243,24 +241,36 @@ impl Renderer {
         }
 
         // Instance slots: one per instance (wires reuse the instance color),
-        // then grid minor+major.
+        // then grid minor+major. `params` is per-slot line state: x = half
+        // line width in pixels (used by the wire-quad vertex path only).
         let n_inst = scene.instances.len();
         let n_slots = n_inst + 2;
         let stride = self.instance_stride as usize;
         let mut inst_data = vec![0u8; n_slots * stride];
-        fn write_slot(data: &mut [u8], stride: usize, i: usize, world: &[[f32; 4]; 4], color: &[f32; 4]) {
+        fn write_slot(
+            data: &mut [u8],
+            stride: usize,
+            i: usize,
+            world: &[[f32; 4]; 4],
+            color: &[f32; 4],
+            params: &[f32; 4],
+        ) {
             let base = i * stride;
             data[base..base + 64].copy_from_slice(bytemuck::cast_slice(world));
             data[base + 64..base + 80].copy_from_slice(bytemuck::cast_slice(color));
+            data[base + 80..base + 96].copy_from_slice(bytemuck::cast_slice(params));
         }
+        let wire_params = [crate::WIRE_WIDTH_PX / 2.0, 0.0, 0.0, 0.0];
+        let grid_params = [GRID_WIDTH_PX / 2.0, 0.0, 0.0, 0.0];
         for (i, inst) in scene.instances.iter().enumerate() {
-            write_slot(&mut inst_data, stride, i, &math::to_f32_cols(&inst.world), &inst.color);
+            let world = math::to_f32_cols(&inst.world);
+            write_slot(&mut inst_data, stride, i, &world, &inst.color, &wire_params);
         }
         let identity = math::to_f32_cols(&math::IDENTITY);
         let grid_minor_slot = n_inst;
         let grid_major_slot = grid_minor_slot + 1;
-        write_slot(&mut inst_data, stride, grid_minor_slot, &identity, &GRID_MINOR_COLOR);
-        write_slot(&mut inst_data, stride, grid_major_slot, &identity, &GRID_MAJOR_COLOR);
+        write_slot(&mut inst_data, stride, grid_minor_slot, &identity, &GRID_MINOR_COLOR, &grid_params);
+        write_slot(&mut inst_data, stride, grid_major_slot, &identity, &GRID_MAJOR_COLOR, &grid_params);
 
         let inst_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instances"),
@@ -280,7 +290,8 @@ impl Renderer {
             }],
         });
 
-        // Grid geometry.
+        // Grid geometry: endpoint pairs, drawn as wire-quad instances
+        // (6 floats per line = one WIRE_STRIDE instance).
         let grid = opts.grid.then(|| build_grid(scene.bounds));
         let grid_bufs = grid.as_ref().map(|g| {
             let minor = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -293,7 +304,7 @@ impl Renderer {
                 contents: bytemuck::cast_slice(&g.major),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-            (minor, g.minor.len() as u32 / 3, major, g.major.len() as u32 / 3)
+            (minor, g.minor.len() as u32 / 6, major, g.major.len() as u32 / 6)
         });
 
         let depth_view = &self.targets.as_ref().expect("ensure_targets ran").depth;
@@ -343,16 +354,16 @@ impl Renderer {
                 }
             }
 
-            // Grid: after the fill so depth testing occludes it, before the
-            // wires so they stay legible where the two cross.
+            // Grid: same wire-quad path as everything line-shaped, after the
+            // fill so depth testing occludes it.
             if let Some((minor_buf, minor_n, major_buf, major_n)) = &grid_bufs {
-                pass.set_pipeline(&self.pipe_lines);
+                pass.set_pipeline(&self.pipe_wire);
                 pass.set_bind_group(1, &inst_bg, &[(grid_minor_slot * stride) as u32]);
                 pass.set_vertex_buffer(0, minor_buf.slice(..));
-                pass.draw(0..*minor_n, 0..1);
+                pass.draw(0..4, 0..*minor_n);
                 pass.set_bind_group(1, &inst_bg, &[(grid_major_slot * stride) as u32]);
                 pass.set_vertex_buffer(0, major_buf.slice(..));
-                pass.draw(0..*major_n, 0..1);
+                pass.draw(0..4, 0..*major_n);
             }
 
             // Wires, in each instance's own color, nothing hidden.
@@ -446,11 +457,9 @@ impl Renderer {
 enum PipelineKind {
     /// Shaded triangles.
     Fill,
-    /// Flat-colored 1px line lists (the grid).
-    Lines,
-    /// Flat-colored wires: one instanced quad per edge, widened in screen
-    /// space. Like `Lines`, depth-tested but not depth-writing, so lines
-    /// never hide each other.
+    /// Flat-colored line quads: one instance per segment (both endpoints),
+    /// widened to the slot's pixel width in the vertex shader. Serves wires
+    /// and the grid alike.
     Wire,
 }
 
@@ -490,23 +499,11 @@ fn make_pipeline(
                 attributes: &POSITIONS,
             },
         ),
-        PipelineKind::Lines => (
-            wgpu::PrimitiveTopology::LineList,
-            "vs_main",
-            "fs_flat",
-            false,
-            wgpu::VertexBufferLayout {
-                array_stride: 12,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &POSITIONS,
-            },
-        ),
         PipelineKind::Wire => (
             wgpu::PrimitiveTopology::TriangleStrip,
             "vs_wire",
             "fs_flat",
-            // Wires write depth: nothing else does in wireframe mode, so the
-            // view stays see-through, but crossing wires resolve near-first
+            // Line quads write depth: crossing lines resolve near-first
             // instead of by draw order — matching what `pick_wire` selects.
             true,
             wgpu::VertexBufferLayout {

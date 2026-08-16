@@ -1,7 +1,7 @@
 struct Globals {
     view_proj: mat4x4<f32>,
     camera_pos: vec4<f32>,
-    // xy = viewport size in pixels, z = half wire width in pixels.
+    // xy = viewport size in pixels; zw unused.
     viewport: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -9,6 +9,8 @@ struct Globals {
 struct InstanceData {
     world: mat4x4<f32>,
     color: vec4<f32>,
+    // Line-quad state: x = half line width in pixels; yzw unused.
+    params: vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> inst: InstanceData;
 
@@ -61,7 +63,7 @@ fn vs_wire(
     let len = length(delta);
     let dir = select(vec2<f32>(1.0, 0.0), delta / len, len > 1e-6);
     let side = select(-1.0, 1.0, (vi & 1u) == 1u);
-    let offset = vec2<f32>(-dir.y, dir.x) * globals.viewport.z * side;
+    let offset = vec2<f32>(-dir.y, dir.x) * inst.params.x * side;
 
     let at_b = vi >= 2u;
     let clip = select(ca, cb, at_b);
