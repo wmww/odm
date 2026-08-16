@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 const COMMANDS: &str =
-    "status, sync, build, render, inspect, raycast, selection, poll, say";
+    "status, build, render, inspect, raycast, selection, poll, say";
 
 /// One socket request. Unknown commands *and* unknown fields are errors, so
 /// agents hear about typos instead of silently getting a default.
@@ -24,7 +24,6 @@ const COMMANDS: &str =
 enum Request {
     // Braces (not unit variants) so `deny_unknown_fields` applies here too.
     Status {},
-    Sync {},
     // The (path, set, preset) trio is spelled out per variant instead of a
     // #[serde(flatten)] ViewReq: flatten silently disables
     // deny_unknown_fields, and a typo'd option must stay an error.
@@ -33,9 +32,7 @@ enum Request {
         #[serde(default)]
         set: Map<String, Value>,
         preset: Option<String>,
-        view: Option<String>,
-        #[serde(default)]
-        viewer_state: bool,
+        view: Option<ViewSel>,
     },
     Render(RenderReq),
     Inspect {
@@ -43,9 +40,7 @@ enum Request {
         #[serde(default)]
         set: Map<String, Value>,
         preset: Option<String>,
-        view: Option<String>,
-        #[serde(default)]
-        viewer_state: bool,
+        view: Option<ViewSel>,
         /// Name or index path; absent (or "") is the root.
         node: Option<String>,
         depth: Option<f64>,
@@ -60,9 +55,7 @@ enum Request {
         #[serde(default)]
         set: Map<String, Value>,
         preset: Option<String>,
-        view: Option<String>,
-        #[serde(default)]
-        viewer_state: bool,
+        view: Option<ViewSel>,
         origin: Option<[f64; 3]>,
         dir: Option<[f64; 3]>,
     },
@@ -79,6 +72,16 @@ enum Request {
     Ack {},
 }
 
+/// `--view`, the one "target what the user sees" knob: bare (`true` on the
+/// wire) adopts the user's active viewer tab, a string names a specific
+/// slot (see status.views).
+#[derive(Deserialize, Clone, Debug)]
+#[serde(untagged)]
+enum ViewSel {
+    Active(bool),
+    Slot(String),
+}
+
 /// What a query targets: a doohickey path (default: `root.js`, when it
 /// exists) plus input values. `set` names any input — declared plain inputs
 /// become view args, everything else a view-level cascade value; `preset`
@@ -88,20 +91,17 @@ struct ViewReq {
     path: Option<String>,
     set: Map<String, Value>,
     preset: Option<String>,
-    /// Adopt a viewer tab's state as the base view: `view` names a slot
-    /// (see status.views), `viewer_state` takes the user's active tab.
-    view: Option<String>,
-    viewer_state: bool,
+    /// Adopt a viewer tab's state as the base view.
+    view: Option<ViewSel>,
 }
 
 fn view_req(
     path: Option<String>,
     set: Map<String, Value>,
     preset: Option<String>,
-    view: Option<String>,
-    viewer_state: bool,
+    view: Option<ViewSel>,
 ) -> ViewReq {
-    ViewReq { path, set, preset, view, viewer_state }
+    ViewReq { path, set, preset, view }
 }
 
 /// `inspect`'s two knobs: **scope** (which node, how deep) and **detail**
@@ -123,9 +123,7 @@ struct RenderReq {
     #[serde(default)]
     set: Map<String, Value>,
     preset: Option<String>,
-    view: Option<String>,
-    #[serde(default)]
-    viewer_state: bool,
+    view: Option<ViewSel>,
     // Sizes stay f64: the CLI sends JSON numbers that may carry a `.0`.
     #[serde(default = "default_width")]
     width: f64,
@@ -251,20 +249,19 @@ impl EngineState {
         }
         let _guard = self.cmd_lock.lock().unwrap();
         match req {
-            // Every command syncs first, so `sync` is just `status`.
-            Request::Status {} | Request::Sync {} => self.cmd_status(),
-            Request::Build { path, set, preset, view, viewer_state } => {
-                self.cmd_build(view_req(path, set, preset, view, viewer_state))
+            Request::Status {} => self.cmd_status(),
+            Request::Build { path, set, preset, view } => {
+                self.cmd_build(view_req(path, set, preset, view))
             }
             Request::Render(r) => self.cmd_render(r),
-            Request::Inspect { path, set, preset, view, viewer_state, node, depth, recursive, full, fields } => {
+            Request::Inspect { path, set, preset, view, node, depth, recursive, full, fields } => {
                 self.cmd_inspect(
-                    view_req(path, set, preset, view, viewer_state),
+                    view_req(path, set, preset, view),
                     Scope { node, depth, recursive, full, fields },
                 )
             }
-            Request::Raycast { path, set, preset, view, viewer_state, origin, dir } => {
-                self.cmd_raycast(view_req(path, set, preset, view, viewer_state), origin, dir)
+            Request::Raycast { path, set, preset, view, origin, dir } => {
+                self.cmd_raycast(view_req(path, set, preset, view), origin, dir)
             }
             Request::Selection {} => self.cmd_selection(),
             Request::Poll { .. } | Request::Say { .. } | Request::Ack {} => {
@@ -300,7 +297,7 @@ impl EngineState {
             // requirement — queries can name any file.
             "default_view": sync.snapshot.sources.contains_key(odm_build::DEFAULT_ROOT),
             // Active view slots (viewer tabs, or the headless default);
-            // `--view <slot>` / `--viewer-state` adopt their state.
+            // `--view [slot]` adopts their state.
             "views": views,
         }))
     }
@@ -312,17 +309,16 @@ impl EngineState {
     fn resolve_view(&self, sync: &SyncResult, req: &ViewReq) -> Result<View, CmdError> {
         // A viewer tab's state as the base: its path AND its input values;
         // --set/--preset then override on top.
-        let base: Option<View> = if req.viewer_state {
-            match self.active_view() {
+        let base: Option<View> = match &req.view {
+            Some(ViewSel::Active(true)) => match self.active_view() {
                 Some((_, view)) => Some(view),
                 None => {
                     return Err(CmdError::bad_request(
                         "no active viewer tab (is a viewer running?)",
                     ));
                 }
-            }
-        } else if let Some(slot) = &req.view {
-            match self.view_of(slot) {
+            },
+            Some(ViewSel::Slot(slot)) => match self.view_of(slot) {
                 Some(view) => Some(view),
                 None => {
                     let slots: Vec<String> =
@@ -332,9 +328,8 @@ impl EngineState {
                         if slots.is_empty() { "(none)".into() } else { slots.join(", ") }
                     )));
                 }
-            }
-        } else {
-            None
+            },
+            Some(ViewSel::Active(false)) | None => None,
         };
 
         let path = match (&req.path, &base) {
@@ -451,7 +446,6 @@ impl EngineState {
         match self.build_view_cmd(&sync, &view) {
             Ok((result, report)) => {
                 let mut o = json!({
-                    "generation": sync.generation.0,
                     "path": view.path,
                     "inputs": inputs_json(&report.inputs),
                     "presets": presets_json(report.presets.iter().map(|(n, v)| (n, v))),
@@ -489,13 +483,8 @@ impl EngineState {
             return Err(CmdError::bad_request("width/height must be in 16..=8192"));
         }
 
-        let view_req = view_req(
-            req.path.clone(),
-            req.set.clone(),
-            req.preset.clone(),
-            req.view.clone(),
-            req.viewer_state,
-        );
+        let view_req =
+            view_req(req.path.clone(), req.set.clone(), req.preset.clone(), req.view.clone());
         let (_sync, view, result, _report) = self.query_view(&view_req)?;
         let store = &self.build_engine().store;
         let scene = flatten_scene(store, result.root)
@@ -544,7 +533,6 @@ impl EngineState {
             "width": width,
             "height": height,
             "view": view.path,
-            "root": result.root.to_hex(),
             "instances": scene.instances.len(),
             "logs": logs_json(&result.logs),
         }))
@@ -817,9 +805,26 @@ mod tests {
         let e = parse(r#"{"cmd":"render","typo":1}"#).err().unwrap();
         assert!(e.contains("typo"), "{e}");
 
-        // `interface` was absorbed into `build`.
+        // `interface` was absorbed into `build`; `sync` into `status`.
         let e = parse(r#"{"cmd":"interface"}"#).err().unwrap();
         assert!(e.contains("build"), "{e}");
+        let e = parse(r#"{"cmd":"sync"}"#).err().unwrap();
+        assert!(e.contains("status"), "{e}");
+    }
+
+    #[test]
+    fn view_takes_true_or_a_slot() {
+        assert!(matches!(
+            parse(r#"{"cmd":"build","view":true}"#),
+            Ok(Request::Build { view: Some(ViewSel::Active(true)), .. })
+        ));
+        assert!(matches!(
+            parse(r#"{"cmd":"inspect","view":"tab-1"}"#),
+            Ok(Request::Inspect { view: Some(ViewSel::Slot(s)), .. }) if s == "tab-1"
+        ));
+        // The old spelling is a typo now, not a silent no-op.
+        let e = parse(r#"{"cmd":"build","viewer_state":true}"#).err().unwrap();
+        assert!(e.contains("viewer_state"), "{e}");
     }
 
     #[test]

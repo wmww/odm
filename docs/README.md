@@ -10,6 +10,8 @@ engine). Docs about ODM's implementation live in `notes/`.
 - `api/` — the full JS API reference, one topic per file. Start at
   `api/README.md`. Served by `odm docs` (compiled into the binary, so
   it always matches the engine; works with no engine running).
+- `cli.md` — the full CLI reference (`odm docs cli`); `prompts/cli.md`
+  keeps only the core loop.
 - `changes/` — API migration guides, one per version hop (none yet).
 - `versioning.md` — what API versions promise and how cuts happen.
 

@@ -19,9 +19,9 @@ out for free: sweeping any input (`--set radius=8,10,12`) for comparison.
 
 ## Camera shorthands
 `--look top|front|side|iso` for the axis-aligned ortho + default-iso cases
-(sugar over `Camera::Auto{direction, ortho}` — `commands.rs:727`). Note
-`--view` is already taken (viewer slot adoption), hence `--look`; if
-`cli-diet.md`'s flag merge frees a better name later, rename then.
+(sugar over `Camera::Auto{direction, ortho}` in `commands.rs`). Note
+`--view` is taken (viewer-tab adoption; since the cli-diet merge it is the
+one such flag, bare or with a slot), hence `--look`.
 
 Optionally later: project-level named views in `odm.toml` (the `meta.presets`
 idea applied to cameras). Not needed for v1 — the four built-ins cover what
@@ -29,5 +29,5 @@ the test session actually typed.
 
 ## Prompt/docs
 Prompt teaches `--look` + `--direction` + contact sheets; the explicit camera
-five-some (`--eye/--target/--up/--fov/--ortho-height`) moves to docs only
-(see `cli-diet.md` policy).
+five-some (`--eye/--target/--up/--fov/--ortho-height`) is already docs-only
+(`docs/cli.md`, per `notes/agent-surface.md`).

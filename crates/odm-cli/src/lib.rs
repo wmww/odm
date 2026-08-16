@@ -13,8 +13,7 @@ use std::path::{Path, PathBuf};
 
 // No `\`-continuation after the quote: it would eat this block's first indent.
 /// The command list, for the binary's `--help`.
-pub const USAGE: &str = "  status                     project overview: files, generation, inputs
-  sync                       force a rescan (every command also syncs first)
+pub const USAGE: &str = "  status                     project overview: files, views, generation
   build   [<path>] [--set name=value ...] [--preset <name>]
                              build a view; reports its settable inputs, the
                              target's description/presets, build stats, logs
@@ -41,9 +40,9 @@ View options are [<path>] [--set name=value ...] [--preset <name>].
 Queries target a view: <path> (default root.js) built with its declared
 input defaults; --set names any input (--set t=1.5, --set 'size=[10,20,5]',
 JSON or bare strings), --preset applies a named bundle from the target's
-meta first. --viewer-state adopts the user's active viewer tab (path +
-inputs) as the base instead; --view <slot> adopts a specific tab (slots:
-`odm status` → views).
+meta first. --view targets what the user sees instead: bare, the active
+viewer tab (path + inputs) as the base; --view <slot> a specific tab
+(slots: `odm status` → views).
 ";
 
 /// True if `args` asks for help rather than naming a command — including
@@ -90,8 +89,7 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         ("set", ArgKind::Set),
         ("preset", ArgKind::Str),
         ("path", ArgKind::Str),
-        ("view", ArgKind::Str),
-        ("viewer-state", ArgKind::Flag),
+        ("view", ArgKind::OptStr),
     ];
     // Set by the poll arm below; see `follow_poll`.
     let mut follow = false;
@@ -100,7 +98,7 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             VIEW_OPTS.iter().chain(extra).copied().collect()
         };
     let request = match cmd.as_str() {
-        "status" | "sync" | "selection" => parse_opts(&cmd, rest, &[])?,
+        "status" | "selection" => parse_opts(&cmd, rest, &[])?,
         "build" => {
             let (path, rest) = optional_positional(rest);
             let mut v = parse_opts(&cmd, rest, &with_view(&[]))?;
@@ -182,9 +180,11 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             v.insert("text".into(), json!(text));
             v
         }
-        // Gone, but agents remember it: point at what replaced it.
+        // Gone, but agents remember them: point at what replaced them.
         "tree" => bail!("`tree` is now `inspect`: `odm inspect` for the scene, \
                          `odm inspect <name>` for one part"),
+        "sync" => bail!("every command syncs first, so there is no `sync`; \
+                         `odm status` if the rescan is all you want"),
         other => bail!("unknown command {other:?}; run `odm --help`"),
     };
 
@@ -377,6 +377,10 @@ fn acknowledge(stream: &mut UnixStream, reader: &mut BufReader<UnixStream>) {
 enum ArgKind {
     Num,
     Str,
+    /// A value is optional: bare sends `true`, `--opt value`/`--opt=value`
+    /// the string (`--view` is the one user: bare = the active viewer tab,
+    /// named = that slot).
+    OptStr,
     Vec3,
     Flag,
     /// Repeatable `--set name=value`; values parse as JSON, falling back to
@@ -414,6 +418,18 @@ fn parse_opts(
                 }
                 out.insert(key, json!(true));
                 i += 1;
+            }
+            ArgKind::OptStr => {
+                // A following `--something` is the next option, not a value.
+                let (value, advance) = match &inline_value {
+                    Some(v) => (Some(v.clone()), 1),
+                    None => match args.get(i + 1) {
+                        Some(v) if !v.starts_with("--") => (Some(v.clone()), 2),
+                        _ => (None, 1),
+                    },
+                };
+                out.insert(key, value.map_or(json!(true), |v| json!(v)));
+                i += advance;
             }
             _ => {
                 let (value, advance) = match &inline_value {
@@ -461,7 +477,7 @@ fn parse_opts(
                         i += advance;
                         continue;
                     }
-                    ArgKind::Flag => unreachable!(),
+                    ArgKind::Flag | ArgKind::OptStr => unreachable!(),
                 };
                 out.insert(key, parsed);
                 i += advance;
@@ -638,6 +654,23 @@ mod tests {
         );
         assert_eq!(out.lines().count(), 8, "{out}");
         assert_eq!(serde_json::from_str::<Value>(&out).unwrap(), v);
+    }
+
+    /// `--view` is bare ("the active tab", true on the wire) or names a slot;
+    /// a following option is not mistaken for a slot name.
+    #[test]
+    fn view_is_bare_or_named() {
+        let spec = &[("view", ArgKind::OptStr), ("full", ArgKind::Flag)];
+        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let v = parse_opts("inspect", &args(&["--view", "--full"]), spec).unwrap();
+        assert_eq!(v["view"], json!(true));
+        assert_eq!(v["full"], json!(true));
+        let v = parse_opts("inspect", &args(&["--view", "tab-2"]), spec).unwrap();
+        assert_eq!(v["view"], json!("tab-2"));
+        let v = parse_opts("inspect", &args(&["--view=tab-3"]), spec).unwrap();
+        assert_eq!(v["view"], json!("tab-3"));
+        let v = parse_opts("inspect", &args(&["--view"]), spec).unwrap();
+        assert_eq!(v["view"], json!(true));
     }
 
     #[test]

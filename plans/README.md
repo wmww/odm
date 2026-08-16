@@ -7,4 +7,6 @@ independent work; cross-references note where they touch.
 - `render-workflow.md` — contact-sheet/multi-frame renders, `--look` camera
   shorthands, demote explicit camera to docs.
 - `clearance.md` — "do these parts touch" assembly queries.
-- `cli-diet.md` — cross-cutting surface cuts + the prompt-vs-docs policy.
+
+Done and deleted: `cli-diet.md` (surface cuts + the prompt-vs-docs policy —
+now `notes/agent-surface.md`).

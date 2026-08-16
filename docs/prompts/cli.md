@@ -1,28 +1,31 @@
 # CLI reference
 
 The `odm` CLI talks to the running engine. Run it from anywhere inside
-the project — it walks up from cwd to the nearest `odm.toml` and talks to
-that project's engine — or pass `--project <dir>` first, which is taken
-exactly as given (no walking up from it). Every command that looks at the scene **syncs
-first** — rescans files, rebuilds what changed, then answers — and prints
-a single JSON object. Exit code 0 = ok, nonzero = error. (`prompt` and
-`docs` are the exceptions: no engine, and markdown rather than JSON.)
+the project — it finds the nearest `odm.toml` at or above cwd. Every
+command that looks at the scene **syncs first** — rescans files,
+rebuilds what changed, then answers — so it always reflects your latest
+edit, and prints a single JSON object. Exit code 0 = ok, nonzero =
+error. (`prompt` and `docs` are the exceptions: no engine, and markdown
+rather than JSON.)
 
 ```
-odm status                    # files, generation, project name
+odm status                    # files, views, project name
 odm build [<path>] [--set name=value ...] [--preset <name>]
                               # settable inputs, presets, build stats
 odm inspect [<node>] [--path <p>] [--set ...] [--depth N] [--recursive]
             [--full | --fields a,b,c]        # measure the scene
-odm raycast --origin 0,0,50 --dir 0,0,-1 [--path <p>] [--set ...]
 odm render [<path>] [--set ...] [options]    # PNG → prints path
 odm selection                 # what the user selected in the viewer
 odm poll [--timeout <sec>] [--follow]   # wait for messages from the user
 odm say <text>                # send a message to the user
 odm prompt                    # print these instructions
-odm docs [<topic>]            # full API reference (list topics when bare)
+odm docs [<topic>]            # full reference (list topics when bare)
 odm docs search <pattern>     # grep the reference, whole sections out
 ```
+
+This page is the short version; `odm docs cli` is the full one —
+raycast probing, explicit camera placement, viewer view slots, index
+paths, `--project`.
 
 Every scene query targets a **view**: a doohickey (default `root.js`)
 built with its declared input defaults. `--set name=value` sets any
@@ -50,22 +53,17 @@ odm inspect seat --recursive  # ...and its subtree
 odm inspect --fields name,bounds     # narrow the columns instead
 ```
 
-A node is addressed by the `name` you gave it (`s.name('seat')`); an
-index path from the root (`0`, `1/0/2`, `""` = root) works too, and is
-the tiebreaker when a name is used more than once — the error lists the
-matching ids. Bare `inspect` is a whole-scene overview; naming a node
+A node is addressed by the `name` you gave it (`s.name('seat')`) — name
+your parts. Bare `inspect` is a whole-scene overview; naming a node
 asks about that node, so it comes back in full detail with its children
 as a count. `--depth N`/`--recursive` set how far to expand.
 
 Every entry has `id`, `name`, world `bounds` and `tris` **for its whole
 subtree** — so the root's bounds are the model's overall extent, and a
 group's are the group's. Runs of identical siblings collapse into one
-entry with `repeat: N`: their ids run on consecutively from the one
-shown, and they differ only in placement. `--full` adds `verts`,
-`volume`, `area` (world-space, on demand) and the node's own
-`position`/`rotation`/`scale`, and expands the repeats. `--fields`
-picks exactly what you want from `name, color, bounds, tris, verts,
-volume, area, position, rotation, scale, matrix, world_matrix`.
+entry with `repeat: N`; they differ only in placement. `--full` adds
+`verts`, `volume`, `area` and the node's own placement, and expands the
+repeats; `--fields` picks exactly the columns you want.
 
 ## Rendering
 
@@ -73,8 +71,7 @@ Options: `--width/--height px` (default 1024×768),
 `--out file.png` (default under `.odm/renders/`), `--wireframe` (edges
 only, in each object's own color — surfaces are not drawn), `--no-grid`,
 `--ortho`, `--direction x,y,z` (auto-framed view from that direction;
-default isometric), or explicit `--eye x,y,z --target x,y,z [--up x,y,z]
-[--fov deg | --ortho-height h]`.
+default isometric). Exact camera placement exists too: `odm docs cli`.
 
 ```
 odm render                                   # framed isometric
@@ -133,4 +130,4 @@ When the user refers to a part ("make *this* one longer"), the poll's
 `view.selection` (or `odm selection`) has it — clicked parts appear as
 `{id, name}`, in pick order (shift-click selects several). To query
 exactly what the user is seeing (their tab, their input values), add
-`--viewer-state` to any scene query.
+bare `--view` to any scene query.

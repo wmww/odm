@@ -389,7 +389,7 @@ impl ViewerApp {
         }
         self.active = index;
         self.needs_render = true;
-        // The CLI's `odm selection` and `--viewer-state` follow the tab the
+        // The CLI's `odm selection` and bare `--view` follow the tab the
         // user is looking at.
         self.state().set_selection(self.tab().selected.clone());
         self.state().set_active_slot(Some(self.tab().slot.clone()));

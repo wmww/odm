@@ -173,17 +173,21 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   headless), i.e. on every `published` change. It also owns its winit event
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
-  Commands: status/sync/build/render/inspect/raycast/
+  Commands: status/build/render/inspect/raycast/
   selection, and poll/say/ack (see "Talking to the agent"); every
-  command except those three syncs first. `build` is the one answer to
+  command except those three syncs first (no standalone `sync` — folded into
+  `status` 2026-08, the CLI redirects the name). `build` is the one answer to
   "what's settable": description, presets, flat inputs list, lints, build
   stats — and on a *failed* build it still attaches the target's declared
   schema next to the error (`CmdError::extra` → top-level fields). `inspect`
   is the one scene query (see "Scene query" below). View-scoped queries take
   optional
-  path + `--set`/`--preset`, or adopt a viewer tab (`--view <slot>` /
-  `--viewer-state`); poll answers carry a snapshot of the user's active view
-  (path, inputs, selection). CLI one-off views build without publishing;
+  path + `--set`/`--preset`, or adopt a viewer tab: `--view` bare = the
+  user's active tab, `--view <slot>` = that tab (wire: `view: true |
+  "slot"`, untagged `ViewSel`); poll answers carry a snapshot of the user's
+  active view (path, inputs, selection). Agent-visible responses print no
+  content hashes and no `generation` (status keeps it) — see
+  notes/agent-surface.md. CLI one-off views build without publishing;
   viewer slots publish into a per-slot map (all live roots pinned together
   for GC). Protocol: ndjson over unix socket,
   `{ok: bool, ...}` responses. Files: `state.rs` (slot-keyed published map,
