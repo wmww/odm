@@ -12,17 +12,21 @@ agent-first, and agents write JSON all day (`gh api`, `curl`).
 ## Grammar
 `odm [--project <dir>] <cmd> ['{…json}']`
 
-The JSON object is the socket request body, minus `cmd`. No flags, no other
-positionals — mixing grammars would mean keeping both.
+The JSON object is the socket request body, minus `cmd`. Within a command,
+no flags and no other positionals — mixing grammars would mean keeping both.
 
-- In scope: every engine command — `status`, `build`, `render`, `inspect`,
-  `raycast`, `selection`, `poll`. All current flags/positionals become
-  fields (`path`, `node`, `view`, `depth`, `timeout`, …).
-- Out of scope: `say` keeps free text (prose, its no-quoting-rules design is
-  the point); `prompt`/`docs` are engineless and keep their textual forms;
-  `--project` stays a prefix (transport — resolved before a request exists).
-- `poll`'s `follow` becomes a body field the CLI strips before sending
-  (client-side loop; the engine never sees it, same as today).
+The rule: **commands that target a view take one JSON request; everything
+else stays bare, flags, or text.**
+
+- In scope: `build`, `render`, `inspect`, `raycast` — the four that share
+  the view-spec shape. All their current flags/positionals become fields
+  (`path`, `node`, `view`, `depth`, …).
+- Out of scope: `status`/`selection` are bare (no args). `poll` keeps
+  `--timeout`/`--follow` — its args configure the CLI's own waiting
+  behavior (`--follow` never reaches the engine), not a structured request.
+  `say` keeps free text (prose; its no-quoting-rules design is the point);
+  `prompt`/`docs` are engineless and keep their textual forms; `--project`
+  stays a prefix (transport — resolved before a request exists).
 
 ## Design
 - **Rename `set` → `inputs`** on the wire while every call site changes
@@ -30,7 +34,7 @@ positionals — mixing grammars would mean keeping both.
   imperative, as if persisting something.
 - The CLI keeps only transport: project discovery, socket, pretty-printing,
   the poll ack handshake, resolving `out` against its cwd (a client-side
-  pass over the body). `parse_opts`/`ArgKind` delete.
+  pass over the body). `parse_opts`/`ArgKind` shrink to poll's two flags.
 - **Errors are the grammar now.** serde `deny_unknown_fields` already
   catches typos; invest in messages (unknown field lists its siblings,
   wrong-shape says what was expected). One error path instead of
