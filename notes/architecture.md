@@ -139,18 +139,49 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   speculative infrastructure for future parallelism, exercised only by
   `concurrent_same_pass_dedups`.
 - `odm-render` — wgpu =29.0.4 (MUST track egui's pinned wgpu major);
-  the single flattener `flatten_node` (color inheritance, sRGB→linear — the
+  the single flattener `flatten_node` (color replace-wins inheritance,
+  multiplicative opacity product into instance alpha, sRGB→linear — the
   only conversion in the system, world AABB, node ids for picking — engine
   and viewer both use it) → one draw_indexed per
   instance with dynamic uniform offsets (not instanced draws), flat shading
-  via screen-space derivatives, MSAA 4x, wireframe mode (edges only, in the
-  instance color, no fill; one instanced quad per edge widened in the vertex
-  shader to `WIRE_WIDTH_PX` — WebGPU line primitives are stuck at 1px, and the
-  grid still uses them; `pick_wire` does the matching screen-space
-  selection), auto-scaled grid, auto-framing
-  perspective/ortho cameras; `render_png` and the viewer viewport share
-  `render_to_views`; the GPU mesh cache is pruned to the live scene after
-  every render/publish. `Renderer::with_device` for the shared eframe device.
+  via screen-space derivatives, auto-framing perspective/ortho cameras;
+  `render_png` and the viewer viewport share `render_to_target` (renderer
+  owns every intermediate texture; callers hand one final single-sample
+  view); the GPU mesh cache is pruned to the live scene after every
+  render/publish. `Renderer::with_device` for the shared eframe device.
+  **Pass structure** (2026-08-16 restructure; two categories only, no
+  per-geometry depth/blend hacks): opaque pass (premultiplied linear
+  Rgba16Float color cleared to premultiplied background + depth) → exact
+  translucency via **depth peeling** (`peel_layers` front-to-back layers,
+  default 4: geometry into a scratch layer with blend-replace + depth
+  isolating the nearest not-yet-peeled fragment, discarding at-or-nearer
+  than the prev peel depth or behind opaque; then a fullscreen
+  under-composite into the accumulation; ping-pong peel depth textures) →
+  unsorted tail pass for deeper fragments (blend under, draw order) →
+  fullscreen compose (accum over opaque, un-premultiply) into the target —
+  which makes transparent-background PNG alpha exact. Determinism rules:
+  one peel pipeline per geometry family reused across layers, `@invariant`
+  positions so peel and tail agree bit-exactly (tested: N=1 == N=4 canary);
+  coplanar translucent fragments collapse to one layer by design (equal
+  depth discards — no double-darkening, but stacked identical surfaces
+  don't accumulate). Translucent mesh passes cull back faces: a 30% solid
+  reads as one veil. Effective alpha = color.a × opacity product ×
+  `RenderOptions.opacity` (x-ray; CLI `--opacity`, viewer View ▸ X-Ray at
+  0.3); partition ≥1 → opaque, <1 → peeled. **All lines are translucent**:
+  wires and grid share one line-quad path (instance = endpoint pair,
+  widened to per-slot pixel width + half-pixel analytic-AA feather;
+  coverage alpha; grid minors also fade by projected line spacing —
+  smoothstep 2..8 output px — so dense regions melt instead of moiréing);
+  `pick_wire` does the matching screen-space selection. Wireframe mode =
+  skip the fill passes. **No MSAA** (dropped deliberately — silhouettes
+  stay aliased for the retro look; the artifacts that hurt were grid moiré
+  and wireframe speckle, fixed by the AA/fade above, not by MSAA);
+  `RenderOptions.supersample` (CLI `--supersample`, default 1) renders k×
+  larger internally (premultiplied compose → box downsample; internal size
+  validated against the device texture cap) for AA on demand. Perf (debug
+  build, 2026-08-16): 400-sphere full x-ray ≈ same ~80 ms CLI round-trip
+  as opaque; 4× supersample ~120 ms — the N+1 translucent draws are
+  nowhere near a bottleneck at CAD scale.
 - `odm-engine` — library, entered via `odm run` (`run_headless(project)` /
   `run_viewer(Option<project>)`).
   Headless: socket server only. Default: + eframe
