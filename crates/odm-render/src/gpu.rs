@@ -5,7 +5,6 @@ use odm_ir::Hash;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
-pub const MSAA_SAMPLES: u32 = 4;
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// mat4 + color, padded to uniform alignment.
@@ -27,6 +26,13 @@ struct GpuMesh {
     wires: Option<(wgpu::Buffer, u32)>,
 }
 
+/// Renderer-owned intermediate targets, remade when the render size changes.
+/// Callers only ever hand in the one final single-sample color view.
+struct Targets {
+    size: (u32, u32),
+    depth: wgpu::TextureView,
+}
+
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -37,6 +43,7 @@ pub struct Renderer {
     pipe_wire: wgpu::RenderPipeline,
     instance_stride: u64,
     mesh_cache: HashMap<Hash, GpuMesh>,
+    targets: Option<Targets>,
 }
 
 impl Renderer {
@@ -102,6 +109,7 @@ impl Renderer {
             pipe_wire,
             instance_stride,
             mesh_cache: HashMap::new(),
+            targets: None,
         }
     }
 
@@ -126,34 +134,42 @@ impl Renderer {
             height: opts.height,
             depth_or_array_layers: 1,
         };
-        let msaa = self.make_texture(size, COLOR_FORMAT, MSAA_SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
-        let resolve = self.make_texture(
+        let target = self.make_texture(
             size,
             COLOR_FORMAT,
-            1,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         );
-        let depth = self.make_texture(size, DEPTH_FORMAT, MSAA_SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let target_view = target.create_view(&Default::default());
 
-        let msaa_view = msaa.create_view(&Default::default());
-        let resolve_view = resolve.create_view(&Default::default());
-        let depth_view = depth.create_view(&Default::default());
-
-        self.render_to_views(scene, opts, &msaa_view, &resolve_view, &depth_view)?;
-        let rgba = self.read_back(&resolve, opts.width, opts.height)?;
+        self.render_to_target(scene, opts, &target_view)?;
+        let rgba = self.read_back(&target, opts.width, opts.height)?;
         encode_png(&rgba, opts.width, opts.height)
     }
 
-    /// The single scene-render path: draws into the given MSAA view with
-    /// resolve target. The viewer viewport uses this too.
-    pub fn render_to_views(
+    /// Intermediate targets for this render size, remade only on resize.
+    fn ensure_targets(&mut self, width: u32, height: u32) {
+        if self.targets.as_ref().is_some_and(|t| t.size == (width, height)) {
+            return;
+        }
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let depth =
+            self.make_texture(size, DEPTH_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        self.targets = Some(Targets {
+            size: (width, height),
+            depth: depth.create_view(&Default::default()),
+        });
+    }
+
+    /// The single scene-render path: draws into the given single-sample color
+    /// view, sized `opts.width` x `opts.height`. All intermediate targets are
+    /// renderer-owned. The viewer viewport uses this too.
+    pub fn render_to_target(
         &mut self,
         scene: &RenderScene,
         opts: &RenderOptions,
-        msaa_view: &wgpu::TextureView,
-        resolve_view: &wgpu::TextureView,
-        depth_view: &wgpu::TextureView,
+        target: &wgpu::TextureView,
     ) -> Result<(), RenderError> {
+        self.ensure_targets(opts.width, opts.height);
         let cam = opts.camera.resolve(scene.bounds, opts.width as f64 / opts.height as f64);
 
         // Globals.
@@ -280,15 +296,16 @@ impl Renderer {
             (minor, g.minor.len() as u32 / 3, major, g.major.len() as u32 / 3)
         });
 
+        let depth_view = &self.targets.as_ref().expect("ensure_targets ran").depth;
         let mut encoder =
             self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: msaa_view,
+                    view: target,
                     depth_slice: None,
-                    resolve_target: Some(resolve_view),
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: opts.background[0] as f64,
@@ -296,7 +313,7 @@ impl Renderer {
                             b: opts.background[2] as f64,
                             a: opts.background[3] as f64,
                         }),
-                        store: wgpu::StoreOp::Discard,
+                        store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -358,14 +375,13 @@ impl Renderer {
         &self,
         size: wgpu::Extent3d,
         format: wgpu::TextureFormat,
-        samples: u32,
         usage: wgpu::TextureUsages,
     ) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size,
             mip_level_count: 1,
-            sample_count: samples,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
             usage,
@@ -525,11 +541,7 @@ fn make_pipeline(
             stencil: Default::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState {
-            count: MSAA_SAMPLES,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
+        multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some(fragment_entry),

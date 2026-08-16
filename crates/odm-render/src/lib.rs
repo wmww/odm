@@ -14,7 +14,7 @@ mod wire;
 
 pub use camera::{Camera, Projection};
 pub use flatten::{DEFAULT_COLOR, flatten_node, flatten_scene, mesh_aabb, node_id};
-pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, MSAA_SAMPLES, Renderer};
+pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, Renderer};
 pub use wire::{WireHit, mesh_edges, pick_wire};
 
 /// Re-exported so the viewer uses the exact same wgpu version.

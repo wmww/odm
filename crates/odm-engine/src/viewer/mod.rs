@@ -109,13 +109,12 @@ impl Orbit {
     }
 }
 
-/// Offscreen viewport target registered as an egui texture.
+/// Offscreen viewport target registered as an egui texture. One final color
+/// texture; the renderer owns every intermediate target.
 struct ViewportTex {
     size: [u32; 2],
-    msaa_view: wgpu::TextureView,
-    resolve_view: wgpu::TextureView,
+    target_view: wgpu::TextureView,
     egui_view: wgpu::TextureView,
-    depth_view: wgpu::TextureView,
     tex_id: egui::TextureId,
     registered: bool,
 }
@@ -628,38 +627,18 @@ impl ViewerApp {
         let device = &rs.device;
         let extent =
             wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 };
-        let make = |samples: u32, format: wgpu::TextureFormat, usage, view_formats: &[wgpu::TextureFormat]| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("viewport"),
-                size: extent,
-                mip_level_count: 1,
-                sample_count: samples,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats,
-            })
-        };
-        let msaa = make(
-            odm_render::MSAA_SAMPLES,
-            odm_render::COLOR_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-            &[],
-        );
         // egui samples in gamma space: expose a non-sRGB view of the sRGB target.
-        let resolve = make(
-            1,
-            odm_render::COLOR_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            &[wgpu::TextureFormat::Rgba8Unorm],
-        );
-        let depth = make(
-            odm_render::MSAA_SAMPLES,
-            odm_render::DEPTH_FORMAT,
-            wgpu::TextureUsages::RENDER_ATTACHMENT,
-            &[],
-        );
-        let egui_view = resolve.create_view(&wgpu::TextureViewDescriptor {
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("viewport"),
+            size: extent,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: odm_render::COLOR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+        });
+        let egui_view = target.create_view(&wgpu::TextureViewDescriptor {
             format: Some(wgpu::TextureFormat::Rgba8Unorm),
             ..Default::default()
         });
@@ -679,10 +658,8 @@ impl ViewerApp {
         };
         self.tex = Some(ViewportTex {
             size,
-            msaa_view: msaa.create_view(&Default::default()),
-            resolve_view: resolve.create_view(&Default::default()),
+            target_view: target.create_view(&Default::default()),
             egui_view,
-            depth_view: depth.create_view(&Default::default()),
             tex_id,
             registered: true,
         });
@@ -708,13 +685,7 @@ impl ViewerApp {
         let empty;
         let Some(scene) = &tab.scene else {
             empty = RenderScene { instances: Vec::new(), meshes: Default::default(), bounds: None };
-            if let Err(e) = self.renderer.render_to_views(
-                &empty,
-                &opts,
-                &tex.msaa_view,
-                &tex.resolve_view,
-                &tex.depth_view,
-            ) {
+            if let Err(e) = self.renderer.render_to_target(&empty, &opts, &tex.target_view) {
                 eprintln!("viewport render failed: {e}");
             }
             self.needs_render = false;
@@ -756,13 +727,7 @@ impl ViewerApp {
             };
             &highlighted
         };
-        if let Err(e) = self.renderer.render_to_views(
-            render_scene,
-            &opts,
-            &tex.msaa_view,
-            &tex.resolve_view,
-            &tex.depth_view,
-        ) {
+        if let Err(e) = self.renderer.render_to_target(render_scene, &opts, &tex.target_view) {
             eprintln!("viewport render failed: {e}");
         }
         let _ = &tex.egui_view; // kept alive for egui sampling
