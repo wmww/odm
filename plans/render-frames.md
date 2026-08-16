@@ -31,7 +31,9 @@ canonical views; see `render-camera.md`). Merge is shallow per field except
   Build every frame, union their bounds, fit once from the union
   (`camera.rs` `resolve` already takes bounds — pass the union). Per-frame
   `look` directions still work; the fit, not the direction, is shared.
-  Explicit per-frame cameras are used as-is.
+  Explicit per-frame cameras are used as-is. Mixed sheets (e.g. an adopted
+  tab camera in the base, per-frame `look` overrides): auto-framed tiles
+  share the union fit; explicit-camera tiles opt out per-tile.
 - **Captions.** Each tile captioned with its frame's overrides
   (`t=0.75`, `look=top`). The wgpu renderer has no text path; tiles are
   composited into the sheet CPU-side anyway — stamp captions there with a
