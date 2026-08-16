@@ -9,6 +9,10 @@ discussions that followed. Cross-references note where plans touch.
   viewer tab's camera on `view`.
 - `agent-activity-view.md` — viewer cards showing the agent's last CLI
   action (render/raycast/inspect) behind the chat transcript.
+- `signed-distance.md` — `clearance` upgraded to signed `distance`:
+  exact positive gap (+closest points), penetration as a guaranteed
+  separating translation. Corrects clearance.md's premise: manifold-csg
+  0.3.3 *does* have `min_gap`.
 
 Done and deleted: `cli-diet.md` (surface cuts + the prompt-vs-docs policy —
 now `notes/agent-surface.md`); `render-workflow.md` (superseded by

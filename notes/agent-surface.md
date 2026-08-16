@@ -69,11 +69,11 @@ grammar. Standing decisions:
   pairwise over the operands whose AABBs touch), the gap only bounded
   from below by AABB distance (0 = boxes touch, NOT contact — think
   interlocking L-shapes). Deliberately no signed distance and no exact
-  min distance: exact distance needs a custom triangle-BVH in
-  odm-kernel (manifold-csg 0.3.3 has no distance query) — build it only
-  if tiers 1+2 prove insufficient in practice, and even then min
-  distance is 0 under overlap, never negative (penetration depth is a
-  different, harder query). Result keys are `gap_lower_bound` in *both*
+  min distance yet — plans/signed-distance.md is the upgrade path
+  (note: manifold-csg 0.3.3 *does* have `min_gap`, contrary to the
+  original clearance plan; what's missing is closest points and any
+  penetration depth, which is the hard part — exact MTD for non-convex
+  meshes is intractable). Result keys are `gap_lower_bound` in *both*
   surfaces — parity of result shape beats JS camelCase. CLI errors on a
   pair where one node contains the other, and on nodes with no
   geometry. A weaker complementary idea (build-report lint flagging
