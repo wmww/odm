@@ -10,6 +10,9 @@ discussions that followed. Cross-references note where plans touch.
   partial requests merged over the base, one captioned tiled PNG.
 - `render-camera.md` — `look` as the one camera field; render adopts the
   viewer tab's camera on `view`.
+- `renderer-transparency.md` — transparency via depth peeling, drop MSAA,
+  grid/wires unified as normal line geometry, x-ray `opacity` (design
+  discussion with the user, 2026-08-15).
 - `clearance.md` — "do these parts touch" assembly queries.
 
 Done and deleted: `cli-diet.md` (surface cuts + the prompt-vs-docs policy —
