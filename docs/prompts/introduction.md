@@ -28,5 +28,6 @@ for the topic list, `odm docs <topic>` to read one, `odm docs search
 <pattern>` to grep it. Check it before guessing at API details.
 
 The user watches the viewer and talks to you through it: keep
-`odm poll` running in the background so their messages reach you, answer
-with `odm say`, and use `odm selection` to see what they have clicked.
+`odm poll` running in the background so their messages reach you,
+answer with `odm say`, and read what they have clicked off the poll's
+`view.selection` (or `odm status`).

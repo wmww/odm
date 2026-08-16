@@ -24,7 +24,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   Extension types (solid/vector2/vector3/quaternion/matrix4/color) are
   canonical JSON on the wire, hydrated to THREE instances by ctx.input.
   Validation at every boundary via the `jsonschema` crate; unknown
-  args/schema keys/`--set` names are errors.
+  args/schema keys/input names are errors.
 - The `//!` comment block doubles as prose description (summary line +
   body), parsed at sync time without evaluating the module.
 - `.odm/` is engine-owned (socket `.odm/engine.sock`, `renders/`,
@@ -125,10 +125,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   everything view-settable (target's plain inputs + fall-through cascade
   names, each entry carrying `kind`), winning declarations, lints
   (conflicting defaults/types, unread cascade values, plain-shadows-cascade)
-  — the input panel's data source and `--set` typo check; `declared_entries`
-  is the failure-path subset (target's declared schema, no walk needed).
-  Each pass also collects `BuildStats` (per-doohickey runs + self-time,
-  memo hits) into `PassResult.stats`, surfaced by `odm build`.
+  — the input panel's data source and the input-name typo check
+  (`check_input_names`); `declared_entries` is the failure-path subset
+  (target's declared schema, no walk needed). Each pass also collects
+  `BuildStats` (per-doohickey runs + self-time, memo hits) into
+  `PassResult.stats`, surfaced by `"stats": true` on any view command.
   In-flight registry (wait-for-in-flight + wait-graph cycle detection);
   cancellation (token + TerminateExecution post-module-eval). Cycle check is
   keyed on (path, args-hash, env-hash) so bounded recursion works; memo
@@ -173,20 +174,29 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   headless), i.e. on every `published` change. It also owns its winit event
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
-  Commands: status/build/render/inspect/raycast/
-  selection, and poll/say/ack (see "Talking to the agent"); every
-  command except those three syncs first (no standalone `sync` — folded into
-  `status` 2026-08, the CLI redirects the name). `build` is the one answer to
-  "what's settable": description, presets, flat inputs list, lints, build
-  stats — and on a *failed* build it still attaches the target's declared
-  schema next to the error (`CmdError::extra` → top-level fields). `inspect`
-  is the one scene query (see "Scene query" below). View-scoped queries take
-  optional
-  path + `--set`/`--preset`, or adopt a viewer tab: `--view` bare = the
-  user's active tab, `--view <slot>` = that tab (wire: `view: true |
-  "slot"`, untagged `ViewSel`); poll answers carry a snapshot of the user's
-  active view (path, inputs, selection). Agent-visible responses print no
-  content hashes and no `generation` (status keeps it) — see
+  Commands: status/inspect/render/raycast, and poll/say/ack (see
+  "Talking to the agent"); every command except those three syncs first
+  (no standalone `sync` — folded into `status` 2026-08). One grammar
+  (2026-08, plans/cli-json-args.md): a CLI command's argument is the JSON
+  request body itself; `requests.rs` holds the serde structs *and* the
+  field-spec table that validates names (siblings listed on a typo,
+  removed commands redirected) and prints `docs/cli.md`'s generated
+  per-command reference (drift-tested; regen `UPDATE_CLI_DOCS=1 cargo
+  test -p odm-engine cli_reference`). `inspect` is the one scene query
+  (see "Scene query" below); its root entry also carries the view
+  interface on request (`"fields": ["description", "inputs",
+  "presets"]` — what `build` used to answer), `"stats": true` adds
+  build stats to any view command, and a *failed* build still attaches
+  the target's declared schema next to the error (`CmdError::extra` →
+  top-level fields). Input lints ride the `warnings` channel of every
+  view-targeting success. View-scoped queries take optional
+  `path` + `inputs`/`preset`, or adopt a viewer tab: `"view": true` =
+  the user's active tab, `"view": "<slot>"` = that tab (untagged
+  `ViewSel`); poll answers carry a snapshot of the user's active view
+  (path, inputs, selection), and `status` reports per-slot inputs,
+  build state (ok/error/building/pending, last-published — status never
+  builds) and the active tab's selection. Agent-visible responses print
+  no content hashes and no `generation` (status keeps it) — see
   notes/agent-surface.md. CLI one-off views build without publishing;
   viewer slots publish into a per-slot map (all live roots pinned together
   for GC). Protocol: ndjson over unix socket,
@@ -221,14 +231,15 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   from `theme::pixels`/`theme::arrow` as a `Mesh`. See "Scrollbars" below.
 - `odm-prompt` — std-only, no odm deps (odm-cli must stay V8-free): the
   `docs/prompts/*.md` `include_str!`s behind `text()`, plus the marked-block
-  machinery both `odm prompt` and the engine's on-open sync use.
-- `odm-cli` — client commands: dependency-light JSON pipe + arg parsing
-  (`--opt value` and `--opt=value`), pretty-prints responses, exit code
-  from `ok`. Also owns project resolution — `find_project` (the cwd walk-up),
-  `project_dir`, `is_project`, all reused by `run` — and the two engine-less
-  markdown commands: `odm prompt` (one line over `odm_prompt::text`)
-  and `docs.rs` (`odm docs`
-  `include_dir!`s the whole `docs/` tree: topic dump, section-grepping
+  machinery both the `prompt` docs topic and the engine's on-open sync use.
+- `odm-cli` — transport only: project resolution — `find_project` (the
+  cwd walk-up), `project_dir`, `is_project`, all reused by `run` — the
+  socket, one JSON positional forwarded as the request body (plus
+  poll's two flags and say's free text; the engine owns all other
+  validation), client-side `out` resolution, pretty-printing, the poll
+  ack handshake, exit code from `ok`. Plus the engine-less `docs.rs`
+  (`odm docs` `include_dir!`s the whole `docs/` tree: topic dump —
+  including the `prompt` topic over `odm_prompt::text` — section-grepping
   `search`, `changes <from> <to>` migration concatenation, `--api N`
   rejected until frozen docs snapshots exist).
 - `odm` — the only binary. `odm run [<dir>] [--headless]` → the engine
@@ -481,7 +492,8 @@ children. Consequences:
   start open.
 - Selection is a list, in pick order. Shift-clicking a row — or a solid in the
   viewport — adds it, or removes it if it was already selected; a plain click
-  replaces the whole selection. `odm selection` returns the list.
+  replaces the whole selection. `status` (active slot) and poll
+  snapshots report the list.
 - `viewer::tree::tests` drives rows through a headless `egui::Context` (real hit
   testing, real modifiers — note egui reads `modifiers` off `RawInput`, not
   off the events). That is how modifier-clicks are *tested*; injecting one into
@@ -523,11 +535,14 @@ Consequences:
 grid, with mismatched field names). Two orthogonal knobs, both defaulting
 off one signal — *did you name a node?*:
 
-- **scope**: node (`--`positional: name, or index path as tiebreaker) plus
-  `--depth N`/`--recursive`. Unnamed → whole scene, recursive; named →
+- **scope**: `node` (name, or index path as tiebreaker) plus
+  `depth`/`recursive`. Unnamed → whole scene, recursive; named →
   that node, children as a count.
-- **detail**: summary (unnamed) | full (named, or `--full`) |
-  `--fields a,b,c`. `id` and `children` are structural and always there.
+- **detail**: summary (unnamed) | full (named, or `"full": true`) |
+  `"fields": [...]`. `id` and `children` are structural and always
+  there. View-level fields (`description`/`inputs`/`presets`) land on
+  the root entry only; a fields list with only view-level names also
+  collapses depth to 0.
 
 Decisions worth keeping (`scene.rs`):
 
@@ -544,9 +559,10 @@ Decisions worth keeping (`scene.rs`):
   repeated subtrees collapse, not just meshes. The entry shown is the run's
   first member; ids run on consecutively. Collapsing switches off as soon
   as the requested fields would show placement (`position`/`matrix`/
-  `world_matrix`), so `--full` expands.
+  `world_matrix`), so `"full": true` expands.
 - **One node schema everywhere**: `id` + `name` in `inspect`, `raycast`
-  (whose hit position is `point`, as in JS) and `selection` alike.
+  hits (whose hit position is `point`, as in JS) and selection lists
+  alike.
 - Dropped in the merge: mesh hashes (internal; `repeat` delivers their one
   payoff) and `bounds_local` (a JS-side concern).
 

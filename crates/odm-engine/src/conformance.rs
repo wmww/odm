@@ -16,7 +16,7 @@ struct Check {
     #[serde(default)]
     t: f64,
     /// View-level input values for this check (all become view args or
-    /// cascade values, split like the CLI's `--set`).
+    /// cascade values, split like a CLI request's `inputs`).
     #[serde(default)]
     set: serde_json::Map<String, Value>,
     volume: Option<[f64; 2]>,
@@ -211,7 +211,7 @@ fn run_check(
         }
     }
     if let Some(r) = &check.raycast {
-        let hit = scene::raycast(&engine.kernel, &scene.instances, r.origin, r.dir);
+        let hit = scene::raycast(&engine.kernel, &scene.instances, r.origin, r.dir, 1e9);
         match (&hit, r.miss) {
             (Some(h), false) => {
                 if let Some([want, eps]) = r.distance {

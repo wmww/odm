@@ -30,8 +30,8 @@ from:
 
 - **Plain input** (no `cascade`): the value comes from the immediate
   caller only — the invoking doohickey's args, or the view (viewer
-  panel / CLI `--set`) when this file is the view target. No `default`
-  means required.
+  panel / a CLI request's `inputs`) when this file is the view target.
+  No `default` means required.
 - **Cascade input** (`cascade: true`): an authoring tool — the input
   becomes settable from anywhere above the declaring file, without
   being threaded through every invoke in between. `default` is
@@ -88,9 +88,10 @@ engine reports them as one flat list — the target's own inputs plus
 every cascade input that reached the view level — each entry with its
 current value, where it came from (`view` = explicitly set, `default`
 otherwise), its schema (type, range, choices, default), and the
-file(s) declaring it. That report is what the viewer's input panel and
-CLI `--set` validation are generated from; `odm build` prints it, and
-a set name nothing reads is an error listing what *is* settable.
+file(s) declaring it. That report is what the viewer's input panel
+and the CLI's input-name validation are generated from;
+`odm inspect '{"fields": ["inputs"]}'` prints it, and a set name
+nothing reads is an error listing what *is* settable.
 
 Lints ride along with the report: two unrelated subtrees falling
 through with conflicting defaults get a warning (conflicting *types*
@@ -150,11 +151,13 @@ parts without mentioning `t` at all, yet the view can still set it —
 that is the cascade mechanism doing its job. The viewer renders a
 ranged, fall-through numeric control named `t` as a transport (scrub,
 plus play at 1 unit/second looping over the range); the CLI sets it
-like any input (`odm render --set t=1.5`). Declaring `t` 0–2 *is*
+like any input (`odm render '{"inputs": {"t": 1.5}}'`). Declaring
+`t` 0–2 *is*
 "this loops every 2 seconds". Only doohickeys that read `t` rebuild
 when it changes — keep static geometry in doohickeys that don't, and
 animate at the assembly level with transforms, so scrubbing stays
-cheap (the build response's `stats` show what actually re-ran).
+cheap (`"stats": true` on any view command shows what actually
+re-ran).
 
 ## Presets
 
@@ -170,10 +173,11 @@ export const meta = {
 };
 ```
 
-One click in the viewer applies one; the CLI takes `--preset heavy`
-(explicit `--set` values override the preset). Use them as the
-"stories" of a doohickey: the configurations worth looking at.
+One click in the viewer applies one; the CLI takes
+`'{"preset": "heavy"}'` (explicit `inputs` values override the
+preset). Use them as the "stories" of a doohickey: the configurations
+worth looking at.
 
-`odm build <path>` is the CLI's window into all of this: the file's
-`//!` description, its settable inputs, and its presets — even when
-the build fails.
+`odm inspect '{"fields": ["inputs", "presets"]}'` is the CLI's window
+into all of this: the file's `//!` description, its settable inputs,
+and its presets — even when the build fails.

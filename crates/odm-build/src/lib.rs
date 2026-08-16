@@ -16,7 +16,7 @@ mod sources;
 
 pub use meta::{ExtType, Input, Meta};
 pub use report::{
-    InputKind, InputReport, ReportEntry, ValueSource, check_set_names, declared_entries,
+    InputKind, InputReport, ReportEntry, ValueSource, check_input_names, declared_entries,
 };
 pub use scheduler::{
     BuildEngine, BuildFailure, BuildStats, DEFAULT_ROOT, FailureKind, Pass, PassResult, Stats,

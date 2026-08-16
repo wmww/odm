@@ -53,7 +53,7 @@ triangulation):
   input-boundary errors.
 - `console: ['substring', …]` — each must appear in that build's logs.
 - `set: { name: value }` — view-level inputs for this check; split into
-  args/cascade against root.js's meta, like the CLI's `--set`.
+  args/cascade against root.js's meta, like a CLI request's `inputs`.
 - `t: seconds` — shorthand for `set: { t: … }` (default 0).
 
 Values pinned by a check must be *derivable* (analytic, or exact CSG

@@ -1,8 +1,8 @@
 # CLI reference
 
 The full reference for the `odm` CLI. The short version — the core
-loop — is in the agent prompt (`odm prompt`); everything the CLI can do
-is here.
+loop — is in the agent prompt (`odm docs prompt`); everything the CLI
+can do is here.
 
 The CLI talks to a running engine over the project's unix socket. Run it
 from anywhere inside the project — it walks up from cwd to the nearest
@@ -11,76 +11,142 @@ from anywhere inside the project — it walks up from cwd to the nearest
 from it). Start an engine with `odm run <dir> --headless` (or plain
 `odm run` for the viewer).
 
+## One grammar
+
+```
+odm [--project <dir>] <cmd> ['{…json}']
+```
+
+A command's argument is **one JSON object: the whole request**. Bare
+means defaults (`odm inspect` = root view, summary tree). There are no
+per-command flags and no other positionals. Single-quote the object so
+the shell leaves it alone:
+
+```
+odm inspect
+odm inspect '{"node": "seat"}'
+odm render '{"inputs": {"t": 1.5}, "width": 640}'
+odm raycast '{"rays": [{"origin": [0, 0, 50], "dir": [0, 0, -1]}]}'
+```
+
+The exceptions are the commands whose arguments aren't a structured
+request: `poll` takes `--timeout <sec>`/`--follow` (they configure the
+CLI's own waiting; `--follow` never reaches the engine), `say` takes
+free text, and `docs` is engineless and textual. `--project` stays a
+prefix — transport, resolved before a request exists.
+
 Every command that looks at the scene **syncs first**: it rescans the
 project's files, rebuilds what changed, then answers — so a query can
 never show anything older than your latest save, and there is no
 separate "sync" step to run. Each command prints a single JSON object;
-exit code 0 = ok, nonzero = error. (`prompt` and `docs` are the
-exceptions: no engine, and markdown rather than JSON.)
-
-```
-odm status                    # files, views, generation, project name
-odm build   [<view options>]          # settable inputs, presets, build stats, logs
-odm inspect [<node>] [<view options>] [--depth N] [--recursive]
-            [--full | --fields a,b,c]        # measure the scene
-odm render  [<view options>] [camera + output options]   # PNG → prints path
-odm raycast --origin x,y,z --dir x,y,z [<view options>]  # nearest hit
-odm selection                 # what the user selected in the viewer
-odm poll [--timeout <sec>] [--follow]   # wait for messages from the user
-odm say <text>                # send a message to the user
-odm prompt                    # print the agent instructions
-odm docs [<topic>]            # this reference (list topics when bare)
-odm docs search <pattern>     # grep the reference, whole sections out
-odm docs changes <from> <to>  # API migration guides, concatenated
-```
-
-Build errors (with JS stacks and `console.log` output) come back
-through whichever command triggered the build; there is no separate
-error query.
+exit code 0 = ok, nonzero = error. (`docs` is the exception: no engine,
+and markdown rather than JSON.)
 
 ## Views
 
 Every scene query targets a **view**: a doohickey (default `root.js`)
-built with chosen input values.
-
-- `<path>` as the first positional argument (or `--path <p>`) names the
-  doohickey; without one, `root.js`.
-- `--set name=value` sets any input. Values parse as JSON, falling back
-  to plain strings (`--set t=1.5`, `--set finish=painted`,
-  `--set 'size=[10,20,5]'`). Plain inputs of the target become view
-  args; anything else (declared cascade inputs, or names read by
-  invoked descendants) becomes a view-level cascade value. A name
-  nothing reads is an error listing the settable inputs.
-- `--preset <name>` applies a named value bundle from the target's
-  `meta.presets` first; explicit `--set` wins over it.
-- `--view` targets **what the user sees** instead: bare, the user's
-  active viewer tab (its path *and* its input values) becomes the base,
-  with `--set`/`--preset` overriding on top. `--view <slot>` adopts a
-  specific tab; slots are listed in `odm status` → `views`. Naming a
-  `<path>` too keeps only the tab's cascade values.
+built with chosen input values. The shared request fields below say
+which view and how: `path` names the doohickey; `inputs` sets any
+input (plain inputs of the target become view args, anything else —
+declared cascade inputs, or names read by invoked descendants — becomes
+a view-level cascade value; a name nothing reads is an error listing
+the settable inputs); `preset` applies a named value bundle from the
+target's `meta.presets` first; `view` adopts what the user is looking
+at as the base, with `inputs`/`preset` overriding on top.
 
 CLI views are one-off: they build (memoized) but do not publish, so
 they never change what the viewer shows.
 
+## Commands
+
+<!--- BEGIN GENERATED COMMAND REFERENCE --->
+Request fields every view-targeting command (inspect, render, raycast) shares:
+
+- `path` (string) — the doohickey to build (default `root.js`)
+- `inputs` (object) — input values by name, e.g. `{"t": 1.5}`; plain inputs of the target become view args, everything else a view-level cascade value — a name nothing reads is an error listing the settable inputs
+- `preset` (string) — apply a named bundle from the target's `meta.presets` first; explicit `inputs` override it
+- `view` (true | string) — target what the user sees: `true` = the active viewer tab (its path and inputs) as the base, a string = a specific slot (`status` lists them)
+- `stats` (bool) — add build stats to the response: which doohickeys re-ran (with self-time) vs. were served from the memo cache
+
+### status
+
+project and session state: files, view slots with their inputs and build state, the user's active tab and selection. Reports last-published outcomes — never waits on a build, so it answers when everything else fails with a build error.
+
+No request fields.
+
+### inspect
+
+the scene tree, measured exactly: names, bounds, counts — and, on the root entry, the view's interface.
+
+- `node` (string) — one node, by the name you gave it (`"seat"`) or by index path (`"1/0/2"`); default the root
+- `depth` (number) — expand this many levels below the addressed node
+- `recursive` (bool) — expand fully
+- `full` (bool) — every measurement field, repeats expanded
+- `fields` (array of strings) — exactly these fields; per-node: `name`, `color`, `bounds`, `tris`, `verts`, `volume`, `area`, `position`, `rotation`, `scale`, `matrix`, `world_matrix`; view-level, on the root entry only: `description`, `inputs` (every settable input: value, type/range, default, declaration site, plain vs cascade), `presets`
+
+### render
+
+render a PNG; prints its path.
+
+- `width` (number) — pixels, 16..=8192 (default 1024)
+- `height` (number) — pixels, 16..=8192 (default 768)
+- `out` (string) — output file (default under `.odm/renders/`); the CLI resolves it against its own cwd, and the engine refuses to overwrite project source files
+- `wireframe` (bool) — edges only, in each object's own color — surfaces are not drawn
+- `no_grid` (bool) — hide the ground grid
+- `ortho` (bool) — orthographic projection
+- `direction` ([x,y,z]) — auto-framed camera looking along this vector (`[0,0,-1]` = top view); default isometric
+- `eye` ([x,y,z]) — explicit camera position (pairs with `target`)
+- `target` ([x,y,z]) — explicit look-at point (default `[0,0,0]`)
+- `up` ([x,y,z]) — camera up (default `[0,0,1]`)
+- `fov` (number) — perspective field of view in degrees (default 45)
+- `ortho_height` (number) — with `ortho` and an explicit camera: view height in world units
+
+### raycast
+
+nearest surface hit along each ray.
+
+- `rays` (array) — rays to fire, each `{"origin": [x,y,z], "dir": [x,y,z]}` (optional `"max_dist"`); all against the request's one view, answered in order — `hits` holds `{id, name, distance, point, normal}` or `null` per ray
+
+JS twin: `s.raycast(origin, dir, maxDist?)` — same query, same result shape; the CLI adds `id`/`name` per hit and maps over `rays`.
+
+### poll
+
+wait for messages the user typed in the viewer.
+
+- `timeout` (number) — seconds to wait before answering with no messages (default: wait until a message arrives or the engine stops)
+
+### say
+
+send a message to the user.
+
+- `text` (string) — the message
+
+<!--- END GENERATED COMMAND REFERENCE --->
+
+## Errors
+
+Build errors (with the JS stack and `console.log` output) come back
+through whichever command triggered the build, exit nonzero — there is
+no separate error query. When the target's `meta` evaluated (meta can
+succeed while `build()` throws), the error response still carries the
+declared `inputs` and `presets` — what's needed to fix a wrong input.
+Unknown request fields are errors that list the valid ones.
+
+On success, input lints (conflicting fall-through defaults, unread
+cascade values, plain-shadows-cascade, type conflicts) arrive on the
+`warnings` channel of any view-targeting response.
+
 ## status
 
-Project overview: the project path and name, the list of doohickey
-files, whether `root.js` exists, the active view slots (path + set
-inputs + which is the user's active tab), and the current `generation` —
-an internal counter that ticks whenever a source file changes, useful
-only for checking that an edit was picked up.
-
-## build
-
-`odm build [<view options>]` is the one answer to "what can I set here": the
-target's description and presets, plus `inputs` — every settable name in
-one flat list, each entry with its current value, type/range, default,
-where it is declared, and whether it is a plain arg or a cascade value.
-`warnings`/`errors` carry input lints (conflicting defaults, unread
-cascade values, plain-shadows-cascade). `stats` shows which doohickeys
-actually re-ran (with per-file self-time) vs. were served from the memo
-cache. A *failed* build still reports the target's declared inputs and
-presets next to the error.
+The one command that never builds: it reports each view slot's
+*last-published* outcome (`build`: `ok` / `error` / `building` /
+`pending`, plus the error message), so it still answers when the
+project is broken. Also there: the project path and name, the doohickey
+file list, whether `root.js` exists, each slot's path and inputs, which
+tab is the user's active one, their current `selection` (on the active
+slot), and the `generation` — an internal counter that ticks whenever a
+source file changes, useful only for checking that an edit was picked
+up.
 
 ## inspect
 
@@ -88,76 +154,90 @@ presets next to the error.
 shape.
 
 ```
-odm inspect                   # whole scene, recursive, summary
-odm inspect seat              # that part, in full, children as a count
-odm inspect seat --recursive  # ...and its subtree
-odm inspect --fields name,bounds     # narrow the columns instead
+odm inspect                             # whole scene, recursive, summary
+odm inspect '{"node": "seat"}'          # that part, in full, children as a count
+odm inspect '{"node": "seat", "recursive": true}'   # ...and its subtree
+odm inspect '{"fields": ["name", "bounds"]}'        # narrow the columns instead
+odm inspect '{"fields": ["inputs", "presets"]}'     # the view's interface
 ```
 
 **Addressing.** A node is addressed by the `name` you gave it
-(`s.name('seat')`). An index path from the root also works — `0`,
-`1/0/2`, `""` for the root — and is the tiebreaker when a name is used
-more than once: the duplicate-name error lists the matching ids, which
-are index paths.
+(`s.name('seat')`). An index path from the root also works — `"0"`,
+`"1/0/2"`, `""` for the root — and is the tiebreaker when a name is
+used more than once: the duplicate-name error lists the matching ids,
+which are index paths.
 
 **Scope.** Bare `inspect` is a whole-scene recursive overview; naming a
-node asks about that node, with its children as a count. `--depth N`
-expands N levels below the addressed node; `--recursive` expands fully.
+node asks about that node, with its children as a count. `depth`
+expands N levels below the addressed node; `recursive` expands fully.
 
 **Detail.** Every entry has `id`, `name`, world `bounds` and `tris`
 **for its whole subtree** — the root's bounds are the model's overall
 extent, a group's are the group's. Runs of identical consecutive
 siblings collapse into one entry with `repeat: N`: their ids run on
 consecutively from the one shown, and they differ only in placement.
-`--full` adds `verts`, `volume`, `area` (world-space, computed on
-demand) and the node's own `position`/`rotation`/`scale`, and expands
-the repeats. `--fields a,b,c` picks exactly what you want from:
-`name, color, bounds, tris, verts, volume, area, position, rotation,
-scale, matrix, world_matrix`.
+`full` adds `verts`, `volume`, `area` (world-space, computed on demand)
+and the node's own `position`/`rotation`/`scale`, and expands the
+repeats. `fields` picks exactly what you want.
+
+**The view's interface.** The root entry (`""` *is* the view) carries
+the view-level fields: `description`, `inputs` — every settable name in
+one flat list, each entry with its current value, type/range, default,
+where it is declared, and whether it is a plain arg or a cascade
+value — and `presets`. `odm inspect '{"fields": ["inputs", "presets"]}'`
+is the one answer to "what can I set here", and a *failed* build still
+reports the declared inputs and presets next to the error.
 
 ## render
 
-`odm render [<view options>] [options]` renders a PNG and prints its path.
+`odm render` renders a PNG and prints its path.
 
-Output options: `--width`/`--height` in pixels (default 1024×768,
-16..=8192), `--out file.png` (default under `.odm/renders/`; the engine
-refuses to overwrite project source files), `--wireframe` (edges only,
-in each object's own color — surfaces are not drawn), `--no-grid`.
-
-Camera, auto-framed (the model always fits the frame):
-
-- default: isometric perspective;
-- `--direction x,y,z` looks along that vector (`0,0,-1` = top view);
-- `--ortho` makes either of the above orthographic.
-
-Camera, explicit placement (when framing must be exact):
-
-- `--eye x,y,z --target x,y,z` place the camera; `--up x,y,z` defaults
-  to `0,0,1`;
-- `--fov <deg>` perspective field of view (default 45), or
-  `--ortho --ortho-height <h>` for an orthographic view `h` world units
-  tall.
+Camera, auto-framed (the model always fits the frame): the default is
+an isometric perspective; `direction` looks along that vector; `ortho`
+makes either orthographic. Explicit placement (when framing must be
+exact): `eye` + `target` (+ `up`), with `fov` or `ortho` +
+`ortho_height`.
 
 ```
-odm render                                   # framed isometric
-odm render --direction 0,0,-1 --ortho        # top view (plan)
-odm render --direction -1,0,0 --ortho        # side elevation
-odm render --wireframe --width 1600          # inspect topology
-odm render --set t=2.5 --out /tmp/frame.png  # one moment of an animation
-odm render parts/wheel.js --set radius=12    # view one part alone
-odm render --eye 60,-80,40 --target 0,0,10 --fov 30   # exact framing
+odm render                                                   # framed isometric
+odm render '{"direction": [0, 0, -1], "ortho": true}'        # top view (plan)
+odm render '{"direction": [-1, 0, 0], "ortho": true}'        # side elevation
+odm render '{"wireframe": true, "width": 1600}'              # inspect topology
+odm render '{"inputs": {"t": 2.5}, "out": "/tmp/frame.png"}' # one animation moment
+odm render '{"path": "parts/wheel.js", "inputs": {"radius": 12}}'  # one part alone
+odm render '{"eye": [60, -80, 40], "target": [0, 0, 10], "fov": 30}'  # exact framing
 ```
 
 Don't read dimensions off pixels — `inspect` is exact.
 
-## raycast
+## Geometry queries
 
-`odm raycast --origin x,y,z --dir x,y,z [<view options>]` fires one ray and
-reports the nearest surface hit: `{id, name, distance, point, normal}`
-(world-space), or `null` for a miss. Precise probing — "what is directly under this
-point", clearance along a line. For "how big / where is a part",
-`inspect` is the better tool; from inside doohickey code, use
-`solid.raycast()` (see `odm docs queries`).
+Kernel geometry queries are plain toplevel commands sharing the JSON
+grammar — no `query` namespace. Each kind is defined once — name,
+parameters, result shape — and exists in both surfaces: in JS as a
+method on the object, on the CLI as the command of the same name with
+the same result shape plus what JS gets free from object references
+(the view spec, node addressing by name: hits carry `id`/`name`).
+Where mapping is natural the request takes arrays — all against the
+request's one view spec, answered in order, one build. `inspect` is
+not in this set: it has no JS twin (in JS you hold the object graph).
+
+| CLI | JS twin |
+|-----|---------|
+| `raycast` | `s.raycast(origin, dir, maxDist?)` (`odm docs queries`) |
+
+### raycast
+
+Fires each of `rays` and reports the nearest surface hit per ray:
+`{id, name, distance, point, normal}` (world-space), or `null` for a
+miss, in `hits`, in request order. Precise probing — "what is directly
+under this point", clearance along a line. For "how big / where is a
+part", `inspect` is the better tool.
+
+```
+odm raycast '{"rays": [{"origin": [0, 0, 50], "dir": [0, 0, -1]},
+                       {"origin": [40, 0, 8], "dir": [-1, 0, 0], "max_dist": 25}]}'
+```
 
 ## Talking with the user
 
@@ -189,6 +269,7 @@ engine until collected with `odm poll`:
 the user's own messages. Everything after `say` is the message — no
 quoting rules.
 
-`odm selection` lists what the user has clicked in the viewer as
-`{id, name}` pairs, in pick order (shift-click selects several). The
-same list rides along in every poll's `view.selection`.
+When the user refers to a part ("make *this* one longer"), the poll's
+`view.selection` has it — clicked parts appear as `{id, name}`, in pick
+order (shift-click selects several). On demand, `odm status` shows the
+same list on the active view slot.

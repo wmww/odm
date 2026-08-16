@@ -1,6 +1,6 @@
 # Contact-sheet renders: `frames`
 
-Builds on `cli-json-args.md` (frames are nested request structure).
+Builds on the landed JSON grammar (frames are nested request structure).
 
 ## Why
 Live test friction: checking the swing animation meant three separate renders

@@ -2,6 +2,12 @@
 //! project's unix socket. The project is the nearest one at or above cwd
 //! (walking up like git), or `--project <dir>` said outright. `odm run` lives
 //! in the `odm` binary crate; everything else lands here.
+//!
+//! One grammar: `odm <cmd> ['{…json}']` — the JSON object *is* the socket
+//! request body (minus `cmd`), so the engine's field validation and errors
+//! are the CLI's too. The only commands with their own argument parsing are
+//! the ones whose arguments aren't a request: `poll` (its flags configure
+//! this process's waiting), `say` (free text), `docs` (engineless).
 
 mod docs;
 
@@ -13,36 +19,22 @@ use std::path::{Path, PathBuf};
 
 // No `\`-continuation after the quote: it would eat this block's first indent.
 /// The command list, for the binary's `--help`.
-pub const USAGE: &str = "  status                     project overview: files, views, generation
-  build   [<path>] [--set name=value ...] [--preset <name>]
-                             build a view; reports its settable inputs, the
-                             target's description/presets, build stats, logs
-  render  [<path>] [--set ...] [--preset] [--width N] [--height N] [--out FILE]
-          [--wireframe] [--no-grid] [--ortho] [--eye x,y,z] [--target x,y,z]
-          [--up x,y,z] [--direction x,y,z] [--fov deg] [--ortho-height h]
-                             render a PNG; prints its path
-  inspect [<node>] [<view options>] [--depth N] [--recursive]
-          [--full | --fields a,b,c]
-                             the scene tree, or one node by name/index path
-  raycast --origin x,y,z --dir x,y,z [--path <p>] [--set ...] [--preset]
-                             nearest hit in the scene
-  selection                  viewer selection: list of {id, name}
+pub const USAGE: &str = "  status                     project, files, view slots and their build state
+  inspect ['{…}']            the scene tree: names, bounds, exact measurements
+  render  ['{…}']            render a PNG; prints its path
+  raycast '{…}'              geometry query: nearest surface hit along rays
   poll    [--timeout <sec>] [--follow]
                              wait for messages the user typed in the viewer
                              (--follow: never exit, one JSON line per batch)
   say     <text>             send a message to the user
-  prompt                     print the agent instructions (markdown, no engine)
-  docs    [<topic>]          the full API reference (markdown, no engine)
+  docs    [<topic>]          the reference, markdown, no engine (bare: topics)
   docs    search <pattern>   grep the reference, whole sections out
   docs    changes <from> <to>  API migration guides, concatenated
 
-View options are [<path>] [--set name=value ...] [--preset <name>].
-Queries target a view: <path> (default root.js) built with its declared
-input defaults; --set names any input (--set t=1.5, --set 'size=[10,20,5]',
-JSON or bare strings), --preset applies a named bundle from the target's
-meta first. --view targets what the user sees instead: bare, the active
-viewer tab (path + inputs) as the base; --view <slot> a specific tab
-(slots: `odm status` → views).
+View-targeting commands (inspect, render, raycast) take one optional JSON
+object — the whole request; bare means defaults (`odm inspect` = root view,
+summary tree; `odm render '{\"inputs\": {\"t\": 1.5}}'` = one animation moment).
+The per-command fields are in `odm docs cli`.
 ";
 
 /// True if `args` asks for help rather than naming a command — including
@@ -72,99 +64,29 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     };
     let rest = &args[1..];
 
-    // The two commands with nothing to ask an engine: prompts and docs are
-    // compiled in, so they work with no project and no engine running.
-    if cmd == "prompt" {
-        if !rest.is_empty() {
-            bail!("prompt takes no arguments");
-        }
-        print!("{}", odm_prompt::text());
-        return Ok(0);
-    }
+    // The engineless commands: docs are compiled in, so they work with no
+    // project and no engine running.
     if cmd == "docs" {
         return docs::run(rest);
     }
+    if cmd == "prompt" {
+        // Redirected here rather than engine-side so it still redirects
+        // when no engine is running — `docs`, its home, doesn't need one.
+        bail!("`prompt` is a docs topic now: odm docs prompt");
+    }
 
-    const VIEW_OPTS: &[(&str, ArgKind)] = &[
-        ("set", ArgKind::Set),
-        ("preset", ArgKind::Str),
-        ("path", ArgKind::Str),
-        ("view", ArgKind::OptStr),
-    ];
     // Set by the poll arm below; see `follow_poll`.
     let mut follow = false;
-    let with_view =
-        |extra: &'static [(&'static str, ArgKind)]| -> Vec<(&'static str, ArgKind)> {
-            VIEW_OPTS.iter().chain(extra).copied().collect()
-        };
     let request = match cmd.as_str() {
-        "status" | "selection" => parse_opts(&cmd, rest, &[])?,
-        "build" => {
-            let (path, rest) = optional_positional(rest);
-            let mut v = parse_opts(&cmd, rest, &with_view(&[]))?;
-            if let Some(p) = path {
-                v.insert("path".into(), json!(p));
-            }
-            v
-        }
-        "render" => {
-            let (path, rest) = optional_positional(rest);
-            let mut v = parse_opts(
-                &cmd,
-                rest,
-                &with_view(&[
-                    ("width", ArgKind::Num),
-                    ("height", ArgKind::Num),
-                    ("fov", ArgKind::Num),
-                    ("ortho-height", ArgKind::Num),
-                    ("out", ArgKind::Str),
-                    ("eye", ArgKind::Vec3),
-                    ("target", ArgKind::Vec3),
-                    ("up", ArgKind::Vec3),
-                    ("direction", ArgKind::Vec3),
-                    ("wireframe", ArgKind::Flag),
-                    ("no-grid", ArgKind::Flag),
-                    ("ortho", ArgKind::Flag),
-                ]),
-            )?;
-            if let Some(p) = path {
-                v.insert("path".into(), json!(p));
-            }
-            v
-        }
-        "inspect" => {
-            let (node, rest) = optional_positional(rest);
-            let mut v = parse_opts(
-                &cmd,
-                rest,
-                &with_view(&[
-                    ("depth", ArgKind::Num),
-                    ("recursive", ArgKind::Flag),
-                    ("full", ArgKind::Flag),
-                    ("fields", ArgKind::Str),
-                ]),
-            )?;
-            if let Some(n) = node {
-                v.insert("node".into(), json!(n));
-            }
-            v
-        }
-        "raycast" => parse_opts(
-            &cmd,
-            rest,
-            &with_view(&[("origin", ArgKind::Vec3), ("dir", ArgKind::Vec3)]),
-        )?,
+        // Poll's flags configure this process's waiting behavior, not a
+        // structured request (`--follow` never reaches the engine).
         "poll" => {
-            let mut v = parse_opts(
-                &cmd,
-                rest,
-                &[("timeout", ArgKind::Num), ("follow", ArgKind::Flag)],
-            )?;
-            // Ours, not the engine's: `--follow` is this process looping over
-            // the same request, and the engine rejects fields it doesn't know.
-            follow = v.remove("follow").is_some();
-            if follow && v.contains_key("timeout") {
-                bail!("poll --follow never exits, so --timeout has nothing to bound");
+            let (timeout, f) = parse_poll(rest)?;
+            follow = f;
+            let mut v = Map::new();
+            v.insert("cmd".into(), json!("poll"));
+            if let Some(t) = timeout {
+                v.insert("timeout".into(), json!(t));
             }
             v
         }
@@ -180,12 +102,11 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             v.insert("text".into(), json!(text));
             v
         }
-        // Gone, but agents remember them: point at what replaced them.
-        "tree" => bail!("`tree` is now `inspect`: `odm inspect` for the scene, \
-                         `odm inspect <name>` for one part"),
-        "sync" => bail!("every command syncs first, so there is no `sync`; \
-                         `odm status` if the rescan is all you want"),
-        other => bail!("unknown command {other:?}; run `odm --help`"),
+        // Everything else — status, the view-targeting commands, and
+        // whatever the engine grows next — is one JSON request body. Unknown
+        // commands are forwarded too: the engine's answer (with redirects
+        // for removed commands) is the one error path.
+        _ => json_arg(&cmd, rest)?,
     };
 
     let project = match project {
@@ -201,7 +122,8 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         )
     })?;
 
-    // Resolve --out relative to the CLI's cwd before sending.
+    // Resolve `out` relative to the CLI's cwd before sending: the one
+    // client-side pass over the body (the engine's cwd is not ours).
     let mut request = Value::Object(request);
     if let Some(out) = request.get("out").and_then(|v| v.as_str()) {
         let abs = std::env::current_dir()?.join(out);
@@ -223,6 +145,72 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         acknowledge(&mut stream, &mut reader);
     }
     Ok(if value.get("ok").and_then(|v| v.as_bool()) == Some(true) { 0 } else { 1 })
+}
+
+/// One optional positional: the request body as a JSON object. The error
+/// messages carry the migration story for anyone still typing flags.
+fn json_arg(cmd: &str, rest: &[String]) -> anyhow::Result<Map<String, Value>> {
+    let mut body = match rest {
+        [] => Map::new(),
+        [one] => {
+            if one.starts_with("--") {
+                bail!(
+                    "{cmd} takes no flags — its options are fields of one JSON object: \
+                     odm {cmd} '{{\"field\": value, …}}' (fields: `odm docs cli`)"
+                );
+            }
+            match serde_json::from_str::<Value>(one) {
+                Ok(Value::Object(m)) => m,
+                Ok(_) => bail!("{cmd}'s argument must be a JSON *object*, got {one:?}"),
+                Err(e) => bail!(
+                    "{cmd} takes one JSON object, e.g. odm {cmd} '{{\"field\": value}}' — \
+                     {one:?} is not valid JSON ({e}); fields: `odm docs cli`"
+                ),
+            }
+        }
+        _ => bail!(
+            "{cmd} takes at most one argument: a JSON object with the whole request \
+             (single-quote it: odm {cmd} '{{\"field\": value, …}}')"
+        ),
+    };
+    if let Some(prev) = body.insert("cmd".into(), json!(cmd)) {
+        bail!("the command is the first argument; drop \"cmd\": {prev} from the object");
+    }
+    Ok(body)
+}
+
+/// `poll`'s two flags: `--timeout <sec>` and `--follow`.
+fn parse_poll(args: &[String]) -> anyhow::Result<(Option<f64>, bool)> {
+    let (mut timeout, mut follow) = (None, false);
+    let mut i = 0;
+    while i < args.len() {
+        let (arg, inline) = match args[i].split_once('=') {
+            Some((a, v)) => (a, Some(v.to_string())),
+            None => (args[i].as_str(), None),
+        };
+        match arg {
+            "--follow" if inline.is_none() => follow = true,
+            "--timeout" => {
+                let value = match inline {
+                    Some(v) => v,
+                    None => {
+                        i += 1;
+                        args.get(i).cloned().context("--timeout needs a value")?
+                    }
+                };
+                let secs: f64 = value
+                    .parse()
+                    .with_context(|| format!("--timeout must be a number, got {value:?}"))?;
+                timeout = Some(secs);
+            }
+            other => bail!("unknown option {other:?} for poll; it takes --timeout <sec> and --follow"),
+        }
+        i += 1;
+    }
+    if follow && timeout.is_some() {
+        bail!("poll --follow never exits, so --timeout has nothing to bound");
+    }
+    Ok((timeout, follow))
 }
 
 /// `odm poll --follow`: parked under a harness's per-line watcher, this never
@@ -373,128 +361,6 @@ fn acknowledge(stream: &mut UnixStream, reader: &mut BufReader<UnixStream>) {
     let _ = reader.read_line(&mut String::new());
 }
 
-#[derive(Clone, Copy)]
-enum ArgKind {
-    Num,
-    Str,
-    /// A value is optional: bare sends `true`, `--opt value`/`--opt=value`
-    /// the string (`--view` is the one user: bare = the active viewer tab,
-    /// named = that slot).
-    OptStr,
-    Vec3,
-    Flag,
-    /// Repeatable `--set name=value`; values parse as JSON, falling back to
-    /// a bare string ("--set t=1.5", "--set finish=painted",
-    /// "--set 'size=[10,20,5]'"). Collected into one object.
-    Set,
-}
-
-fn parse_opts(
-    cmd: &str,
-    args: &[String],
-    spec: &[(&str, ArgKind)],
-) -> anyhow::Result<Map<String, Value>> {
-    let mut out = Map::new();
-    out.insert("cmd".into(), json!(cmd));
-    let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
-        let Some(rest) = arg.strip_prefix("--") else {
-            bail!("unexpected argument {arg:?} for {cmd}");
-        };
-        // Support both `--opt value` and `--opt=value`.
-        let (name, inline_value) = match rest.split_once('=') {
-            Some((n, v)) => (n, Some(v.to_string())),
-            None => (rest, None),
-        };
-        let Some((key, kind)) = spec.iter().find(|(k, _)| *k == name) else {
-            bail!("unknown option --{name} for {cmd}; run `odm --help`");
-        };
-        let key = key.replace('-', "_");
-        match kind {
-            ArgKind::Flag => {
-                if inline_value.is_some() {
-                    bail!("--{name} is a flag and takes no value");
-                }
-                out.insert(key, json!(true));
-                i += 1;
-            }
-            ArgKind::OptStr => {
-                // A following `--something` is the next option, not a value.
-                let (value, advance) = match &inline_value {
-                    Some(v) => (Some(v.clone()), 1),
-                    None => match args.get(i + 1) {
-                        Some(v) if !v.starts_with("--") => (Some(v.clone()), 2),
-                        _ => (None, 1),
-                    },
-                };
-                out.insert(key, value.map_or(json!(true), |v| json!(v)));
-                i += advance;
-            }
-            _ => {
-                let (value, advance) = match &inline_value {
-                    Some(v) => (v, 1),
-                    None => match args.get(i + 1) {
-                        Some(v) => (v, 2),
-                        None => bail!("--{name} needs a value"),
-                    },
-                };
-                let parsed = match kind {
-                    ArgKind::Num => json!(
-                        value
-                            .parse::<f64>()
-                            .with_context(|| format!("--{name} must be a number, got {value:?}"))?
-                    ),
-                    ArgKind::Str => json!(value),
-                    ArgKind::Vec3 => {
-                        let parts: Vec<f64> = value
-                            .split(',')
-                            .map(|p| p.trim().parse::<f64>())
-                            .collect::<Result<_, _>>()
-                            .with_context(|| format!("--{name} must be x,y,z, got {value:?}"))?;
-                        if parts.len() != 3 {
-                            bail!("--{name} must have three components, got {value:?}");
-                        }
-                        json!(parts)
-                    }
-                    ArgKind::Set => {
-                        let Some((input, raw)) = value.split_once('=') else {
-                            bail!("--set takes name=value, got {value:?}");
-                        };
-                        if input.is_empty() {
-                            bail!("--set takes name=value, got {value:?}");
-                        }
-                        // JSON when it parses, else a bare string — so
-                        // numbers/arrays/booleans work without quoting
-                        // gymnastics and strings without JSON quotes.
-                        let parsed: Value = serde_json::from_str(raw)
-                            .unwrap_or_else(|_| Value::String(raw.to_string()));
-                        let entry = out.entry(key).or_insert_with(|| json!({}));
-                        entry
-                            .as_object_mut()
-                            .expect("set collects into an object")
-                            .insert(input.to_string(), parsed);
-                        i += advance;
-                        continue;
-                    }
-                    ArgKind::Flag | ArgKind::OptStr => unreachable!(),
-                };
-                out.insert(key, parsed);
-                i += advance;
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// A leading non-`--` argument, if any (an optional path).
-fn optional_positional(args: &[String]) -> (Option<&str>, &[String]) {
-    match args.first() {
-        Some(v) if !v.starts_with("--") => (Some(v.as_str()), &args[1..]),
-        _ => (None, args),
-    }
-}
-
 /// Is this directory an ODM project? The marker is the whole rule (same as
 /// `odm_build::is_project`, restated here to keep this crate dependency-light).
 pub fn is_project(dir: &Path) -> bool {
@@ -539,14 +405,51 @@ pub fn project_dir(path: PathBuf) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
-/// Two things worth pinning down here: the follow loop's poll/ack
-/// handshake against a fake engine, and the pretty-printer's line
-/// breaking.
+/// Three things worth pinning down here: the JSON-argument grammar, the
+/// follow loop's poll/ack handshake against a fake engine, and the
+/// pretty-printer's line breaking.
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::mpsc::{Receiver, Sender, channel};
     use std::time::Duration;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn one_json_object_is_the_whole_request() {
+        let v = json_arg("inspect", &[]).unwrap();
+        assert_eq!(Value::Object(v), json!({"cmd": "inspect"}));
+        let v = json_arg("render", &args(&[r#"{"inputs": {"t": 1.5}, "width": 640}"#])).unwrap();
+        assert_eq!(
+            Value::Object(v),
+            json!({"cmd": "render", "inputs": {"t": 1.5}, "width": 640})
+        );
+
+        // The migration errors: flags, non-JSON words, several arguments.
+        let e = json_arg("render", &args(&["--width", "640"])).unwrap_err().to_string();
+        assert!(e.contains("JSON object"), "{e}");
+        let e = json_arg("inspect", &args(&["seat"])).unwrap_err().to_string();
+        assert!(e.contains("not valid JSON") && e.contains("docs cli"), "{e}");
+        let e = json_arg("raycast", &args(&["[1,2]"])).unwrap_err().to_string();
+        assert!(e.contains("object"), "{e}");
+        let e = json_arg("inspect", &args(&["{}", "{}"])).unwrap_err().to_string();
+        assert!(e.contains("at most one"), "{e}");
+        let e = json_arg("inspect", &args(&[r#"{"cmd": "render"}"#])).unwrap_err().to_string();
+        assert!(e.contains("first argument"), "{e}");
+    }
+
+    #[test]
+    fn poll_flags() {
+        assert_eq!(parse_poll(&[]).unwrap(), (None, false));
+        assert_eq!(parse_poll(&args(&["--follow"])).unwrap(), (None, true));
+        assert_eq!(parse_poll(&args(&["--timeout", "30"])).unwrap(), (Some(30.0), false));
+        assert_eq!(parse_poll(&args(&["--timeout=1.5"])).unwrap(), (Some(1.5), false));
+        assert!(parse_poll(&args(&["--follow", "--timeout", "5"])).is_err());
+        assert!(parse_poll(&args(&["--wait"])).is_err());
+    }
 
     /// A `Write` that hands each written line to the test thread.
     struct Lines(Sender<String>);
@@ -654,23 +557,6 @@ mod tests {
         );
         assert_eq!(out.lines().count(), 8, "{out}");
         assert_eq!(serde_json::from_str::<Value>(&out).unwrap(), v);
-    }
-
-    /// `--view` is bare ("the active tab", true on the wire) or names a slot;
-    /// a following option is not mistaken for a slot name.
-    #[test]
-    fn view_is_bare_or_named() {
-        let spec = &[("view", ArgKind::OptStr), ("full", ArgKind::Flag)];
-        let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let v = parse_opts("inspect", &args(&["--view", "--full"]), spec).unwrap();
-        assert_eq!(v["view"], json!(true));
-        assert_eq!(v["full"], json!(true));
-        let v = parse_opts("inspect", &args(&["--view", "tab-2"]), spec).unwrap();
-        assert_eq!(v["view"], json!("tab-2"));
-        let v = parse_opts("inspect", &args(&["--view=tab-3"]), spec).unwrap();
-        assert_eq!(v["view"], json!("tab-3"));
-        let v = parse_opts("inspect", &args(&["--view"]), spec).unwrap();
-        assert_eq!(v["view"], json!(true));
     }
 
     #[test]

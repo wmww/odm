@@ -1,6 +1,6 @@
 # Assembly checks: `odm clearance`
 
-Builds on `cli-json-args.md` (a geometry query; no flag spelling ever
+Builds on the landed JSON grammar (a geometry query; no flag spelling ever
 exists).
 
 ## Why

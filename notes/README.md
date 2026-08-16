@@ -9,8 +9,9 @@
   2026-07-29; no stable version cut yet). Read before touching the API
   surface.
 - `agent-surface.md` — the prompt-vs-docs policy for the agent-facing
-  surface (prompt = core loop only, depth in `odm docs`) and the standing
-  CLI cuts. Read before adding commands, flags, or response fields.
+  surface (prompt = core loop only, depth in `odm docs`), the one-JSON-
+  grammar CLI, the geometry-query parity rules, and the standing CLI
+  cuts. Read before adding commands, request fields, or response fields.
 - `design-decisions.md` — why the stack/architecture is what it is: decisions
   from the 2026-07 concept review, rejected alternatives, licensing, egui
   i18n limits.

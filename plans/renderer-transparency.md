@@ -100,7 +100,7 @@ hidden-lines wireframe style is a future overlay, not this plan.
   we actually want, and far simpler. JS: `.opacity(x)` on scene values.
   IR: optional f32 on Node, hashes like color.
 - X-ray: `RenderOptions.opacity` multiplier over all instances; an
-  `opacity` field in the render request (`cli-json-args.md`); viewer menu
+  `opacity` field in the render request (JSON grammar); viewer menu
   toggle next to wireframe.
 - Instance partition by effective alpha: 1 → opaque pass, <1 → translucent.
   All line geometry is translucent by construction (AA edges).

@@ -1,107 +1,31 @@
-//! The agent-facing JSON protocol: request parsing, command handlers, and the
-//! only place that speaks `serde_json::Value`.
+//! The agent-facing command handlers, and (with `requests.rs`) the only
+//! place that speaks `serde_json::Value`.
 
+use crate::requests::{self, Ray, RenderReq, Request, ViewSel};
 use crate::scene;
 use crate::server::Conn;
-use crate::state::{EngineState, PollOutcome};
-use odm_build::{BuildFailure, FailureKind, PassResult, SyncResult, View, check_set_names};
+use crate::state::{EngineState, PollOutcome, Published};
+use odm_build::{
+    BuildFailure, FailureKind, InputReport, PassResult, SyncResult, View, check_input_names,
+};
 use odm_ir::Node;
 use odm_js::LogLine;
 use odm_render::{Camera, Projection, RenderOptions, flatten_scene};
 use odm_store::Object;
-use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-const COMMANDS: &str =
-    "status, build, render, inspect, raycast, selection, poll, say";
-
-/// One socket request. Unknown commands *and* unknown fields are errors, so
-/// agents hear about typos instead of silently getting a default.
-#[derive(Deserialize)]
-#[serde(tag = "cmd", rename_all = "lowercase", deny_unknown_fields)]
-enum Request {
-    // Braces (not unit variants) so `deny_unknown_fields` applies here too.
-    Status {},
-    // The (path, set, preset) trio is spelled out per variant instead of a
-    // #[serde(flatten)] ViewReq: flatten silently disables
-    // deny_unknown_fields, and a typo'd option must stay an error.
-    Build {
-        path: Option<String>,
-        #[serde(default)]
-        set: Map<String, Value>,
-        preset: Option<String>,
-        view: Option<ViewSel>,
-    },
-    Render(RenderReq),
-    Inspect {
-        path: Option<String>,
-        #[serde(default)]
-        set: Map<String, Value>,
-        preset: Option<String>,
-        view: Option<ViewSel>,
-        /// Name or index path; absent (or "") is the root.
-        node: Option<String>,
-        depth: Option<f64>,
-        #[serde(default)]
-        recursive: bool,
-        #[serde(default)]
-        full: bool,
-        fields: Option<String>,
-    },
-    Raycast {
-        path: Option<String>,
-        #[serde(default)]
-        set: Map<String, Value>,
-        preset: Option<String>,
-        view: Option<ViewSel>,
-        origin: Option<[f64; 3]>,
-        dir: Option<[f64; 3]>,
-    },
-    Selection {},
-    Poll {
-        timeout: Option<f64>,
-    },
-    Say {
-        text: String,
-    },
-    /// "I have the messages the last poll on this connection gave me." Sent by
-    /// the CLI after it prints them, and left out of `COMMANDS` because it is
-    /// part of poll's delivery handshake, not something an agent types.
-    Ack {},
-}
-
-/// `--view`, the one "target what the user sees" knob: bare (`true` on the
-/// wire) adopts the user's active viewer tab, a string names a specific
-/// slot (see status.views).
-#[derive(Deserialize, Clone, Debug)]
-#[serde(untagged)]
-enum ViewSel {
-    Active(bool),
-    Slot(String),
-}
-
 /// What a query targets: a doohickey path (default: `root.js`, when it
-/// exists) plus input values. `set` names any input — declared plain inputs
-/// become view args, everything else a view-level cascade value; `preset`
-/// applies a named bundle from the target's meta first.
-#[derive(Default)]
+/// exists) plus input values. `inputs` names any input — declared plain
+/// inputs become view args, everything else a view-level cascade value;
+/// `preset` applies a named bundle from the target's meta first.
 struct ViewReq {
     path: Option<String>,
-    set: Map<String, Value>,
+    inputs: Map<String, Value>,
     preset: Option<String>,
     /// Adopt a viewer tab's state as the base view.
     view: Option<ViewSel>,
-}
-
-fn view_req(
-    path: Option<String>,
-    set: Map<String, Value>,
-    preset: Option<String>,
-    view: Option<ViewSel>,
-) -> ViewReq {
-    ViewReq { path, set, preset, view }
 }
 
 /// `inspect`'s two knobs: **scope** (which node, how deep) and **detail**
@@ -113,47 +37,16 @@ struct Scope {
     depth: Option<f64>,
     recursive: bool,
     full: bool,
-    fields: Option<String>,
+    fields: Option<Vec<String>>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RenderReq {
-    path: Option<String>,
-    #[serde(default)]
-    set: Map<String, Value>,
-    preset: Option<String>,
-    view: Option<ViewSel>,
-    // Sizes stay f64: the CLI sends JSON numbers that may carry a `.0`.
-    #[serde(default = "default_width")]
-    width: f64,
-    #[serde(default = "default_height")]
-    height: f64,
-    out: Option<String>,
-    #[serde(default)]
-    wireframe: bool,
-    #[serde(default)]
-    no_grid: bool,
-    #[serde(default)]
-    ortho: bool,
-    eye: Option<[f64; 3]>,
-    target: Option<[f64; 3]>,
-    up: Option<[f64; 3]>,
-    direction: Option<[f64; 3]>,
-    fov: Option<f64>,
-    ortho_height: Option<f64>,
-}
-
-fn default_width() -> f64 {
-    1024.0
-}
-fn default_height() -> f64 {
-    768.0
-}
+/// The `fields` entries that describe the view rather than a node; they
+/// land on the root entry (`""` *is* the view).
+const VIEW_LEVEL_FIELDS: &[&str] = &["description", "inputs", "presets"];
 
 /// A failed command. `doohickey`/`logs` are set for build failures;
 /// `extra` fields land at the response's top level, next to `error`
-/// (`cmd_build` uses it to report the target's declared interface even
+/// (`query_view` uses it to report the target's declared interface even
 /// when the build fails).
 pub(crate) struct CmdError {
     kind: &'static str,
@@ -174,8 +67,14 @@ impl CmdError {
         }
     }
 
-    fn bad_request(message: impl Into<String>) -> CmdError {
+    pub(crate) fn bad_request(message: impl Into<String>) -> CmdError {
         CmdError::new("bad-request", message)
+    }
+
+    /// For tests asserting on error text.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn message(&self) -> &str {
+        &self.message
     }
 
     pub(crate) fn from_failure(f: &BuildFailure, logs: Vec<(String, LogLine)>) -> CmdError {
@@ -217,10 +116,7 @@ impl EngineState {
     /// commands need it to notice a client going away, and to keep messages
     /// tied to the connection that has to acknowledge them.
     pub fn handle(&self, req: Value, conn: &mut Conn) -> Value {
-        let result = match serde_json::from_value::<Request>(req) {
-            Ok(req) => self.dispatch(req, conn),
-            Err(e) => Err(CmdError::bad_request(request_error(&e))),
-        };
+        let result = requests::parse(req).and_then(|req| self.dispatch(req, conn));
         match result {
             Ok(mut v) => {
                 if let Some(o) = v.as_object_mut() {
@@ -242,34 +138,48 @@ impl EngineState {
         // `cmd_lock`: a poll blocked on it for minutes would freeze the engine
         // (see issues/engine-serializes-commands.md).
         match req {
-            Request::Poll { timeout } => return self.cmd_poll(timeout, conn),
-            Request::Say { text } => return self.cmd_say(&text),
-            Request::Ack {} => return Ok(json!({ "acked": conn.confirm() })),
+            Request::Poll(p) => return self.cmd_poll(p.timeout, conn),
+            Request::Say(s) => return self.cmd_say(&s.text),
+            Request::Ack => return Ok(json!({ "acked": conn.confirm() })),
             _ => {}
         }
         let _guard = self.cmd_lock.lock().unwrap();
         match req {
-            Request::Status {} => self.cmd_status(),
-            Request::Build { path, set, preset, view } => {
-                self.cmd_build(view_req(path, set, preset, view))
+            Request::Status => self.cmd_status(),
+            Request::Inspect(r) => {
+                let view = ViewReq {
+                    path: r.path,
+                    inputs: r.inputs,
+                    preset: r.preset,
+                    view: r.view,
+                };
+                let scope = Scope {
+                    node: r.node,
+                    depth: r.depth,
+                    recursive: r.recursive,
+                    full: r.full,
+                    fields: r.fields,
+                };
+                self.cmd_inspect(view, scope, r.stats)
             }
             Request::Render(r) => self.cmd_render(r),
-            Request::Inspect { path, set, preset, view, node, depth, recursive, full, fields } => {
-                self.cmd_inspect(
-                    view_req(path, set, preset, view),
-                    Scope { node, depth, recursive, full, fields },
-                )
+            Request::Raycast(r) => {
+                let view = ViewReq {
+                    path: r.path,
+                    inputs: r.inputs,
+                    preset: r.preset,
+                    view: r.view,
+                };
+                self.cmd_raycast(view, &r.rays, r.stats)
             }
-            Request::Raycast { path, set, preset, view, origin, dir } => {
-                self.cmd_raycast(view_req(path, set, preset, view), origin, dir)
-            }
-            Request::Selection {} => self.cmd_selection(),
-            Request::Poll { .. } | Request::Say { .. } | Request::Ack {} => {
+            Request::Poll(_) | Request::Say(_) | Request::Ack => {
                 unreachable!("handled above")
             }
         }
     }
 
+    /// The command that must still answer when the project is broken:
+    /// reports last-published build outcomes per slot and never builds.
     fn cmd_status(&self) -> Result<Value, CmdError> {
         let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
         let files: Vec<&String> = sync.snapshot.sources.keys().collect();
@@ -278,14 +188,30 @@ impl EngineState {
             .views()
             .into_iter()
             .map(|(slot, view)| {
-                let mut set = view.args.clone();
-                set.extend(view.cascade.clone());
-                json!({
-                    "slot": slot,
-                    "path": view.path,
-                    "set": set,
-                    "active": Some(&slot) == active.as_ref(),
-                })
+                let mut inputs = view.args.clone();
+                inputs.extend(view.cascade.clone());
+                let is_active = Some(&slot) == active.as_ref();
+                let mut o = Map::new();
+                o.insert("slot".into(), json!(slot));
+                o.insert("path".into(), json!(view.path));
+                o.insert("inputs".into(), Value::Object(inputs));
+                o.insert("active".into(), json!(is_active));
+                let p: Published = self.published(&slot);
+                // Last-published outcome; "pending" = no build finished yet.
+                let state = match (&p.error, p.building, p.root.is_some()) {
+                    (_, true, _) => "building",
+                    (Some(_), _, _) => "error",
+                    (None, _, true) => "ok",
+                    (None, _, false) => "pending",
+                };
+                o.insert("build".into(), json!(state));
+                if let Some(e) = &p.error {
+                    o.insert("error".into(), json!(e));
+                }
+                if is_active {
+                    o.insert("selection".into(), selection_json(&self.selection.lock().unwrap()));
+                }
+                Value::Object(o)
             })
             .collect();
         Ok(json!({
@@ -297,18 +223,18 @@ impl EngineState {
             // requirement — queries can name any file.
             "default_view": sync.snapshot.sources.contains_key(odm_build::DEFAULT_ROOT),
             // Active view slots (viewer tabs, or the headless default);
-            // `--view [slot]` adopts their state.
+            // `"view": <slot>` requests adopt their state.
             "views": views,
         }))
     }
 
-    /// Resolve a request's (path, set, preset) into a `View` against a
-    /// sync. `set`/preset values on declared plain inputs become view args;
+    /// Resolve a request's (path, inputs, preset) into a `View` against a
+    /// sync. Input values on declared plain inputs become view args;
     /// everything else (declared cascade or aimed at descendants) goes to
     /// the view's cascade.
     fn resolve_view(&self, sync: &SyncResult, req: &ViewReq) -> Result<View, CmdError> {
         // A viewer tab's state as the base: its path AND its input values;
-        // --set/--preset then override on top.
+        // the request's inputs/preset then override on top.
         let base: Option<View> = match &req.view {
             Some(ViewSel::Active(true)) => match self.active_view() {
                 Some((_, view)) => Some(view),
@@ -374,11 +300,11 @@ impl EngineState {
             };
             values.extend(bundle.clone());
         }
-        // Explicit --set beats the preset.
-        values.extend(req.set.clone());
+        // Explicit inputs beat the preset.
+        values.extend(req.inputs.clone());
 
         let mut view = match base {
-            // Adopting a tab whose target was overridden by --path makes the
+            // Adopting a tab whose target was overridden by `path` makes the
             // tab's args meaningless; keep only its cascade values then.
             Some(b) if b.path == path => {
                 View { path, args: b.args, cascade: b.cascade }
@@ -402,19 +328,19 @@ impl EngineState {
         Ok(view)
     }
 
-    /// Build a one-off view and run the post-build `--set` typo check.
+    /// Build a one-off view and run the post-build input typo check.
     fn build_view_cmd(
         &self,
         sync: &SyncResult,
         view: &View,
-    ) -> Result<(PassResult, odm_build::InputReport), CmdError> {
+    ) -> Result<(PassResult, InputReport), CmdError> {
         let (_sync2, result, report) = self.build_once(view)?;
         // The report only exists after a successful build, which is also
         // the first moment "does anything read this name?" is answerable.
         let source = &sync.snapshot.sources[&view.path];
         let meta = self.build_engine().meta(&view.path, source);
         if let Ok(meta) = meta.as_ref()
-            && let Err(e) = check_set_names(&view.cascade, meta, &report)
+            && let Err(e) = check_input_names(&view.cascade, meta, &report)
         {
             return Err(CmdError::bad_request(e));
         }
@@ -422,49 +348,24 @@ impl EngineState {
     }
 
     /// Sync + resolve + build in one step — the shape every view-scoped
-    /// query shares.
+    /// query shares. A *failed* build still reports the target's declared
+    /// interface (inputs, presets — attached next to the error), since the
+    /// declared schema needs no successful pass.
     fn query_view(
         &self,
         req: &ViewReq,
-    ) -> Result<(SyncResult, View, PassResult, odm_build::InputReport), CmdError> {
+    ) -> Result<(SyncResult, View, PassResult, InputReport), CmdError> {
         let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
         let view = self.resolve_view(&sync, req)?;
-        let (result, report) = self.build_view_cmd(&sync, &view)?;
-        Ok((sync, view, result, report))
-    }
-
-    /// Build + the one answer to "what can I set": the target's description
-    /// and presets, the flat settable-inputs list, lint output, and build
-    /// stats. A *failed* build still reports the target's declared schema
-    /// (attached next to the error), since that needs no successful pass.
-    fn cmd_build(&self, req: ViewReq) -> Result<Value, CmdError> {
-        let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
-        let view = self.resolve_view(&sync, &req)?;
-        let source = &sync.snapshot.sources[&view.path];
-        let description = source.description.clone();
-        let meta = self.build_engine().meta(&view.path, source);
         match self.build_view_cmd(&sync, &view) {
-            Ok((result, report)) => {
-                let mut o = json!({
-                    "path": view.path,
-                    "inputs": inputs_json(&report.inputs),
-                    "presets": presets_json(report.presets.iter().map(|(n, v)| (n, v))),
-                    "warnings": report.warnings,
-                    "errors": report.errors,
-                    "stats": stats_json(&result.stats),
-                    "logs": logs_json(&result.logs),
-                });
-                if !description.is_empty() {
-                    o["description"] = json!(description);
-                }
-                Ok(o)
-            }
+            Ok((result, report)) => Ok((sync, view, result, report)),
             Err(mut e) => {
                 e.extra.insert("path".into(), json!(view.path));
-                if !description.is_empty() {
-                    e.extra.insert("description".into(), json!(description));
+                let source = &sync.snapshot.sources[&view.path];
+                if !source.description.is_empty() {
+                    e.extra.insert("description".into(), json!(source.description));
                 }
-                if let Ok(meta) = meta.as_ref() {
+                if let Ok(meta) = self.build_engine().meta(&view.path, source).as_ref() {
                     let entries = odm_build::declared_entries(&view.path, meta, &view);
                     e.extra.insert("inputs".into(), inputs_json(&entries));
                     e.extra.insert(
@@ -483,9 +384,13 @@ impl EngineState {
             return Err(CmdError::bad_request("width/height must be in 16..=8192"));
         }
 
-        let view_req =
-            view_req(req.path.clone(), req.set.clone(), req.preset.clone(), req.view.clone());
-        let (_sync, view, result, _report) = self.query_view(&view_req)?;
+        let view_req = ViewReq {
+            path: req.path.clone(),
+            inputs: req.inputs.clone(),
+            preset: req.preset.clone(),
+            view: req.view.clone(),
+        };
+        let (_sync, view, result, report) = self.query_view(&view_req)?;
         let store = &self.build_engine().store;
         let scene = flatten_scene(store, result.root)
             .map_err(|e| CmdError::new("render", e.to_string()))?;
@@ -528,14 +433,12 @@ impl EngineState {
         std::fs::write(&out_path, &png)
             .map_err(|e| CmdError::new("render", format!("write {}: {e}", out_path.display())))?;
 
-        Ok(json!({
-            "path": out_path.display().to_string(),
-            "width": width,
-            "height": height,
-            "view": view.path,
-            "instances": scene.instances.len(),
-            "logs": logs_json(&result.logs),
-        }))
+        let mut o = Map::new();
+        o.insert("path".into(), json!(out_path.display().to_string()));
+        o.insert("width".into(), json!(width));
+        o.insert("height".into(), json!(height));
+        o.insert("instances".into(), json!(scene.instances.len()));
+        Ok(view_response(&view, &result, &report, req.stats, o))
     }
 
     /// The engine never writes ODM project files: reject `out` targets that
@@ -561,62 +464,107 @@ impl EngineState {
         Ok(())
     }
 
-    fn cmd_inspect(&self, req: ViewReq, scope: Scope) -> Result<Value, CmdError> {
+    fn cmd_inspect(&self, req: ViewReq, scope: Scope, stats: bool) -> Result<Value, CmdError> {
         let addr = scope.node.as_deref().unwrap_or("");
         // Naming a node is the ask for detail about it; the bare form is a
-        // whole-scene overview. Both stay zero-flag.
+        // whole-scene overview. Both stay zero-field.
         let named = !addr.is_empty();
-        let fields = match (scope.full, &scope.fields) {
-            (true, Some(_)) => {
-                return Err(CmdError::bad_request("--full and --fields are alternatives"));
+        // `fields` splits into per-node fields and view-level facets (the
+        // interface report), which land on the root entry.
+        let mut view_fields: Vec<String> = Vec::new();
+        let mut node_fields: Vec<String> = Vec::new();
+        if let Some(list) = &scope.fields {
+            if scope.full {
+                return Err(CmdError::bad_request("`full` and `fields` are alternatives"));
             }
-            (_, Some(list)) => scene::Fields::parse(list).map_err(CmdError::bad_request)?,
+            if list.is_empty() {
+                return Err(CmdError::bad_request("`fields` needs at least one field name"));
+            }
+            for name in list {
+                match VIEW_LEVEL_FIELDS.contains(&name.as_str()) {
+                    true => view_fields.push(name.clone()),
+                    false => node_fields.push(name.clone()),
+                }
+            }
+            if !view_fields.is_empty() && named {
+                return Err(CmdError::bad_request(format!(
+                    "{:?} is a view-level field: it lives on the root entry, so drop `node`",
+                    view_fields[0]
+                )));
+            }
+        }
+        let fields = match (scope.full, &scope.fields) {
+            (_, Some(_)) if node_fields.is_empty() => scene::Fields::default(),
+            (_, Some(_)) => scene::Fields::parse(&node_fields).map_err(|e| {
+                CmdError::bad_request(format!(
+                    "{e}; view-level fields (root entry only): {}",
+                    VIEW_LEVEL_FIELDS.join(", ")
+                ))
+            })?,
             (true, None) => scene::Fields::full(),
             (false, None) if named => scene::Fields::full(),
             _ => scene::Fields::summary(),
         };
+        // Asking only about the view's interface collapses the tree too.
+        let facet_only = scope.fields.is_some() && node_fields.is_empty();
         let depth = match (scope.recursive, scope.depth) {
             (true, _) => usize::MAX,
             (_, Some(d)) if d >= 0.0 => d as usize,
             (_, Some(_)) => return Err(CmdError::bad_request("depth must be >= 0")),
-            (false, None) if named => 0,
+            (false, None) if named || facet_only => 0,
             _ => usize::MAX,
         };
 
-        let (_sync, view, result, _report) = self.query_view(&req)?;
+        let (sync, view, result, report) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let engine = self.build_engine();
         let (id, node, parent) =
             scene::locate(&engine.store, &root, addr).map_err(CmdError::bad_request)?;
         let mut inspector = scene::Inspector::new(&engine.store, &engine.kernel, fields);
-        let node = inspector
+        let mut node = inspector
             .inspect(&node, &id, &parent, depth)
             .ok_or_else(|| CmdError::new("internal", "scene node missing from store"))?;
-        Ok(json!({ "view": view.path, "node": node, "logs": logs_json(&result.logs) }))
+        if let Some(entry) = node.as_object_mut() {
+            for name in &view_fields {
+                match name.as_str() {
+                    "description" => {
+                        let d = &sync.snapshot.sources[&view.path].description;
+                        entry.insert("description".into(), json!(d));
+                    }
+                    "inputs" => {
+                        entry.insert("inputs".into(), inputs_json(&report.inputs));
+                    }
+                    "presets" => {
+                        entry.insert(
+                            "presets".into(),
+                            presets_json(report.presets.iter().map(|(n, v)| (n, v))),
+                        );
+                    }
+                    _ => unreachable!("filtered against VIEW_LEVEL_FIELDS"),
+                }
+            }
+        }
+        let mut o = Map::new();
+        o.insert("node".into(), node);
+        Ok(view_response(&view, &result, &report, stats, o))
     }
 
-    fn cmd_raycast(
-        &self,
-        req: ViewReq,
-        origin: Option<[f64; 3]>,
-        dir: Option<[f64; 3]>,
-    ) -> Result<Value, CmdError> {
-        let origin = origin.ok_or_else(|| CmdError::bad_request("origin must be [x,y,z]"))?;
-        let dir = dir.ok_or_else(|| CmdError::bad_request("dir must be [x,y,z]"))?;
-        let (_sync, view, result, _report) = self.query_view(&req)?;
+    fn cmd_raycast(&self, req: ViewReq, rays: &[Ray], stats: bool) -> Result<Value, CmdError> {
+        let (_sync, view, result, report) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let engine = self.build_engine();
         let scene = odm_render::flatten_node(&engine.store, &root)
             .map_err(|e| CmdError::new("internal", e.to_string()))?;
-        let hit = scene::raycast(&engine.kernel, &scene.instances, origin, dir);
-        Ok(json!({ "view": view.path, "hit": hit }))
-    }
-
-    fn cmd_selection(&self) -> Result<Value, CmdError> {
-        let sel = self.selection.lock().unwrap().clone();
-        let sel: Vec<Value> =
-            sel.into_iter().map(|(id, name)| json!({ "id": id, "name": name })).collect();
-        Ok(json!({ "selection": sel }))
+        let hits: Vec<Value> = rays
+            .iter()
+            .map(|r| {
+                scene::raycast(&engine.kernel, &scene.instances, r.origin, r.dir, r.max_dist)
+                    .unwrap_or(Value::Null)
+            })
+            .collect();
+        let mut o = Map::new();
+        o.insert("hits".into(), json!(hits));
+        Ok(view_response(&view, &result, &report, stats, o))
     }
 
     /// Block until the user sends something. Exiting is the delivery
@@ -653,20 +601,17 @@ impl EngineState {
             taken.iter().map(|(_, text)| json!({ "text": text })).collect();
         conn.hold(taken.into_iter().map(|(i, _)| i));
         // A snapshot of what the user is looking at travels with their
-        // words: the active view (path + set inputs) and their selection.
-        // Generalizes the selection query — "make this longer" arrives with
-        // "this" attached.
+        // words: the active view (path + inputs) and their selection —
+        // "make this longer" arrives with "this" attached.
         let view = self.active_view().map(|(slot, view)| {
-            let mut set = view.args.clone();
-            set.extend(view.cascade.clone());
-            let selection: Vec<Value> = self
-                .selection
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(id, name)| json!({ "id": id, "name": name }))
-                .collect();
-            json!({ "slot": slot, "path": view.path, "set": set, "selection": selection })
+            let mut inputs = view.args.clone();
+            inputs.extend(view.cascade.clone());
+            json!({
+                "slot": slot,
+                "path": view.path,
+                "inputs": inputs,
+                "selection": selection_json(&self.selection.lock().unwrap()),
+            })
         });
         Ok(json!({ "messages": messages, "view": view }))
     }
@@ -688,6 +633,32 @@ impl EngineState {
     }
 }
 
+/// The common tail of every view-targeting success: the view it answered
+/// about, input lints on the one warnings channel, opt-in build stats, and
+/// console output when there was any.
+fn view_response(
+    view: &View,
+    result: &PassResult,
+    report: &InputReport,
+    stats: bool,
+    body: Map<String, Value>,
+) -> Value {
+    let mut o = Map::new();
+    o.insert("view".into(), json!(view.path));
+    o.extend(body);
+    let lints: Vec<&String> = report.errors.iter().chain(report.warnings.iter()).collect();
+    if !lints.is_empty() {
+        o.insert("warnings".into(), json!(lints));
+    }
+    if stats {
+        o.insert("stats".into(), stats_json(&result.stats));
+    }
+    if !result.logs.is_empty() {
+        o.insert("logs".into(), logs_json(&result.logs));
+    }
+    Value::Object(o)
+}
+
 fn camera_from(req: &RenderReq) -> Camera {
     if let Some(eye) = req.eye {
         let projection = if req.ortho {
@@ -705,14 +676,8 @@ fn camera_from(req: &RenderReq) -> Camera {
     Camera::Auto { direction: req.direction.unwrap_or(Camera::DEFAULT_DIR), ortho: req.ortho }
 }
 
-/// serde names the valid commands itself when `cmd` is unknown; when it is
-/// missing entirely, spell them out.
-fn request_error(e: &serde_json::Error) -> String {
-    let msg = e.to_string();
-    match msg.contains("missing field `cmd`") {
-        true => format!("{msg}; commands: {COMMANDS}"),
-        false => msg,
-    }
+fn selection_json(sel: &[(String, Option<String>)]) -> Value {
+    Value::Array(sel.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect())
 }
 
 fn inputs_json(entries: &[odm_build::ReportEntry]) -> Value {
@@ -751,93 +716,4 @@ fn logs_json(logs: &[(String, LogLine)]) -> Value {
             .map(|(path, l)| json!({ "doohickey": path, "level": l.level, "message": l.message }))
             .collect(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse(s: &str) -> Result<Request, String> {
-        serde_json::from_str::<Request>(s).map_err(|e| request_error(&e))
-    }
-
-    #[test]
-    fn defaults_and_typos() {
-        assert!(matches!(parse(r#"{"cmd":"status"}"#), Ok(Request::Status {})));
-        assert!(
-            matches!(parse(r#"{"cmd":"build"}"#), Ok(Request::Build { path: None, set, .. }) if set.is_empty())
-        );
-        match parse(r#"{"cmd":"build","path":"wheel.js","set":{"t":1.5},"preset":"big"}"#) {
-            Ok(Request::Build { path, set, preset, .. }) => {
-                assert_eq!(path.as_deref(), Some("wheel.js"));
-                assert_eq!(set["t"], 1.5);
-                assert_eq!(preset.as_deref(), Some("big"));
-            }
-            other => panic!("{:?}", other.err()),
-        }
-        match parse(r#"{"cmd":"render","width":800}"#) {
-            Ok(Request::Render(r)) => assert_eq!((r.width, r.height), (800.0, 768.0)),
-            other => panic!("{:?}", other.err()),
-        }
-        // The CLI sends numbers as JSON floats.
-        assert!(matches!(
-            parse(r#"{"cmd":"inspect","depth":2.0}"#),
-            Ok(Request::Inspect { depth: Some(d), .. }) if d == 2.0
-        ));
-        match parse(r#"{"cmd":"inspect","node":"seat","full":true}"#) {
-            Ok(Request::Inspect { node, full, recursive, fields, .. }) => {
-                assert_eq!(node.as_deref(), Some("seat"));
-                assert!(full && !recursive && fields.is_none());
-            }
-            other => panic!("{:?}", other.err()),
-        }
-        let e = parse(r#"{"cmd":"inspect","recurse":true}"#).err().unwrap();
-        assert!(e.contains("recurse"), "{e}");
-
-        let e = parse(r#"{"cmd":"nope"}"#).err().unwrap();
-        assert!(e.contains("status") && e.contains("selection"), "{e}");
-        let e = parse(r#"{}"#).err().unwrap();
-        assert!(e.contains("commands: "), "{e}");
-        let e = parse(r#"{"cmd":"status","typo":1}"#).err().unwrap();
-        assert!(e.contains("typo"), "{e}");
-        let e = parse(r#"{"cmd":"build","typo":1}"#).err().unwrap();
-        assert!(e.contains("typo"), "{e}");
-        let e = parse(r#"{"cmd":"render","typo":1}"#).err().unwrap();
-        assert!(e.contains("typo"), "{e}");
-
-        // `interface` was absorbed into `build`; `sync` into `status`.
-        let e = parse(r#"{"cmd":"interface"}"#).err().unwrap();
-        assert!(e.contains("build"), "{e}");
-        let e = parse(r#"{"cmd":"sync"}"#).err().unwrap();
-        assert!(e.contains("status"), "{e}");
-    }
-
-    #[test]
-    fn view_takes_true_or_a_slot() {
-        assert!(matches!(
-            parse(r#"{"cmd":"build","view":true}"#),
-            Ok(Request::Build { view: Some(ViewSel::Active(true)), .. })
-        ));
-        assert!(matches!(
-            parse(r#"{"cmd":"inspect","view":"tab-1"}"#),
-            Ok(Request::Inspect { view: Some(ViewSel::Slot(s)), .. }) if s == "tab-1"
-        ));
-        // The old spelling is a typo now, not a silent no-op.
-        let e = parse(r#"{"cmd":"build","viewer_state":true}"#).err().unwrap();
-        assert!(e.contains("viewer_state"), "{e}");
-    }
-
-    #[test]
-    fn chat_commands() {
-        assert!(matches!(parse(r#"{"cmd":"poll"}"#), Ok(Request::Poll { timeout: None })));
-        assert!(
-            matches!(parse(r#"{"cmd":"poll","timeout":1.5}"#), Ok(Request::Poll { timeout: Some(s) }) if s == 1.5)
-        );
-        assert!(matches!(parse(r#"{"cmd":"say","text":"hi"}"#), Ok(Request::Say { text }) if text == "hi"));
-
-        let e = parse(r#"{"cmd":"poll","timout":1}"#).err().unwrap();
-        assert!(e.contains("timout"), "{e}");
-        let e = parse(r#"{"cmd":"say"}"#).err().unwrap();
-        assert!(e.contains("text"), "{e}");
-    }
 }

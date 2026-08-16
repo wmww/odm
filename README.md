@@ -11,7 +11,7 @@ queries over a CLI designed for agent feedback loops.
 cargo build --release
 target/release/odm run examples/piston --headless &   # drop --headless for the viewer
 cd examples/piston
-../../target/release/odm render --t 1.0     # writes a PNG, prints its path
+../../target/release/odm render '{"inputs": {"t": 1.0}}'   # writes a PNG, prints its path
 ../../target/release/odm inspect
 ```
 
@@ -25,7 +25,7 @@ An agent gets the instructions ODM ships with from the project's own
 `AGENTS.md`/`CLAUDE.md`: a new project is created with them, and every project
 open re-syncs whatever sits between the `STANDARD ODM PROMPT` markers, so they
 never go stale. An existing project without them is asked about once per open.
-`odm prompt` prints the same text for pasting anywhere else.
+`odm docs prompt` prints the same text for pasting anywhere else.
 
 The text is `docs/prompts/` — how to write doohickeys, and how to use the CLI
 (including `odm poll` / `odm say`, which carry messages between the user's
@@ -49,8 +49,8 @@ viewer and the agent).
 - `framework/` — JS framework + vendored three.js subset (r185)
 - `examples/` — example projects (double as integration tests)
 - `docs/` — for agents *using* ODM on a project: `docs/prompts/` is the
-  short in-context layer (`odm prompt` prints it, compiled into the
-  binary); `docs/api/` is the full JS API reference
+  short in-context layer (`odm docs prompt` prints it, compiled into
+  the binary); `docs/api/` is the full JS API reference
 
 Design notes and decisions live in `notes/`; known issues in `issues/`.
 

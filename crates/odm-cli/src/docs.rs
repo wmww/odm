@@ -1,6 +1,7 @@
-//! `odm docs` — the full API reference, compiled in from `docs/` so it works
-//! from any directory and always matches the engine build. Markdown out,
-//! like `odm prompt`: this is for reading (or grepping), not parsing.
+//! `odm docs` — the full API reference (plus the agent prompt as a topic),
+//! compiled in from `docs/` so it works from any directory and always
+//! matches the engine build. Markdown out: for reading (or grepping), not
+//! parsing.
 //!
 //! At a version cut, the live tree is copied to `docs/vN/` and `--api N`
 //! starts reading from that snapshot; until v1 exists only the live
@@ -17,8 +18,8 @@ pub const USAGE: &str = "  docs                       list reference topics
   docs changes <from> <to>   migration guides for API v<from> -> v<to>
 ";
 
-/// A named markdown file: (topic, contents).
-fn topics() -> Vec<(String, &'static str)> {
+/// A named markdown topic: (topic, contents).
+fn topics() -> Vec<(String, String)> {
     let mut out = Vec::new();
     if let Some(api) = DOCS.get_dir("api") {
         for f in api.files() {
@@ -26,7 +27,7 @@ fn topics() -> Vec<(String, &'static str)> {
             if let Some(body) = f.contents_utf8()
                 && name != "README"
             {
-                out.push((name.into_owned(), body));
+                out.push((name.into_owned(), body.to_string()));
             }
         }
     }
@@ -37,9 +38,12 @@ fn topics() -> Vec<(String, &'static str)> {
             && f.path().extension().is_some_and(|e| e == "md")
             && name != "README"
         {
-            out.push((name.into_owned(), body));
+            out.push((name.into_owned(), body.to_string()));
         }
     }
+    // The agent instructions: a topic, not a command — their standing home
+    // is the AGENTS.md marker block, so reading them here is docs.
+    out.push(("prompt".into(), odm_prompt::text()));
     out.sort();
     out
 }
@@ -128,7 +132,7 @@ fn search(pattern: &str) -> anyhow::Result<i32> {
     let needle = pattern.to_lowercase();
     let mut hits = 0;
     for (name, body) in topics() {
-        for section in sections(body) {
+        for section in sections(&body) {
             if section.to_lowercase().contains(&needle) {
                 if hits > 0 {
                     println!();

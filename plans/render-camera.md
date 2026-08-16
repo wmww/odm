@@ -19,7 +19,7 @@ One camera field in the agent-visible surface:
 vector form, alongside the docs-only explicit five
 (`eye`/`target`/`up`/`fov`/`ortho_height`). Named `look` because `view` is
 taken (tab adoption). Spell it as a request field from the start — land
-after `cli-json-args.md` so no flag form ever exists.
+on the landed JSON grammar so no flag form ever exists.
 
 ## Adopt the user's camera
 The diet's "target what the user sees" should include the camera. Tabs

@@ -389,7 +389,7 @@ impl ViewerApp {
         }
         self.active = index;
         self.needs_render = true;
-        // The CLI's `odm selection` and bare `--view` follow the tab the
+        // The CLI's `status` selection and `"view": true` follow the tab the
         // user is looking at.
         self.state().set_selection(self.tab().selected.clone());
         self.state().set_active_slot(Some(self.tab().slot.clone()));
@@ -882,7 +882,7 @@ impl ViewerApp {
         let scene = self.tab().scene.as_ref()?;
         let state = self.state();
         let hit =
-            scene::raycast(&state.build_engine().kernel, &scene.scene.instances, origin, dir)?;
+            scene::raycast(&state.build_engine().kernel, &scene.scene.instances, origin, dir, 1e9)?;
         Some((
             hit.get("id")?.as_str()?.to_string(),
             hit.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()),

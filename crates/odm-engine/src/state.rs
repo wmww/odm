@@ -122,7 +122,7 @@ pub struct EngineState {
     /// every active slot stale.
     last_generation: Mutex<Option<u64>>,
     /// The viewer tab the user is looking at (None when headless): what
-    /// bare `--view` queries adopt and poll snapshots describe.
+    /// `"view": true` queries adopt and poll snapshots describe.
     active_slot: Mutex<Option<String>>,
     queue: BuildQueue,
     /// Viewer selection, in the order it was picked: (node id, name).

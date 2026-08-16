@@ -1,7 +1,7 @@
 //! The post-build input report: one flat list of everything settable on the
 //! view, with winning declarations and the conflict lint.
 
-use odm_build::{BuildEngine, InputKind, ValueSource, View, check_set_names, declared_entries};
+use odm_build::{BuildEngine, InputKind, ValueSource, View, check_input_names, declared_entries};
 use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::Store;
@@ -85,11 +85,11 @@ fn fall_through_names_reach_the_view() {
     let meta = meta.as_ref().as_ref().unwrap();
     let mut typo = Map::new();
     typo.insert("speeed".into(), json!(2));
-    let err = check_set_names(&typo, meta, &report).unwrap_err();
+    let err = check_input_names(&typo, meta, &report).unwrap_err();
     assert!(err.contains("speeed") && err.contains("speed"), "{err}");
     let mut fine = Map::new();
     fine.insert("speed".into(), json!(2));
-    assert!(check_set_names(&fine, meta, &report).is_ok());
+    assert!(check_input_names(&fine, meta, &report).is_ok());
 }
 
 /// The flat list holds both kinds — the target's plain inputs and the
@@ -179,7 +179,7 @@ fn a_plain_input_shadowing_a_cascade_name_is_linted() {
 
     let sizes: Vec<InputKind> =
         report.inputs.iter().filter(|e| e.name == "size").map(|e| e.kind).collect();
-    assert_eq!(sizes, vec![InputKind::Plain], "one entry, the one --set reaches");
+    assert_eq!(sizes, vec![InputKind::Plain], "one entry, the one a set value reaches");
     assert!(
         report.warnings.iter().any(|w| w.contains("\"size\"") && w.contains("part.js")),
         "{:?}",

@@ -2,7 +2,7 @@
 //! the marked block that keeps them current in a project's agent files.
 //!
 //! Markdown, not JSON: this is for an agent's context, not for parsing. Two
-//! consumers — `odm prompt` (odm-cli, which must stay V8-free) and the engine,
+//! consumers — `odm docs prompt` (odm-cli, which must stay V8-free) and the engine,
 //! which splices the block into `AGENTS.md`/`CLAUDE.md` on project open — so
 //! it lives in a std-only crate of its own.
 

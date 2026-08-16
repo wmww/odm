@@ -5,7 +5,7 @@
 Broken pipe (os error 32)`.
 
 Rust ignores SIGPIPE by default, so `println!` panics when the reader
-closes early. Affects every printing command, but `docs`/`prompt` are
+closes early. Affects every printing command, but `docs` (incl. the `prompt` topic) is
 the long outputs agents actually pipe through `head`/`grep`.
 
 Fix options: restore `SIGPIPE=SIG_DFL` at startup in the `odm` binary

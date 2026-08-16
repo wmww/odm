@@ -13,7 +13,7 @@ pins its output node — and transitively its meshes — against GC, each pinned
 mesh keeping a live `Manifold` in the kernel cache. A parametric part invoked
 with many distinct sizes accumulates without bound.
 
-The thrash is now *observable*: `odm build` reports per-pass `stats`
+The thrash is now *observable*: `"stats": true` on any view command reports per-pass stats
 (per-doohickey runs + self-time, memo hits), so "arm.js runs: 2" on every
 identical rebuild is this issue showing itself.
 

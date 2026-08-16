@@ -24,3 +24,8 @@ Related interactions, same root cause:
 - The CLI has no read timeout (`odm-cli/src/lib.rs`), so that blocking shows
   up as a silently hung terminal with nothing for an agent to interpret.
   Worth a progress line or generous timeout if command latency stays lumpy.
+- `status` (2026-08, cli-json-args) is documented as "never waits on a
+  build" — true in that it never *triggers* one, but it still queues on
+  `cmd_lock` behind an in-flight background build. When the lock is
+  lifted, exempt `status` first: it reads only last-published state plus
+  a sync.

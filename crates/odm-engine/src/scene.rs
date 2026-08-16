@@ -146,10 +146,11 @@ impl Fields {
         }
     }
 
-    /// `--fields name,bounds,volume`.
-    pub fn parse(list: &str) -> Result<Fields, String> {
+    /// `"fields": ["name", "bounds", "volume"]` (the per-node names; the
+    /// view-level ones are peeled off before this is called).
+    pub fn parse(list: &[String]) -> Result<Fields, String> {
         let mut f = Fields::default();
-        for name in list.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        for name in list.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
             let slot = match name {
                 "name" => &mut f.name,
                 "color" => &mut f.color,
@@ -173,7 +174,7 @@ impl Fields {
             *slot = true;
         }
         if f == Fields::default() {
-            return Err("--fields needs at least one field name".into());
+            return Err("`fields` needs at least one field name".into());
         }
         Ok(f)
     }
@@ -558,6 +559,7 @@ pub fn raycast(
     instances: &[Instance],
     origin: [f64; 3],
     dir: [f64; 3],
+    max_dist: f64,
 ) -> Option<Value> {
     let mut best: Option<(f64, Value)> = None;
     for inst in instances {
@@ -565,6 +567,9 @@ pub fn raycast(
         let local_origin = transform_point(&inv, origin);
         let local_dir = transform_dir(&inv, dir);
         // The kernel clamps the segment to the solid's bounds internally.
+        // Its bound is in *local* units, which need not match world ones
+        // under scaling, so `max_dist` is applied to the world distance
+        // below instead.
         let Ok(Some(hit)) = kernel.raycast(inst.mesh, local_origin, local_dir, 1e12) else {
             continue;
         };
@@ -577,7 +582,7 @@ pub fn raycast(
         let n = transform_dir(&mat_transpose_linear(&inv), hit.normal);
         let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-30);
         let normal = [n[0] / len, n[1] / len, n[2] / len];
-        if best.as_ref().is_none_or(|(d, _)| distance < *d) {
+        if distance <= max_dist && best.as_ref().is_none_or(|(d, _)| distance < *d) {
             best = Some((
                 distance,
                 json!({
@@ -707,10 +712,11 @@ mod tests {
 
     #[test]
     fn fields_are_named_and_checked() {
-        let f = Fields::parse("name, bounds,volume").unwrap();
+        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let f = Fields::parse(&names(&["name", "bounds", "volume"])).unwrap();
         assert!(f.name && f.bounds && f.volume && !f.tris);
-        assert!(Fields::parse("naem").unwrap_err().contains("naem"));
-        assert!(Fields::parse("").is_err());
+        assert!(Fields::parse(&names(&["naem"])).unwrap_err().contains("naem"));
+        assert!(Fields::parse(&[]).is_err());
     }
 
     #[test]

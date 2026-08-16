@@ -25,6 +25,8 @@ notify = "=8.2.0"
 # Icon art (assets/icons); same version odm-render encodes renders with.
 png = "0.18"
 serde_json = "1"
+# Field paths in request shape errors ("rays[0].origin: invalid length…").
+serde_path_to_error = "0.1"
 anyhow.workspace = true
 
 [dev-dependencies]

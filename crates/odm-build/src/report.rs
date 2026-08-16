@@ -2,7 +2,7 @@
 //! view — the target's own plain inputs plus every cascade input that fell
 //! through to the view level (explicitly set, or resolved by a
 //! declaration's auto-provided default). This is the input panel's data
-//! source, the CLI's `--set` typo check, and the conflict lint.
+//! source, the CLI's input-name typo check, and the conflict lint.
 //!
 //! Computed by walking the pass's memo entries (they are all fresh or
 //! revalidated after a successful build), so memo hits cost nothing extra
@@ -440,11 +440,11 @@ fn unread_cascade_warning(
     }
 }
 
-/// A view-set value that nothing in the built tree can read is almost
+/// A view-set input value that nothing in the built tree can read is almost
 /// certainly a typo; names must be view-settable (in the report) or the
 /// target's own declared inputs (which includes plain args, checked at the
 /// boundary).
-pub fn check_set_names(
+pub fn check_input_names(
     cascade: &Map<String, Value>,
     target_meta: &Meta,
     report: &InputReport,
