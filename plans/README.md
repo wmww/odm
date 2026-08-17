@@ -16,6 +16,10 @@ discussions that followed. Cross-references note where plans touch.
   is the risk to spike first), egui web viewer. The remaining
   phase-1 seam (JS-executor trait in odm-build) is a useful desktop
   refactor on its own; the viewer-core seam is done (see below).
+- `chat-links.md` — the chat action log's file and node names become
+  inline links (era hypertext, not buttons): a file opens a tab, a node
+  selects in that path's tab. Spans on the action transcript entries,
+  resolved on click through `scene::locate`.
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
   separating translation, offending leaf pairs named on the CLI surface,
