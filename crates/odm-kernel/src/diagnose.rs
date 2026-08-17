@@ -1,7 +1,7 @@
 /// Agent-readable diagnosis for meshes Manifold rejects. Manifold's own error
 /// is a bare `NotManifold`; we inspect the (already merge()d) index buffer to
 /// say why.
-pub fn diagnose_open_mesh(vert_properties: &[f32], tri_verts: &[u32], raw_err: &str) -> String {
+pub fn diagnose_open_mesh(vert_properties: &[f64], tri_verts: &[u64], raw_err: &str) -> String {
     use std::collections::HashMap;
 
     let verts = vert_properties.len() / 3;
@@ -9,7 +9,7 @@ pub fn diagnose_open_mesh(vert_properties: &[f32], tri_verts: &[u32], raw_err: &
 
     // Count undirected edge usage: a closed manifold uses every edge exactly
     // twice (once per direction).
-    let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut edges: HashMap<(u64, u64), u32> = HashMap::new();
     for t in tri_verts.chunks_exact(3) {
         for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
             let key = (a.min(b), a.max(b));

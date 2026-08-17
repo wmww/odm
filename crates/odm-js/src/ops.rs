@@ -118,7 +118,7 @@ pub fn op_solid_revolve(
 #[string]
 pub fn op_solid_from_mesh(
     state: &mut OpState,
-    #[buffer] positions: &[f32],
+    #[buffer] positions: &[f64],
     #[buffer] indices: &[u32],
 ) -> Result<String, JsErrorBox> {
     let s = sess(state);

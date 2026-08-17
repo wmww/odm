@@ -3,14 +3,14 @@ use odm_store::{Dep, MemoEntry, MemoKey, Object, Store};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-fn mesh(seed: f32) -> Mesh {
+fn mesh(seed: f64) -> Mesh {
     Mesh {
         positions: vec![seed, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
         indices: vec![0, 1, 2],
     }
 }
 
-fn mesh_obj(seed: f32) -> Object {
+fn mesh_obj(seed: f64) -> Object {
     Object::Mesh(Arc::new(mesh(seed)))
 }
 

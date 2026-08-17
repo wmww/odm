@@ -115,8 +115,8 @@ pub fn mesh_aabb(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
     let mut max = [f64::NEG_INFINITY; 3];
     for p in mesh.positions.chunks_exact(3) {
         for i in 0..3 {
-            min[i] = min[i].min(p[i] as f64);
-            max[i] = max[i].max(p[i] as f64);
+            min[i] = min[i].min(p[i]);
+            max[i] = max[i].max(p[i]);
         }
     }
     Some((min, max))

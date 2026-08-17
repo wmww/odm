@@ -1,5 +1,5 @@
 import { BufferGeometry } from '../core/BufferGeometry.js';
-import { Float32BufferAttribute } from '../core/BufferAttribute.js';
+import { Float32BufferAttribute, Float64BufferAttribute } from '../core/BufferAttribute.js';
 import { Shape } from '../extras/core/Shape.js';
 import { ShapeUtils } from '../extras/ShapeUtils.js';
 import { Vector2 } from '../math/Vector2.js';
@@ -83,7 +83,7 @@ class ShapeGeometry extends BufferGeometry {
 		// build geometry
 
 		this.setIndex( indices );
-		this.setAttribute( 'position', new Float32BufferAttribute( vertices, 3 ) );
+		this.setAttribute( 'position', new Float64BufferAttribute( vertices, 3 ) );
 		this.setAttribute( 'normal', new Float32BufferAttribute( normals, 3 ) );
 		this.setAttribute( 'uv', new Float32BufferAttribute( uvs, 2 ) );
 

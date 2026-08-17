@@ -2,7 +2,7 @@ use odm_ir::{Color, Mesh, Node, Transform};
 use odm_render::{DEFAULT_COLOR, RenderError, flatten_scene};
 use odm_store::{Object, Store};
 
-fn tri_mesh(x_off: f32) -> Mesh {
+fn tri_mesh(x_off: f64) -> Mesh {
     Mesh {
         positions: vec![x_off, 0.0, 0.0, x_off + 1.0, 0.0, 0.0, x_off, 1.0, 0.0],
         indices: vec![0, 1, 2],

@@ -1,13 +1,13 @@
-# Query numbers print 17 digits of f32 noise
+# Query numbers can print 17 digits of float noise
 
-`odm inspect` bounds read `-25.600000023841858` where the model says `-25.6`.
-Mesh positions are stored as `f32`, so everything past ~7 significant digits
-is conversion artefact — but bounds/volume/area come back as `f64` and print
-in full. On a wide tree that noise is a real share of the output, and it
-makes "is this at 25.6?" harder to answer than it should be.
+Original problem (2026-08): mesh positions were f32, so `odm inspect`
+bounds read `-25.600000023841858` where the model says `-25.6`. Fixed
+2026-08-17 by the mesh f64 switch — bounds of authored geometry now print
+clean.
 
-Not obviously just a formatting fix: rounding to f32 precision is honest for
-mesh-derived numbers, but volume/area are f64 Manifold results over f32
-input, and the conformance suite compares numbers with explicit epsilons.
-Decide where the rounding belongs (engine, so the JSON is clean, or CLI, so
-the protocol keeps full precision) before doing it.
+What remains is ordinary f64 arithmetic noise: volume/area of CSG results
+(and bounds of rotated/CSG'd geometry) are computed values and can still
+print `1000.0000000000005`-style tails. Much rarer and always honest, but
+the "where would rounding belong" question from the original issue still
+applies if it bothers agents in practice: engine (clean JSON) vs CLI
+(protocol keeps full precision). Revisit only on demonstrated annoyance.

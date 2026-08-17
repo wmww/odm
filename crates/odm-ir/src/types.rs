@@ -5,9 +5,13 @@ use serde::{Deserialize, Serialize};
 /// Triangle mesh, indexed. Positions are xyz triples; indices are CCW
 /// triangles. No stored normals — the renderer derives flat normals in the
 /// fragment shader.
+///
+/// Positions are f64: the kernel computes in f64, and quantizing at the store
+/// boundary would re-weld (and can break) every mesh that crosses it. The
+/// only f32 conversion is at GPU upload.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mesh {
-    pub positions: Vec<f32>,
+    pub positions: Vec<f64>,
     pub indices: Vec<u32>,
 }
 
@@ -50,7 +54,7 @@ impl Mesh {
 impl Canonical for Mesh {
     fn write(&self, w: &mut Hasher) {
         w.u8(tag::MESH);
-        w.f32s(&self.positions);
+        w.f64s(&self.positions);
         w.u32s(&self.indices);
     }
 }

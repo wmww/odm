@@ -92,6 +92,15 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (ExecutionContext), Hash→Manifold cache with rebuild-from-store fallback.
   Segments are always explicit — kernel rejects <3; framework defaults:
   cylinder 64, sphere 48, revolve 64.
+  Mesh positions are f64 end to end (MeshGL64 both directions; the three
+  generators emit Float64BufferAttribute positions and op_solid_from_mesh
+  takes Float64Array): the store boundary never quantizes, so rebuilds
+  re-weld exactly and baked far-from-origin transforms keep detail. The
+  ONE f32 conversion is per-mesh GPU vertex upload in odm-render/gpu.rs.
+  `precision` test files in odm-ir/odm-kernel/odm-render plus
+  tests/conformance/unstable/three-f64.js are f32-regression tripwires
+  (bit-exact 0.1 / near-1e7 probes) — an `as f32` sneaking into any seam
+  fails one of them; keep new position paths covered there.
 - `odm-js` — deno_core =0.408.0; per-build disposable isolates from ONE
   snapshot embedding `framework/` (odm API + three r185 subset, every
   supported API version's surface manifest — see "API versions" below); ops

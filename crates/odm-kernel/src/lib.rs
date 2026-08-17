@@ -12,7 +12,7 @@
 
 mod diagnose;
 
-use manifold_csg::{CrossSection, ExecutionContext, Manifold, MeshGL, OpType};
+use manifold_csg::{CrossSection, ExecutionContext, Manifold, MeshGL64, OpType};
 use odm_ir::{Hash, Mesh, Transform};
 use odm_store::{Object, Store};
 use std::collections::HashMap;
@@ -181,11 +181,12 @@ impl Kernel {
 
     /// Weld an externally produced triangle soup / seam-duplicated mesh into a
     /// solid. Fails with an agent-readable diagnosis for open surfaces.
-    pub fn solid_from_mesh(&self, positions: &[f32], indices: &[u32]) -> Result<Hash> {
-        let mesh = MeshGL::new(positions, 3, indices)
+    pub fn solid_from_mesh(&self, positions: &[f64], indices: &[u32]) -> Result<Hash> {
+        let idx: Vec<u64> = indices.iter().map(|&i| i as u64).collect();
+        let mesh = MeshGL64::new(positions, 3, &idx)
             .map_err(|e| KernelError::InvalidMesh(e.to_string()))?;
         let merged = mesh.merge();
-        match Manifold::from_meshgl(&merged) {
+        match Manifold::from_meshgl64(&merged) {
             Ok(m) => self.intern(m, None),
             Err(e) => {
                 let verts = merged.vert_properties();
@@ -374,13 +375,20 @@ impl Kernel {
     /// Evaluate a manifold, store its mesh, cache it, return the hash.
     fn intern(&self, m: Manifold, cancel: Option<&CancelToken>) -> Result<Hash> {
         let evaluated = self.evaluated(m, cancel)?;
-        let gl = evaluated.to_meshgl();
-        // A cancel landing between status() and to_meshgl() may truncate the
-        // mesh; don't intern junk into the content store.
+        // The f64 extraction: Manifold computes in f64, and the store must
+        // keep those bits (a f32 round-trip re-welds every op boundary).
+        let gl = evaluated.to_meshgl64();
+        // A cancel landing between status() and to_meshgl64() may truncate
+        // the mesh; don't intern junk into the content store.
         if cancel.is_some_and(|t| t.is_cancelled()) {
             return Err(KernelError::Cancelled);
         }
-        let mesh = Mesh { positions: gl.vert_properties(), indices: gl.tri_verts() };
+        let indices = gl
+            .tri_verts()
+            .into_iter()
+            .map(|i| u32::try_from(i).map_err(|_| KernelError::Other(format!("vertex index {i} exceeds u32"))))
+            .collect::<Result<Vec<u32>>>()?;
+        let mesh = Mesh { positions: gl.vert_properties(), indices };
         let hash = self.store.put(Object::Mesh(Arc::new(mesh)));
         self.cache.lock().unwrap().insert(hash, Arc::new(evaluated));
         Ok(hash)
@@ -395,9 +403,10 @@ impl Kernel {
         let Object::Mesh(mesh) = &*obj else {
             return Err(KernelError::UnknownGeometry(h));
         };
-        let gl = MeshGL::new(&mesh.positions, 3, &mesh.indices)
+        let idx: Vec<u64> = mesh.indices.iter().map(|&i| i as u64).collect();
+        let gl = MeshGL64::new(&mesh.positions, 3, &idx)
             .map_err(|e| KernelError::InvalidMesh(e.to_string()))?;
-        let m = Manifold::from_meshgl(&gl)
+        let m = Manifold::from_meshgl64(&gl)
             .map_err(|e| KernelError::NotSolid(format!("stored mesh no longer welds: {e}")))?;
         let arc = Arc::new(m);
         self.cache.lock().unwrap().insert(h, arc.clone());

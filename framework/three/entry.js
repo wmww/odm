@@ -7,7 +7,7 @@ export { Quaternion } from './math/Quaternion.js';
 export { Euler } from './math/Euler.js';
 export { Box3 } from './math/Box3.js';
 export { BufferGeometry } from './core/BufferGeometry.js';
-export { BufferAttribute, Float32BufferAttribute, Uint32BufferAttribute } from './core/BufferAttribute.js';
+export { BufferAttribute, Float32BufferAttribute, Float64BufferAttribute, Uint32BufferAttribute } from './core/BufferAttribute.js';
 export { BoxGeometry } from './geometries/BoxGeometry.js';
 export { CylinderGeometry } from './geometries/CylinderGeometry.js';
 export { SphereGeometry } from './geometries/SphereGeometry.js';

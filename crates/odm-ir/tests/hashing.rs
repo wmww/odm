@@ -22,8 +22,8 @@ fn hash_is_stable_across_runs() {
         children: vec![Node::default().hash()],
     };
     let node_hex = node.hash().to_hex();
-    insta_like(&mesh_hex, "145d08960a1c6b7501a09a7ca7e33f37761e7653c642f1b43cfead450a1abbc1");
-    insta_like(&node_hex, "0f3c679b6d8c48fc0ba36911b51f7fb47380aedb42dbbc78622bf151001cb3e3");
+    insta_like(&mesh_hex, "3fe0fa76fcbeef9070366e374b151d862a95fe2321541bf72a144697047bdc53");
+    insta_like(&node_hex, "73bb28744595a8297fb74a1cc764015bccb165e69d059bb0493c7eef7edd7a07");
 }
 
 fn insta_like(got: &str, want: &str) {
@@ -40,9 +40,23 @@ fn distinct_values_distinct_hashes() {
 
 #[test]
 fn field_boundaries_are_unambiguous() {
-    // Moving an element between adjacent length-prefixed vectors must change the hash.
+    // Moving an element between adjacent length-prefixed vectors must change
+    // the hash: 3.0's bytes reappear in `indices` as two little-endian u32s.
+    let bits = 3f64.to_bits();
     let a = Mesh { positions: vec![1.0, 2.0, 3.0], indices: vec![] };
-    let b = Mesh { positions: vec![1.0, 2.0], indices: vec![3f32.to_bits()] };
+    let b = Mesh { positions: vec![1.0, 2.0], indices: vec![bits as u32, (bits >> 32) as u32] };
+    assert_ne!(a.hash(), b.hash());
+}
+
+/// f32-regression tripwire: positions hash as f64 bits. A `Canonical for
+/// Mesh` that quantizes through f32 would collapse these two meshes.
+#[test]
+fn hashing_keeps_sub_f32_precision() {
+    let mut a = test_mesh();
+    let mut b = test_mesh();
+    a.positions[0] = 0.1;
+    b.positions[0] = 0.1f32 as f64;
+    assert_ne!(a.positions[0], b.positions[0], "probe must straddle f32 precision");
     assert_ne!(a.hash(), b.hash());
 }
 

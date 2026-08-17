@@ -1040,9 +1040,37 @@ class Float32BufferAttribute extends BufferAttribute {
 
 }
 
+/**
+ * Convenient class that can be used when creating a `Float64` buffer attribute with
+ * a plain `Array` instance.
+ *
+ * ODM addition (upstream three dropped Float64 attributes as WebGL can't take
+ * them): our geometry never feeds a GPU, and position attributes must stay
+ * f64 all the way to the engine.
+ *
+ * @augments BufferAttribute
+ */
+class Float64BufferAttribute extends BufferAttribute {
+
+	/**
+	 * Constructs a new buffer attribute.
+	 *
+	 * @param {(Array<number>|Float64Array)} array - The array holding the attribute data.
+	 * @param {number} itemSize - The item size.
+	 * @param {boolean} [normalized=false] - Whether the data are normalized or not.
+	 */
+	constructor( array, itemSize, normalized ) {
+
+		super( new Float64Array( array ), itemSize, normalized );
+
+	}
+
+}
+
 //
 
 export {
+	Float64BufferAttribute,
 	Float32BufferAttribute,
 	Float16BufferAttribute,
 	Uint32BufferAttribute,

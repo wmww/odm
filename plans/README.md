@@ -14,11 +14,6 @@ discussions that followed. Cross-references note where plans touch.
   crate, alacritty_terminal, $SHELL at the project dir; not
   agent-specific, nothing runs by default). Tab placement means no
   overlap with agent-activity-view's chat-area real estate.
-- `mesh-f64.md` — `Mesh.positions` f32 → f64 through the whole pipeline
-  (kernel uses manifold-csg's existing MeshGL64 path; vendored three
-  generators emit Float64 positions); f32 survives only at GPU upload.
-  Kills per-op store-round-trip quantization and the re-weld failure
-  class.
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
   separating translation. Corrects clearance.md's premise: manifold-csg
@@ -37,4 +32,7 @@ rationale and the deferred exact-distance tier are in
 `notes/agent-surface.md`); `render-camera.md` (landed 2026-08-17 — one
 camera parameter set with `look`/`focus`/`zoom`, resolved-camera echo,
 send-time per-message poll snapshots; the standing rules are in
-`notes/agent-surface.md`'s render camera section).
+`notes/agent-surface.md`'s render camera section); `mesh-f64.md` (landed
+2026-08-17 — `Mesh.positions` f64 via MeshGL64, three generators emit
+Float64 positions, f32 only at GPU upload; the standing invariant and the
+tripwire-test convention are in notes/architecture.md's odm-kernel entry).

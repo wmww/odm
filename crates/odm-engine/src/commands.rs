@@ -831,8 +831,8 @@ fn camera_from(req: &RenderReq) -> Result<Camera, CmdError> {
 
 /// A camera in the render request's explicit spelling — the render echo and
 /// the poll snapshot speak it identically, so numbers paste straight back
-/// into `odm render`. f32-shortest rounding: fitted values inherit f32 mesh
-/// noise that would otherwise print 17 digits.
+/// into `odm render`. f32-shortest rounding: fitted values come out of
+/// normalization/trig with 17-digit decimals nobody wants to paste.
 pub(crate) fn camera_json(
     eye: [f64; 3],
     target: [f64; 3],

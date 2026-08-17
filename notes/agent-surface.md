@@ -104,8 +104,9 @@ aspect)`; the viewer's orbit camera is just a fully-given one.
   surface's sin.
 - Every render response echoes the resolved `camera` —
   `eye`/`target`/`up` + `fov` or `ortho`+`ortho_height`, the request's
-  own spelling, f32-shortest-rounded (mesh data is f32; kills the
-  17-digit noise). Paste-back re-renders byte-identically (verified).
+  own spelling, f32-shortest-rounded (fitted values come out of
+  normalization/trig with 17-digit decimals). Paste-back re-renders
+  byte-identically (verified).
 - Poll messages each carry `view` (was one top-level `view` per poll):
   tab path + inputs + selection + `camera` in the same spelling,
   **stamped by the viewer at send time** (per design-decisions "sent,

@@ -59,9 +59,7 @@ pub fn pick_wire(
 
         // Project every vertex once, then walk the triangles' edges.
         clip.clear();
-        clip.extend(mesh.positions.chunks_exact(3).map(|p| {
-            clip_point(&mvp, [p[0] as f64, p[1] as f64, p[2] as f64])
-        }));
+        clip.extend(mesh.positions.chunks_exact(3).map(|p| clip_point(&mvp, [p[0], p[1], p[2]])));
 
         let mut consider = |a: u32, b: u32| {
             let (Some(&ca), Some(&cb)) = (clip.get(a as usize), clip.get(b as usize)) else {

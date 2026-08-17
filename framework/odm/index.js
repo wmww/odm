@@ -490,7 +490,8 @@ export function fromThreeGeometry(g) {
   }
   const posAttr = g.getAttribute('position');
   if (!posAttr) throw new TypeError('geometry has no position attribute');
-  const positions = posAttr.array instanceof Float32Array ? posAttr.array : Float32Array.from(posAttr.array);
+  // f64 across the boundary: lossless for any input (Float32Array included).
+  const positions = posAttr.array instanceof Float64Array ? posAttr.array : Float64Array.from(posAttr.array);
   let indices;
   if (g.index) {
     indices = g.index.array instanceof Uint32Array ? g.index.array : Uint32Array.from(g.index.array);

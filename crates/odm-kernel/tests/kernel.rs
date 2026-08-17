@@ -122,7 +122,7 @@ fn open_surface_gets_readable_error() {
     let store = Store::new();
     let k = Kernel::new(store);
     // A single triangle: 3 boundary edges.
-    let pos = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    let pos = [0.0f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
     let idx = [0u32, 1, 2];
     let err = k.solid_from_mesh(&pos, &idx).unwrap_err();
     let msg = err.to_string();

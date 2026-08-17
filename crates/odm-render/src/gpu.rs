@@ -409,9 +409,12 @@ impl Renderer {
         let device = &self.device;
         for (hash, mesh) in &scene.meshes {
             let entry = self.mesh_cache.entry(*hash).or_insert_with(|| {
+                // THE f32 seam: stored positions are f64; the GPU sees f32.
+                // Once per mesh upload (cached), not per frame.
+                let verts_f32: Vec<f32> = mesh.positions.iter().map(|&p| p as f32).collect();
                 let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("mesh-verts"),
-                    contents: bytemuck::cast_slice(&mesh.positions),
+                    contents: bytemuck::cast_slice(&verts_f32),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
                 let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -430,10 +433,10 @@ impl Renderer {
                 // Endpoints are expanded rather than indexed: each wire is one
                 // instance carrying both of its ends.
                 let edges = mesh_edges(mesh);
-                let mut ends = Vec::with_capacity(edges.len() * 3);
+                let mut ends: Vec<f32> = Vec::with_capacity(edges.len() * 3);
                 for i in &edges {
                     let v = *i as usize * 3;
-                    ends.extend_from_slice(&mesh.positions[v..v + 3]);
+                    ends.extend(mesh.positions[v..v + 3].iter().map(|&p| p as f32));
                 }
                 let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("mesh-wires"),
