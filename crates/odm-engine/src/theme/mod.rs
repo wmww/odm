@@ -275,6 +275,10 @@ const CHECK: [&str; 6] = [
 
 /// A section that folds away under a clickable header, marked with the same
 /// boxed +/- the scene tree uses rather than a twisty.
+///
+/// The body is drawn according to `open` as it was on entry, so a click takes
+/// effect on the next frame: a caller sizing a panel around the body then has
+/// the two agree every frame.
 pub fn collapsing<R>(
     ui: &mut Ui,
     id_salt: &str,
@@ -283,6 +287,7 @@ pub fn collapsing<R>(
     color: Color32,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
+    let was_open = *open;
     let galley = ui.painter().layout_no_wrap(header.to_owned(), FontId::proportional(UI_SIZE), color);
     let height = galley.size().y.max(EXPANDER).max(ui.spacing().interact_size.y);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
@@ -299,7 +304,7 @@ pub fn collapsing<R>(
     if ui.interact(hit, ui.id().with(id_salt), egui::Sense::click()).clicked() {
         *open = !*open;
     }
-    (*open).then(|| add(ui))
+    was_open.then(|| add(ui))
 }
 
 /// Paint a pixel-art glyph — rows of `#` — with its top-left at `pos`.

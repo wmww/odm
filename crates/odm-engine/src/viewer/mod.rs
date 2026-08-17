@@ -49,13 +49,24 @@ const XRAY_OPACITY: f32 = 0.3;
 /// How far from a wire a click still counts, in UI points.
 const PICK_RADIUS_PT: f64 = 6.0;
 
-/// Height of the console pane (build logs + error). Fixed, so opening it
-/// does not resize the panel as content grows.
-const CONSOLE_HEIGHT: f32 = 140.0;
+/// Height the console panel opens at, and the least it can be dragged to.
+/// Its box then follows the panel rather than the content, so opening it does
+/// not resize the panel as logs come in.
+const CONSOLE_HEIGHT: f32 = 170.0;
+const CONSOLE_MIN: f32 = 70.0;
 
-/// Height of the chat transcript. The viewport is the main event, so the panel
-/// stays modest and fixed.
-const CHAT_HEIGHT: f32 = 92.0;
+/// Most of the space a draggable panel may take from what is left when it is
+/// shown, so that dragging one out never leaves the viewport (or the panels
+/// under it) with nothing.
+const PANEL_SHARE: f32 = 0.6;
+
+/// What [`theme::text_edit`] pads its text with, top and bottom.
+const INPUT_MARGIN: f32 = 6.0;
+
+/// Height the chat panel starts at, and the least it can be dragged to. The
+/// viewport is the main event, so it starts modest.
+const CHAT_HEIGHT: f32 = 125.0;
+const CHAT_MIN: f32 = 76.0;
 
 impl Orbit {
     pub(crate) fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
@@ -880,7 +891,12 @@ impl ViewerApp {
     /// Messages to and from the agent: transcript above, one input line below,
     /// the agent activity view faded behind the transcript.
     fn chat_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let size = egui::vec2(ui.available_width(), CHAT_HEIGHT);
+        // The input line keeps its height; the transcript takes whatever the
+        // panel's edge has been dragged to, less that line and the gap above
+        // it. Exactly, so the panel is never asked to hold more than it is.
+        let input_height = ui.text_style_height(&egui::TextStyle::Body) + INPUT_MARGIN;
+        let height = (ui.available_height() - input_height - ui.spacing().item_spacing.y).max(24.0);
+        let size = egui::vec2(ui.available_width(), height);
         if self.activity.enabled {
             // Render the current card at the well's content size (2px bevel
             // all round, scrollbar on the right), in the ui pass like the
@@ -926,7 +942,6 @@ impl ViewerApp {
                 }
             })
         });
-        ui.add_space(3.0);
         let input = theme::text_edit(ui, "chat-input", &mut self.chat_input, ui.available_width() - 4.0, "");
         if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             let text = self.chat_input.trim().to_owned();
@@ -995,30 +1010,47 @@ impl ViewerApp {
             let events = inputs::transport_ui(ui, self.tab(), &entry);
             self.apply_input_events(events);
         }
+    }
 
-        // One console, browser-devtools style: the last build attempt's
-        // output in order (latest-attempt semantics), and — when the build
-        // failed — the thrown error as the final entry, which is where it
-        // fell chronologically. Presentation-only merge: `error` stays its
-        // own field everywhere else (tab badge, agent surfaces, last-good
-        // scene semantics).
+    /// One console, browser-devtools style: the last build attempt's output in
+    /// order (latest-attempt semantics), and — when the build failed — the
+    /// thrown error as the final entry, which is where it fell
+    /// chronologically. Presentation-only merge: `error` stays its own field
+    /// everywhere else (tab badge, agent surfaces, last-good scene semantics).
+    ///
+    /// Its own panel, so its edge can be dragged. `None` — and no panel — when
+    /// the build had nothing to say.
+    fn console_ui(&mut self, ui: &mut egui::Ui) -> Option<egui::Rect> {
         let logs = self.tab().published.logs.clone();
         let error = self.tab().published.error.clone();
-        if !logs.is_empty() || error.is_some() {
-            let header = format!("Console ({})", logs.len() + error.is_some() as usize);
-            let header_color = if error.is_some() {
-                theme::ERROR
-            } else if logs
-                .iter()
-                .any(|(_, l)| matches!(l.level, odm_js::LogLevel::Warn | odm_js::LogLevel::Error))
-            {
-                theme::WARN
-            } else {
-                theme::TEXT
-            };
+        if logs.is_empty() && error.is_none() {
+            return None;
+        }
+        let header = format!("Console ({})", logs.len() + error.is_some() as usize);
+        let header_color = if error.is_some() {
+            theme::ERROR
+        } else if logs
+            .iter()
+            .any(|(_, l)| matches!(l.level, odm_js::LogLevel::Warn | odm_js::LogLevel::Error))
+        {
+            theme::WARN
+        } else {
+            theme::TEXT
+        };
+        // Open and closed are separate panels: sharing one id would persist
+        // the collapsed height and reopen the console flat.
+        let panel = match self.tab().console_open {
+            true => egui::Panel::bottom("console")
+                .resizable(true)
+                .default_size(CONSOLE_HEIGHT)
+                .min_size(CONSOLE_MIN)
+                .max_size((ui.available_height() * PANEL_SHARE).max(CONSOLE_HEIGHT)),
+            false => egui::Panel::bottom("console-closed").resizable(false),
+        };
+        let panel = panel.frame(theme::panel_frame()).show(ui, |ui| {
             let console_open = &mut self.tabs[self.active].console_open;
             theme::collapsing(ui, "console", console_open, &header, header_color, |ui| {
-                let size = egui::vec2(ui.available_width(), CONSOLE_HEIGHT);
+                let size = egui::vec2(ui.available_width(), ui.available_height().max(24.0));
                 theme::list_box(ui, "console", size, egui::Vec2b::new(false, true), |ui| {
                     for (path, line) in logs.iter() {
                         let color = match line.level {
@@ -1040,7 +1072,8 @@ impl ViewerApp {
                     }
                 });
             });
-        }
+        });
+        Some(panel.response.rect)
     }
 
     /// The whole window when no project is open: the menu bar, and the reason
@@ -1165,12 +1198,20 @@ impl eframe::App for ViewerApp {
                 self.apply_input_events(events);
             });
         theme::band(ui, right.response.rect);
+        // Below the status band, as the last thing the window pushed down.
+        if let Some(console) = self.console_ui(ui) {
+            theme::band(ui, console);
+        }
         let bottom = egui::Panel::bottom("timeline")
             .frame(theme::panel_frame())
             .show(ui, |ui| self.bottom_ui(ui));
         theme::band(ui, bottom.response.rect);
         // Above the status band, below the viewport.
         let chat = egui::Panel::bottom("chat")
+            .resizable(true)
+            .default_size(CHAT_HEIGHT)
+            .min_size(CHAT_MIN)
+            .max_size((ui.available_height() * PANEL_SHARE).max(CHAT_HEIGHT))
             .frame(theme::panel_frame())
             .show(ui, |ui| self.chat_ui(ui, frame));
         theme::band(ui, chat.response.rect);

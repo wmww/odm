@@ -217,6 +217,10 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   ranged numbers, toggles, choice buttons, JSON-ish text fields, presets), a
   `t` transport when a ranged cascade number named t falls through
   (scrub + play at 1 unit/sec looping), one devtools-style console panel
+  (its own resizable bottom panel; open and collapsed use separate panel ids
+  so egui does not persist the collapsed height and reopen flat, and
+  `theme::collapsing` draws its body from the pre-click `open` so the panel
+  and its contents agree every frame)
   with last-good scene (`Published.logs` is latest-attempt: success or
   failure, colored by `LogLevel`; a failed build's error is the final
   red entry — presentation-only merge, `Published.error` stays its own
@@ -539,12 +543,15 @@ agent-agnostic and enough.
 - **`poll`/`say` never sync or build** (and never touch the build gate): a
   poll blocks for minutes, and must hold up nothing.
   `state::tests::chat_commands_skip_the_build_gate` guards it.
-- Viewer: a fixed-height panel above the status band —
+- Viewer: a resizable panel above the status band —
   `theme::tail_box` transcript (user lines `> …` white, dimmed while
   undelivered; agent lines in `theme::AGENT_TEXT`) plus one `theme::text_edit`
-  where Enter sends and keeps focus. The status band says whether the agent is
-  listening, which is the user's cue to go prod it in its own terminal. All of
-  it repaints through the existing `EngineState::wake`.
+  where Enter sends and keeps focus. The transcript takes the panel's height
+  less the input line, exactly (item spacing included) — get that arithmetic
+  wrong and the panel grows a few px every frame until it eats the window.
+  The status band says whether the agent is listening, which is the user's cue
+  to go prod it in its own terminal. All of it repaints through the existing
+  `EngineState::wake`.
 
 ### Owning the event loop
 
@@ -816,7 +823,10 @@ keys, drags and modifier-clicks all land. Two quirks:
   wdotool mousemove 400 200 $G mousedown 1 $G mousemove 500 250 $G mousemove 600 300 $G mouseup 1
   ```
 
-  Orbit, middle-drag pan and shift-click-to-deselect all verified this way.
+  Orbit, middle-drag pan and shift-click-to-deselect all verified this way, as
+  is dragging a panel edge — but grab a few px *inside* the panel: the
+  viewport is registered after the panels, so on the edge pixel itself the
+  orbit wins the drag.
   Do *not* use `click 8 --repeat 2 --delay N` as the spacer: it produces the same
   gap but the extra button breaks egui's drag tracking (it works fine for
   modifier-only holds).
@@ -826,6 +836,10 @@ keys, drags and modifier-clicks all land. Two quirks:
 `getmouselocation` and `getwindowgeometry` are unavailable on this backend (both
 are send-only on Wayland); `search` / `getactivewindow` / `getwindowname` /
 `getwindowclassname` / `outputs` all work.
+
+The project dir must also be *short*: the engine's socket lives inside it and
+a long path (the session scratchpad's, say) fails startup with "path must be
+shorter than SUN_LEN". Copy the test project to `/tmp/<short>` instead.
 
 Other limits: the fixed per-project socket path means parallel runs should use
 different project dirs (`odm --project <dir> …` from outside the session reaches
