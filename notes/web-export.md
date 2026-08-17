@@ -32,15 +32,20 @@ Two halves with different lifecycles:
     `metaError` = extraction failure replayed verbatim client-side).
     Metas are extracted natively at export (JsEnv), so the web runtime
     never needs `extract_export`.
-- **Project-independent** (the *template*): `index.html`, `runtime.js`,
-  `odm_web.js` + `odm_web_bg.wasm` (wasm-bindgen output of odm-web),
-  `template.json` (the stamp). Built ONLY by `cargo xtask
-  build-web-template` into `target/web-template/` — never as part of a
-  normal build. Lookup at export: `--template`/`ODM_WEB_TEMPLATE` →
-  `<exe>/../../web-template` (dev checkout) →
-  `~/.local/share/odm/web-template/<stamp>/` — which is where
-  `scripts/install.sh` puts it (it runs the xtask and copies the result;
-  old stamps are left in place for any older installed binaries).
+- **Project-independent** (the *template*): ONE packed file,
+  `web-template.bin` — `index.html`, `runtime.js`, `odm_web.js` +
+  `odm_web_bg.wasm` (wasm-bindgen output of odm-web) behind a JSON header
+  carrying the stamp (format: odm-export's `template` module, shared with
+  xtask). Built ONLY by `cargo xtask build-web-template` into
+  `target/web-template.bin` — never as part of a normal build. The name is
+  static everywhere it lives, so installing replaces rather than
+  accumulates; the stamp inside gates *use*, not lookup. Lookup at export:
+  `--template`/`ODM_WEB_TEMPLATE` (a file) →
+  `<exe>/../../web-template.bin` (dev checkout) →
+  `~/.local/share/odm/web-template.bin` — which is where
+  `scripts/install.sh` puts it (it runs the xtask and installs the file;
+  a stamp mismatch fails the export naming the rebuild commands,
+  `--force` overrides).
 
 **Stamp**: `odm_export::TEMPLATE_STAMP`, a blake3 over framework/ + the
 wasm-side crate sources + odm-export itself (the bundle format couples

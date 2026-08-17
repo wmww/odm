@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Build odm and install it for the current user: the binary (framework and
 # docs are embedded) plus the web-export template, which `odm export --web`
-# looks up in ~/.local/share/odm/web-template/<stamp>/.
+# looks up at ~/.local/share/odm/web-template.bin.
 #
 #   scripts/install.sh              -> ~/.local/bin/odm
 #   BINDIR=~/bin scripts/install.sh -> ~/bin/odm
@@ -26,15 +26,13 @@ mkdir -p "$bindir"
 install -m755 "$top/target/release/odm" "$bindir/odm"
 echo "installed $bindir/odm"
 
-# The template is stamp-addressed: the exported dir name must match the
-# stamp baked into the binary just built (same tree, same run).
-stamp=$(sed -n 's/.*"stamp": "\([0-9a-f]*\)".*/\1/p' "$top/target/web-template/template.json")
-[ -n "$stamp" ] || { echo "error: no stamp in target/web-template/template.json" >&2; exit 1; }
-tpldir=$datadir/web-template/$stamp
-rm -rf "$tpldir"
-mkdir -p "$tpldir"
-cp "$top"/target/web-template/* "$tpldir/"
-echo "installed web-export template at $tpldir"
+# One template file, one static name: installing replaces the previous one
+# (the stamp inside it is what `odm export` checks). The rm clears the
+# stamped-directory layout an earlier install.sh used.
+mkdir -p "$datadir"
+rm -rf "$datadir/web-template"
+install -m644 "$top/target/web-template.bin" "$datadir/web-template.bin"
+echo "installed web-export template at $datadir/web-template.bin"
 
 case ":$PATH:" in
   *":$bindir:"*) ;;

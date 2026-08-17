@@ -1,6 +1,7 @@
 //! `cargo xtask build-web-template` — build the project-independent half of
-//! a web export into `target/web-template/`: the odm-web wasm module
-//! (wasm-bindgen'd), the page files, and the stamp the exporter checks.
+//! a web export into ONE file, `target/web-template.bin`: the odm-web wasm
+//! module (wasm-bindgen'd) + the page files, packed with the stamp the
+//! exporter checks (odm-export's `template` module owns the format).
 //!
 //! Deliberately NOT part of any normal build: the Manifold wasm lane needs
 //! clang + wasm-ld + libc++ headers (via wasm-cxx-shim). Rootless setups
@@ -31,7 +32,10 @@ fn repo_root() -> PathBuf {
 
 fn build_web_template() -> anyhow::Result<()> {
     let root = repo_root();
-    let out = root.join("target/web-template");
+    let out = root.join("target").join(odm_export::TEMPLATE_NAME);
+    // Earlier layouts used a target/web-template/ directory; clear it so
+    // nothing stale sits beside the file.
+    let _ = std::fs::remove_dir_all(root.join("target/web-template"));
 
     // wasm-bindgen-cli must match the crate version in Cargo.lock, or its
     // output rejects the module at runtime.
@@ -78,21 +82,25 @@ fn build_web_template() -> anyhow::Result<()> {
         bail!("wasm-bindgen failed");
     }
 
-    std::fs::create_dir_all(&out)?;
-    let copy = |from: &Path, name: &str| -> anyhow::Result<u64> {
-        std::fs::copy(from, out.join(name)).with_context(|| format!("copy {name}"))
-    };
-    copy(&bindgen_out.join("odm_web.js"), "odm_web.js")?;
-    let wasm_size = copy(&bindgen_out.join("odm_web_bg.wasm"), "odm_web_bg.wasm")?;
     let static_dir = root.join("crates/odm-web/static");
-    copy(&static_dir.join("index.html"), "index.html")?;
-    copy(&static_dir.join("runtime.js"), "runtime.js")?;
-    std::fs::write(
-        out.join("template.json"),
-        serde_json::to_string_pretty(&serde_json::json!({
-            "stamp": odm_export::TEMPLATE_STAMP,
-        }))? + "\n",
-    )?;
+    let source = |name: &str| -> &Path {
+        match name {
+            "odm_web.js" | "odm_web_bg.wasm" => &bindgen_out,
+            _ => &static_dir,
+        }
+    };
+    let mut wasm_size = 0;
+    let mut files: Vec<(&str, Vec<u8>)> = Vec::new();
+    for &name in odm_export::template::TEMPLATE_FILES {
+        let data =
+            std::fs::read(source(name).join(name)).with_context(|| format!("read {name}"))?;
+        if name.ends_with(".wasm") {
+            wasm_size = data.len();
+        }
+        files.push((name, data));
+    }
+    std::fs::write(&out, odm_export::template::pack(odm_export::TEMPLATE_STAMP, &files))
+        .with_context(|| format!("write {}", out.display()))?;
 
     eprintln!(
         "web template ready at {} (wasm: {:.1} MB, stamp {})",

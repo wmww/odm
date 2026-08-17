@@ -9,6 +9,7 @@
 //! semantics, checked by a content-hash stamp over the shared inputs.
 
 mod bundle;
+pub mod template;
 mod transform;
 
 use odm_build::{ApiVersion, EXTRACT_TIMEOUT, Executor};
@@ -21,14 +22,16 @@ use std::path::{Path, PathBuf};
 /// the stamp it was built from and export refuses on mismatch.
 pub const TEMPLATE_STAMP: &str = env!("ODM_TEMPLATE_STAMP");
 
-/// Files the template directory must provide.
-pub const TEMPLATE_FILES: &[&str] =
-    &["index.html", "runtime.js", "odm_web.js", "odm_web_bg.wasm", "template.json"];
+/// The template's one file name, everywhere it lives: `target/` in a dev
+/// checkout, `~/.local/share/odm/` installed. A static name — installing
+/// replaces the old one instead of accumulating stamped copies; the stamp
+/// travels inside and gates use, not lookup.
+pub const TEMPLATE_NAME: &str = "web-template.bin";
 
 pub struct ExportOptions {
     /// The view the page opens with; default `root.js` with no inputs.
     pub view_path: Option<String>,
-    /// Explicit template dir (`--template`); overrides the lookup.
+    /// Explicit template file (`--template`); overrides the lookup.
     pub template: Option<PathBuf>,
     /// Skip the stamp check (`--force`).
     pub force: bool,
@@ -52,8 +55,8 @@ pub fn export_web(
     opts: &ExportOptions,
 ) -> Result<ExportReport, String> {
     let snapshot = odm_build::scan_project(project).map_err(|e| format!("scan: {e}"))?;
-    let template = find_template(opts)?;
-    check_stamp(&template, opts.force)?;
+    let template_path = find_template(opts)?;
+    let template = load_template(&template_path, opts.force)?;
 
     let mut warnings = Vec::new();
     let view_path = opts.view_path.clone().unwrap_or_else(|| odm_build::DEFAULT_ROOT.to_string());
@@ -130,10 +133,8 @@ pub fn export_web(
         "manifest.json",
         (serde_json::to_string_pretty(&manifest).expect("manifest json") + "\n").as_bytes(),
     )?;
-    for file in TEMPLATE_FILES {
-        let data = std::fs::read(template.join(file))
-            .map_err(|e| format!("template {}: {e}", template.join(file).display()))?;
-        write(file, &data)?;
+    for (file, data) in &template.files {
+        write(file, data)?;
     }
     write("README.md", SITE_README.as_bytes())?;
 
@@ -165,55 +166,51 @@ pub fn bundle_for_tests(snapshot: &odm_build::ProjectSnapshot) -> Result<String,
 
 fn find_template(opts: &ExportOptions) -> Result<PathBuf, String> {
     let mut tried = Vec::new();
-    let candidates: Vec<PathBuf> = if let Some(dir) = &opts.template {
-        vec![dir.clone()]
-    } else if let Ok(dir) = std::env::var("ODM_WEB_TEMPLATE") {
-        vec![PathBuf::from(dir)]
+    let candidates: Vec<PathBuf> = if let Some(file) = &opts.template {
+        vec![file.clone()]
+    } else if let Ok(file) = std::env::var("ODM_WEB_TEMPLATE") {
+        vec![PathBuf::from(file)]
     } else {
         let mut v = Vec::new();
-        // Dev checkout: target/<profile>/odm → target/web-template.
+        // Dev checkout: target/<profile>/odm → target/web-template.bin.
         if let Ok(exe) = std::env::current_exe()
             && let Some(profile_dir) = exe.parent()
             && let Some(target) = profile_dir.parent()
         {
-            v.push(target.join("web-template"));
+            v.push(target.join(TEMPLATE_NAME));
         }
         if let Some(home) = std::env::var_os("HOME") {
-            v.push(
-                PathBuf::from(home)
-                    .join(".local/share/odm/web-template")
-                    .join(TEMPLATE_STAMP),
-            );
+            v.push(PathBuf::from(home).join(".local/share/odm").join(TEMPLATE_NAME));
         }
         v
     };
-    for dir in candidates {
-        if dir.join("template.json").is_file() {
-            return Ok(dir);
+    for file in candidates {
+        if file.is_file() {
+            return Ok(file);
         }
-        tried.push(dir.display().to_string());
+        tried.push(file.display().to_string());
     }
     Err(format!(
         "web export template not found (tried: {}).\n\
-         Build it with `cargo xtask build-web-template` in a dev checkout, \
-         or point --template / ODM_WEB_TEMPLATE at one.",
+         Build it with `cargo xtask build-web-template` in a dev checkout \
+         (scripts/install.sh installs it), or point --template / \
+         ODM_WEB_TEMPLATE at one.",
         tried.join(", ")
     ))
 }
 
-fn check_stamp(template: &Path, force: bool) -> Result<(), String> {
-    let raw = std::fs::read_to_string(template.join("template.json"))
-        .map_err(|e| format!("template.json: {e}"))?;
-    let v: Value = serde_json::from_str(&raw).map_err(|e| format!("template.json: {e}"))?;
-    let stamp = v.get("stamp").and_then(|s| s.as_str()).unwrap_or("");
-    if stamp != TEMPLATE_STAMP && !force {
+fn load_template(path: &Path, force: bool) -> Result<template::Template, String> {
+    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let t = template::unpack(&data).map_err(|e| format!("{}: {e}", path.display()))?;
+    if t.stamp != TEMPLATE_STAMP && !force {
         return Err(format!(
             "template at {} was built from different sources (its stamp {} != this build's {}).\n\
-             Rebuild it with `cargo xtask build-web-template`, or pass --force.",
-            template.display(),
-            &stamp[..stamp.len().min(12)],
+             Rebuild it with `cargo xtask build-web-template` (or rerun \
+             scripts/install.sh), or pass --force.",
+            path.display(),
+            &t.stamp[..t.stamp.len().min(12)],
             &TEMPLATE_STAMP[..12],
         ));
     }
-    Ok(())
+    Ok(t)
 }
