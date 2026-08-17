@@ -290,7 +290,8 @@ const SPECS: &[CommandSpec] = &[
     CommandSpec {
         name: "render",
         summary: "render a PNG; prints its path and echoes the resolved camera \
-                  (`eye`/`target`/`up` + `fov` or `ortho_height` — nudge and paste back)",
+                  (`eye`/`target`/`up` + `fov` or `ortho_height`, all request \
+                  fields — nudge and paste them back, unwrapped)",
         view: true,
         fields: &[
             f("width", "number", "pixels, 16..=8192 (default 1024; per tile of a `frames` sheet, 512)"),
@@ -492,13 +493,18 @@ fn removed(cmd: &str) -> Option<&'static str> {
     })
 }
 
-/// Fields that no longer exist, same idea as [`removed`].
+/// Fields that don't exist but get tried anyway (removed, or a natural
+/// guess); same idea as [`removed`].
 fn removed_field(cmd: &str, field: &str) -> Option<&'static str> {
     match (cmd, field) {
         ("render", "direction") => Some(
             "`direction` is now `look`: the same vector, or a keyword — \
              `{\"look\": \"top\"}` is the old `{\"direction\": [0,0,-1], \"ortho\": true}` \
              (keywords imply ortho; `\"ortho\": false` overrides)",
+        ),
+        ("render", "camera") => Some(
+            "`camera` is the echo's wrapper, not a field — its contents are the \
+             fields: paste `eye`/`target`/`up`/… at the top level",
         ),
         _ => None,
     }
@@ -738,6 +744,9 @@ mod tests {
         // `direction` is deleted; the error teaches its replacement.
         let e = parse_str(r#"{"cmd":"render","direction":[0,0,-1]}"#).err().unwrap();
         assert!(e.contains("look"), "{e}");
+        // A pasted-back `camera` wrapper is taught to unwrap.
+        let e = parse_str(r#"{"cmd":"render","camera":{"eye":[0,0,9]}}"#).err().unwrap();
+        assert!(e.contains("top level"), "{e}");
     }
 
     #[test]

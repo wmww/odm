@@ -81,7 +81,8 @@ each object's own color — surfaces are not drawn), `no_grid`,
 `"bottom"`, `"front"`, `"back"`, `"left"`, `"right"` — orthographic
 drafting views — or a vector to gaze along; default a framed
 overview). The camera always frames the model, and every response
-echoes the resolved `camera` — nudge its numbers and paste them back
+echoes the resolved `camera`; its contents are render fields — nudge
+the numbers and paste them back at the top level (no `camera` wrapper)
 for exact placement. More (`focus` on one part, `zoom`, `eye`, …):
 `odm docs cli`.
 
@@ -107,8 +108,8 @@ you collect them with `odm poll`:
   exits. If messages are already waiting it returns immediately. Each
   message carries a `view` snapshot of what the user was looking at
   when they sent it: viewer tab path, its input values, their
-  selection, and the camera — paste `view.camera` into `odm render` to
-  see exactly what they saw.
+  selection, and the camera — paste `view.camera`'s contents into
+  `odm render` to see exactly what they saw.
 - It also exits (nonzero) if the engine goes away, so it never hangs
   forever. `--timeout <sec>` additionally bounds the wait, exiting with
   `"messages": []` — use it if your harness limits how long a command

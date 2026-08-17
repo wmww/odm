@@ -87,7 +87,7 @@ the scene tree, measured exactly: names, bounds, counts — and, on the root ent
 
 ### render
 
-render a PNG; prints its path and echoes the resolved camera (`eye`/`target`/`up` + `fov` or `ortho_height` — nudge and paste back).
+render a PNG; prints its path and echoes the resolved camera (`eye`/`target`/`up` + `fov` or `ortho_height`, all request fields — nudge and paste them back, unwrapped).
 
 - `width` (number) — pixels, 16..=8192 (default 1024; per tile of a `frames` sheet, 512)
 - `height` (number) — pixels, 16..=8192 (default 768; per tile of a `frames` sheet, 384)
@@ -258,9 +258,10 @@ orthographic camera, `ortho_height` on a perspective one.
 
 Every response echoes the **resolved camera** — `camera`:
 `eye`/`target`/`up` plus `fov` or `ortho` + `ortho_height`, the same
-spelling the request accepts. "Slightly to the left" is a nudge of the
-echoed numbers pasted back; poll snapshots speak the same spelling, so
-the user's own view replays verbatim.
+spelling the request accepts. Paste the object's *contents* back at
+the top level — there is no `camera` request field. "Slightly to the
+left" is a nudge of the echoed numbers pasted back; poll snapshots
+speak the same spelling, so the user's own view replays verbatim.
 
 **Contact sheets: `frames`.** One render, many tiles: `frames` is an
 array of partial requests, each merged over the base request (shallow
@@ -364,9 +365,9 @@ engine until collected with `odm poll`:
   message carries a `view` field: a snapshot of what the user was
   looking at **when they sent it** (viewer tab path, its input values,
   their selection, and the camera — in the same `eye`/`target`/`up`/
-  `fov` spelling `render` accepts, so pasting it into a render replays
-  their exact view). Stamped at send time: the user may have moved on
-  by the time you poll.
+  `fov` spelling `render` accepts, so pasting its contents into a
+  render replays their exact view). Stamped at send time: the user may
+  have moved on by the time you poll.
 - Every poll response also carries the current diagnostics: `builds`
   (per active slot: `build` = `ok`/`error`/`pending`, `error`, and
   `stale` when a newer answer is on the way) and `health` (per-file

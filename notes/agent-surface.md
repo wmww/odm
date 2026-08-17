@@ -121,7 +121,11 @@ aspect)`; the viewer's orbit camera is just a fully-given one.
   `direction`+`ortho` pair); `focus`/`zoom`/`eye`/`target`/`up`/`fov`/
   `ortho_height` are docs-only.
 - `direction` is deleted; `requests.rs::removed_field` (new mechanism,
-  parallel to removed commands) redirects it to `look`.
+  parallel to removed commands) redirects it to `look`. The same hook
+  teaches `camera` (the echo's wrapper, pasted back whole) to unwrap —
+  the echo's *contents* are request fields; there is deliberately no
+  nested-`camera` request spelling (one way only, and camera-nodes may
+  later claim the key for `"camera": "<node>"`).
 - The default direction stays the skewed `[-1,-1.4,-0.9]` — equal-angle
   `[-1,-1,-1]` degenerately stacks projected edges of axis-aligned
   models. No name for the default view.
