@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 /// The slot the viewer's (sole, until tabs exist per-tab) default view and
@@ -118,9 +118,12 @@ struct Chat {
 pub struct EngineState {
     pub(crate) build: Arc<BuildEngine>,
     pub(crate) renderer: Mutex<Option<Renderer>>,
-    /// Commands are serialized: keeps Store::gc at build quiescence and CLI
-    /// semantics simple. Revisit if concurrent agent queries matter.
-    pub(crate) cmd_lock: Mutex<()>,
+    /// The one global concurrency constraint: `Store::gc` is only sound at
+    /// build quiescence (an in-flight build holds hashes of objects it has
+    /// put but not yet rooted or memoized). Passes take this shared
+    /// (`build_slot`, `query_view`); publishing takes it exclusive around
+    /// gc. Everything else has its own lock, so commands run concurrently.
+    pub(crate) build_gate: RwLock<()>,
     pub(crate) render_counter: AtomicU64,
     /// slot → last published build.
     published: Mutex<HashMap<String, Published>>,
@@ -160,7 +163,7 @@ impl EngineState {
         Ok(Arc::new(EngineState {
             build,
             renderer: Mutex::new(None),
-            cmd_lock: Mutex::new(()),
+            build_gate: RwLock::new(()),
             render_counter: AtomicU64::new(0),
             published: Mutex::new(HashMap::new()),
             views: Mutex::new(views),
@@ -347,8 +350,8 @@ impl EngineState {
     /// `peer` is checked on every wake-up so a poll whose client has gone stops
     /// waiting instead of sitting on the queue forever.
     ///
-    /// Deliberately touches neither `cmd_lock` nor the build: a poll blocked for
-    /// minutes must not hold up any other command.
+    /// Deliberately touches neither the build gate nor the build: a poll
+    /// blocked for minutes must not hold up any other command.
     pub(crate) fn poll_messages(&self, timeout: Option<Duration>, peer: &Peer) -> PollOutcome {
         let _listening = Listening::new(self);
         // A timeout too far out for an Instant means no deadline: `+` would
@@ -454,7 +457,6 @@ impl EngineState {
             };
             // A slot may have been removed while queued.
             let Some(view) = self.view_of(&slot) else { continue };
-            let _guard = self.cmd_lock.lock().unwrap();
             // Failures are already published; a cancelled build means a
             // newer request for this slot is (or will be) queued.
             let _ = self.build_slot(&slot, view);
@@ -463,11 +465,14 @@ impl EngineState {
 
     /// Sync + build one slot's view, publishing the outcome (success or
     /// failure, not cancellation) into the slot. The pass is registered as
-    /// the cancellable in-flight build. Callers must hold `cmd_lock`.
+    /// the cancellable in-flight build, and holds the build gate shared
+    /// while it runs (dropped before publishing, which needs it exclusive).
     pub(crate) fn build_slot(&self, slot: &str, view: View) -> Result<(), CmdError> {
+        let gate = self.build_gate.read().unwrap();
         let sync = match self.build.sync() {
             Ok(s) => s,
             Err(e) => {
+                drop(gate);
                 self.publish_failure(slot, None, &view, e.to_string(), Vec::new());
                 return Err(CmdError::new("scan", e.to_string()));
             }
@@ -477,6 +482,7 @@ impl EngineState {
         *self.queue.active.lock().unwrap() = Some((slot.to_string(), pass.clone()));
         let result = self.build.build_view(&pass);
         *self.queue.active.lock().unwrap() = None;
+        drop(gate);
         match result {
             Ok(res) => {
                 let report = self.build.input_report(&pass);
@@ -501,7 +507,8 @@ impl EngineState {
 
     /// One-off build of an arbitrary view, for CLI queries: nothing is
     /// published — the viewer hears about a new generation through
-    /// `note_generation` queueing the active slots. Callers hold `cmd_lock`.
+    /// `note_generation` queueing the active slots. Callers hold the build
+    /// gate shared (`query_view` does).
     pub(crate) fn build_once(
         &self,
         view: &View,
@@ -565,7 +572,11 @@ impl EngineState {
             .filter_map(|p| p.root.as_ref().map(|(h, _)| *h))
             .collect();
         drop(published);
-        self.build.publish(sync.generation, roots);
+        // gc's quiescence requirement: wait for every in-flight pass.
+        {
+            let _quiesce = self.build_gate.write().unwrap();
+            self.build.publish(sync.generation, roots);
+        }
         self.wake();
     }
 
@@ -612,8 +623,9 @@ impl Drop for Listening<'_> {
     }
 }
 
-/// The chat queue, at the level `odm poll`/`odm say` reach it. No project files
-/// and no builds are involved — chat deliberately never syncs.
+/// The chat queue, at the level `odm poll`/`odm say` reach it (chat
+/// deliberately never syncs or builds), plus the command-concurrency
+/// guarantees around the build gate.
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -732,12 +744,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn chat_commands_skip_the_command_lock() {
+    fn chat_commands_skip_the_build_gate() {
         let state = engine();
         let mut conn = Conn::new(state.clone());
-        // Whatever else the engine is doing, chat answers. A regression here
-        // hangs (see issues/engine-serializes-commands.md), hence `within`.
-        let _busy = state.cmd_lock.lock().unwrap();
+        // Whatever else the engine is doing — here, gc holding the gate
+        // exclusively — chat answers. A regression hangs, hence `within`.
+        let _busy = state.build_gate.write().unwrap();
         state.send_message("hi".into(), None);
         let replies = within({
             let state = state.clone();
@@ -749,6 +761,59 @@ pub(crate) mod tests {
         assert_eq!(replies.0, json!({"ok": true, "messages": [{"text": "hi"}]}));
         assert_eq!(replies.1, json!({"ok": true}));
         state.with_transcript(|t| assert_eq!(t.len(), 2));
+    }
+
+    /// Commands must not queue behind an in-flight build — the old global
+    /// command lock did exactly that (a CLI query stalled for the whole of a
+    /// viewer scrub's rebuild). The loop builds something slow; status and
+    /// an inspect of a different doohickey answer while it is still going.
+    #[test]
+    fn commands_overlap_an_in_flight_build() {
+        let dir = tempfile::tempdir().unwrap();
+        // Slow enough (CSG unions) that the fast commands finish well inside it.
+        std::fs::write(
+            dir.path().join("slow.js"),
+            r#"
+            export default function build(ctx) {
+                let acc = odm.sphere(1, { segments: 200 });
+                for (let i = 0; i < 60; i++) {
+                    acc = acc.union(odm.sphere(1, { segments: 200 }).translate(0.01 * i, 0.02, 0));
+                }
+                return acc;
+            }
+            "#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("fast.js"),
+            "export default function build(ctx) { return odm.box([1, 1, 1]); }",
+        )
+        .unwrap();
+
+        let state = EngineState::new(dir.path().to_path_buf(), env()).unwrap();
+        let loop_thread = {
+            let state = state.clone();
+            std::thread::spawn(move || state.run_build_loop())
+        };
+        state.set_view(DEFAULT_SLOT, View::of("slow.js"));
+        // Wait until the slow build (the only one queued) is actually running.
+        while state.build.stats.builds.load(Ordering::Relaxed) == 0 {
+            std::thread::yield_now();
+        }
+
+        let mut conn = Conn::new(state.clone());
+        let status = state.handle(json!({"cmd": "status"}), &mut conn);
+        assert_eq!(status["ok"], json!(true), "{status}");
+        let inspected = state.handle(json!({"cmd": "inspect", "path": "fast.js"}), &mut conn);
+        assert_eq!(inspected["ok"], json!(true), "{inspected}");
+        // Proof of overlap: the slow build still hasn't published.
+        assert!(
+            state.published(DEFAULT_SLOT).root.is_none(),
+            "slow build finished too early to prove overlap"
+        );
+
+        state.stop();
+        loop_thread.join().unwrap();
     }
 
     /// A poll that hands messages out and then dies unacknowledged — Ctrl+C,

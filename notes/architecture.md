@@ -134,11 +134,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   In-flight registry (wait-for-in-flight + wait-graph cycle detection);
   cancellation (token + TerminateExecution post-module-eval). Cycle check is
   keyed on (path, args-hash, env-hash) so bounded recursion works; memo
-  entries carry console logs and replay them on hits. NOTE: builds are
-  currently single-threaded (get_or_build recurses inline, engine serializes
-  passes behind cmd_lock); the registry's cross-thread machinery is
-  speculative infrastructure for future parallelism, exercised only by
-  `concurrent_same_pass_dedups`.
+  entries carry console logs and replay them on hits. Passes run
+  concurrently across threads (each CLI connection + the build loop); the
+  registry's cross-thread dedup/cycle machinery is what makes that safe
+  (`concurrent_same_pass_dedups`, `commands_overlap_an_in_flight_build`).
+  Within one pass `get_or_build` still recurses inline.
 - `odm-render` — wgpu =29.0.4 (MUST track egui's pinned wgpu major);
   the single flattener `flatten_node` (color replace-wins inheritance,
   multiplicative opacity product into instance alpha, sRGB→linear — the
@@ -208,7 +208,21 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   and "Owning the event loop" below.
   Commands: status/inspect/render/raycast/clearance, and poll/say/ack (see
   "Talking to the agent"); every command except those three syncs first
-  (no standalone `sync` — folded into `status` 2026-08). One grammar
+  (no standalone `sync` — folded into `status` 2026-08). Commands run
+  concurrently (one thread per connection, no global command lock since
+  2026-08-17): the one global lock is `EngineState::build_gate`, an RwLock
+  expressing `Store::gc`'s quiescence requirement — passes (`query_view`,
+  `build_slot`; covers meta extraction, which also evaluates JS against the
+  store) hold it shared, publishing takes it exclusive around gc. So a CLI
+  query never waits on another view's build (only its own, plus gc's few
+  ms). Post-build store reads (inspect/flatten/render) are gate-free but
+  hold a `Store::pin_root` guard (`query_view` takes it under the gate):
+  a one-off build's root is otherwise pinned only by its memo entry, and a
+  concurrent rebuild of the same (code, args) under different cascade
+  values — a viewer scrub — overwrites that entry, after which a publish's
+  gc would sweep the scene mid-read. (Published slot roots are pinned as
+  generation roots instead.) The renderer has its own mutex (renders
+  serialize with each other only). One grammar
   (2026-08, plans/cli-json-args.md): a CLI command's argument is the JSON
   request body itself; `requests.rs` holds the serde structs *and* the
   field-spec table that validates names (siblings listed on a typo,
@@ -439,10 +453,9 @@ agent-agnostic and enough.
   the pending entries *are* the queue, so there is no second list to fall out
   of step with it — plus a condvar and a `listeners` count (blocked polls). In
   memory only; the agent's own conversation is the durable record.
-- **`poll`/`say` must not take `cmd_lock`** and never sync or build: a poll
-  blocked for minutes while holding it would freeze the engine (see
-  issues/engine-serializes-commands.md). `dispatch` handles them before the
-  lock; `state::tests::chat_commands_skip_the_command_lock` guards it.
+- **`poll`/`say` never sync or build** (and never touch the build gate): a
+  poll blocks for minutes, and must hold up nothing.
+  `state::tests::chat_commands_skip_the_build_gate` guards it.
 - Viewer: a fixed-height panel above the status band —
   `theme::tail_box` transcript (user lines `> …` white, dimmed while
   undelivered; agent lines in `theme::AGENT_TEXT`) plus one `theme::text_edit`

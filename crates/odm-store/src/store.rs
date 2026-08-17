@@ -36,6 +36,31 @@ pub struct Store {
     objects: RwLock<HashMap<Hash, Arc<Object>>>,
     memo: RwLock<HashMap<MemoKey, MemoEntry>>,
     gens: Mutex<GenState>,
+    /// Refcounted temporary GC roots ([`pin_root`](Store::pin_root)): results
+    /// being read outside any generation (one-off CLI builds). A memo entry
+    /// pins a build's output too, but only until the same (code, args) key is
+    /// rebuilt under different cascade values and overwritten — a pin holds
+    /// for as long as the reader needs it.
+    pins: Mutex<HashMap<Hash, usize>>,
+}
+
+/// Keeps a hash (and everything reachable from it) alive across GCs until
+/// dropped.
+pub struct RootPin {
+    store: Arc<Store>,
+    hash: Hash,
+}
+
+impl Drop for RootPin {
+    fn drop(&mut self) {
+        let mut pins = self.store.pins.lock().unwrap();
+        if let Some(n) = pins.get_mut(&self.hash) {
+            *n -= 1;
+            if *n == 0 {
+                pins.remove(&self.hash);
+            }
+        }
+    }
 }
 
 struct GenState {
@@ -49,7 +74,16 @@ impl Store {
             objects: RwLock::new(HashMap::new()),
             memo: RwLock::new(HashMap::new()),
             gens: Mutex::new(GenState { next: 0, live: HashMap::new() }),
+            pins: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Pin `h` as a GC root until the returned guard drops. Take the pin
+    /// while the hash is still provably live (e.g. before releasing whatever
+    /// excluded gc during the build that produced it).
+    pub fn pin_root(self: &Arc<Self>, h: Hash) -> RootPin {
+        *self.pins.lock().unwrap().entry(h).or_insert(0) += 1;
+        RootPin { store: self.clone(), hash: h }
     }
 
     // --- objects ---
@@ -146,6 +180,7 @@ impl Store {
             let memo = self.memo.read().unwrap();
             pending.extend(memo.values().map(|e| e.output));
         }
+        pending.extend(self.pins.lock().unwrap().keys().copied());
 
         // Hold the write lock across mark+sweep so no put lands in between.
         let mut objects = self.objects.write().unwrap();

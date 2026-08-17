@@ -11,7 +11,7 @@ use odm_build::{
 use odm_ir::Node;
 use odm_js::LogLine;
 use odm_render::{Camera, Projection, RenderOptions, flatten_scene};
-use odm_store::Object;
+use odm_store::{Object, RootPin};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -134,17 +134,13 @@ impl EngineState {
     }
 
     fn dispatch(&self, req: Request, conn: &mut Conn) -> Result<Value, CmdError> {
-        // The chat commands neither sync nor build, and must stay off
-        // `cmd_lock`: a poll blocked on it for minutes would freeze the engine
-        // (see issues/engine-serializes-commands.md).
+        // No global lock: commands run concurrently. Builds hold the build
+        // gate shared inside `query_view`; the chat commands neither sync
+        // nor build, so a poll blocked for minutes holds up nothing.
         match req {
-            Request::Poll(p) => return self.cmd_poll(p.timeout, conn),
-            Request::Say(s) => return self.cmd_say(&s.text),
-            Request::Ack => return Ok(json!({ "acked": conn.confirm() })),
-            _ => {}
-        }
-        let _guard = self.cmd_lock.lock().unwrap();
-        match req {
+            Request::Poll(p) => self.cmd_poll(p.timeout, conn),
+            Request::Say(s) => self.cmd_say(&s.text),
+            Request::Ack => Ok(json!({ "acked": conn.confirm() })),
             Request::Status => self.cmd_status(),
             Request::Inspect(r) => {
                 let view = ViewReq {
@@ -180,9 +176,6 @@ impl EngineState {
                     view: r.view,
                 };
                 self.cmd_clearance(view, &r.pairs, r.stats)
-            }
-            Request::Poll(_) | Request::Say(_) | Request::Ack => {
-                unreachable!("handled above")
             }
         }
     }
@@ -360,14 +353,28 @@ impl EngineState {
     /// query shares. A *failed* build still reports the target's declared
     /// interface (inputs, presets — attached next to the error), since the
     /// declared schema needs no successful pass.
+    ///
+    /// Holds the build gate shared throughout: the pass itself needs it, and
+    /// so does meta extraction (module evaluation can put store objects that
+    /// nothing roots yet). Post-build reads (inspect, flatten, render) run
+    /// gate-free instead: the returned `RootPin` keeps the result alive
+    /// across concurrent GCs — a one-off build's root is otherwise pinned
+    /// only by its memo entry, which a rebuild of the same doohickey under
+    /// different cascade values (a viewer scrub) overwrites. Callers keep
+    /// the pin for as long as they read the scene.
     fn query_view(
         &self,
         req: &ViewReq,
-    ) -> Result<(SyncResult, View, PassResult, InputReport), CmdError> {
+    ) -> Result<(SyncResult, View, PassResult, InputReport, RootPin), CmdError> {
+        let _gate = self.build_gate.read().unwrap();
         let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
         let view = self.resolve_view(&sync, req)?;
         match self.build_view_cmd(&sync, &view) {
-            Ok((result, report)) => Ok((sync, view, result, report)),
+            Ok((result, report)) => {
+                // Under the gate, so no gc can have run since the build.
+                let pin = self.build_engine().store.pin_root(result.root);
+                Ok((sync, view, result, report, pin))
+            }
             Err(mut e) => {
                 e.extra.insert("path".into(), json!(view.path));
                 let source = &sync.snapshot.sources[&view.path];
@@ -401,7 +408,7 @@ impl EngineState {
             preset: req.preset.clone(),
             view: req.view.clone(),
         };
-        let (_sync, view, result, report) = self.query_view(&view_req)?;
+        let (_sync, view, result, report, _pin) = self.query_view(&view_req)?;
         let store = &self.build_engine().store;
         let scene = flatten_scene(store, result.root)
             .map_err(|e| CmdError::new("render", e.to_string()))?;
@@ -555,7 +562,7 @@ impl EngineState {
             _ => usize::MAX,
         };
 
-        let (sync, view, result, report) = self.query_view(&req)?;
+        let (sync, view, result, report, _pin) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let engine = self.build_engine();
         let (id, node, parent) =
@@ -590,7 +597,7 @@ impl EngineState {
     }
 
     fn cmd_raycast(&self, req: ViewReq, rays: &[Ray], stats: bool) -> Result<Value, CmdError> {
-        let (_sync, view, result, report) = self.query_view(&req)?;
+        let (_sync, view, result, report, _pin) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let engine = self.build_engine();
         let scene = odm_render::flatten_node(&engine.store, &root)
@@ -613,7 +620,7 @@ impl EngineState {
         pairs: &[[String; 2]],
         stats: bool,
     ) -> Result<Value, CmdError> {
-        let (_sync, view, result, report) = self.query_view(&req)?;
+        let (_sync, view, result, report, _pin) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let engine = self.build_engine();
         let clearances: Vec<Value> = pairs

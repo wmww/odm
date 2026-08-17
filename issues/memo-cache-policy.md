@@ -17,6 +17,12 @@ The thrash is now *observable*: `"stats": true` on any view command reports per-
 (per-doohickey runs + self-time, memo hits), so "arm.js runs: 2" on every
 identical rebuild is this issue showing itself.
 
+Note (2026-08-17, concurrent commands): entry overwrite is also why one-off
+CLI query results are held by `Store::pin_root` while the handler reads them
+— memo pinning alone is not stable under a concurrent scrub. Any future
+eviction policy stays sound for readers for the same reason: pins, not memo
+entries, are the read-time guarantee.
+
 Fix idea (from Salsa-ish designs), solving both together: store a small
 bounded list of entries per key and validate each candidate's recorded deps
 on lookup (`odm-build/src/scheduler.rs` `get_or_build`/`validate`), plus an

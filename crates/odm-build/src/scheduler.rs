@@ -291,8 +291,10 @@ impl BuildEngine {
     /// Rescan the project; reuse the current generation if nothing changed,
     /// otherwise register a new one and retire the old.
     pub fn sync(&self) -> Result<SyncResult, ScanError> {
-        let snapshot = scan_project(&self.project)?;
+        // Scan under the lock: two concurrent syncs racing scan-then-compare
+        // could otherwise install the older snapshot as the newer generation.
         let mut current = self.current.lock().unwrap();
+        let snapshot = scan_project(&self.project)?;
         if let Some(cur) = &*current
             && cur.snapshot.generation_sources == snapshot.generation_sources
         {
@@ -333,7 +335,8 @@ impl BuildEngine {
     }
 
     /// Publish built roots: pin them as the generation's GC roots and
-    /// collect unreachable objects. Only call at build quiescence. With
+    /// collect unreachable objects. Only call at build quiescence — the
+    /// engine enforces this by taking its build gate exclusively. With
     /// several views alive, pass every root that must survive.
     pub fn publish(&self, generation: GenerationId, roots: Vec<Hash>) {
         self.store.set_roots(generation, roots);

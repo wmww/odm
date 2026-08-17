@@ -97,6 +97,27 @@ fn memo_output_survives_gc() {
     assert!(!store.contains(out));
 }
 
+/// The hazard a pin exists for: a memo entry pins a one-off build's output
+/// only until the same key is rebuilt under other cascade values (a scrub)
+/// and overwritten — the reader's pin must hold through that.
+#[test]
+fn pinned_root_survives_gc_until_dropped() {
+    let store = Store::new();
+    let mesh_hash = store.put(mesh_obj(1.0));
+    let root = store.put(Object::Node(node_with(mesh_hash)));
+
+    let pin = store.pin_root(root);
+    let pin2 = store.pin_root(root);
+    assert_eq!(store.gc(), 0, "pinned tree survives with no generation or memo root");
+    assert!(store.contains(mesh_hash), "pins pin transitively");
+
+    drop(pin);
+    assert_eq!(store.gc(), 0, "refcounted: one holder left");
+    drop(pin2);
+    assert_eq!(store.gc(), 2);
+    assert!(!store.contains(root));
+}
+
 #[test]
 fn memo_round_trip() {
     let store = Store::new();
