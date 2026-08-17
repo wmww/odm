@@ -38,7 +38,9 @@ Two halves with different lifecycles:
   build-web-template` into `target/web-template/` — never as part of a
   normal build. Lookup at export: `--template`/`ODM_WEB_TEMPLATE` →
   `<exe>/../../web-template` (dev checkout) →
-  `~/.local/share/odm/web-template/<stamp>/`.
+  `~/.local/share/odm/web-template/<stamp>/` — which is where
+  `scripts/install.sh` puts it (it runs the xtask and copies the result;
+  old stamps are left in place for any older installed binaries).
 
 **Stamp**: `odm_export::TEMPLATE_STAMP`, a blake3 over framework/ + the
 wasm-side crate sources + odm-export itself (the bundle format couples
