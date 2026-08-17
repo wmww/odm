@@ -124,9 +124,10 @@ JS twin: `a.clearance(b)` on Solids — same result shape; the CLI addresses nod
 
 ### poll
 
-wait for messages the user typed in the viewer.
+wait for messages the user typed in the viewer; every response also carries `builds` (per-slot build state) and `health` (per-file failures from the background sweep).
 
 - `timeout` (number) — seconds to wait before answering with no messages (default: wait until a message arrives or the engine stops)
+- `events` (bool) — also answer (possibly with empty `messages`) whenever a slot's build value or a file's health value differs from what this connection last reported — what `odm poll --follow` sets
 
 ### say
 
@@ -152,14 +153,30 @@ cascade values, plain-shadows-cascade, type conflicts) arrive on the
 ## status
 
 The one command that never builds: it reports each view slot's
-*last-published* outcome (`build`: `ok` / `error` / `building` /
-`pending`, plus the error message), so it still answers when the
-project is broken. Also there: the project path and name, the doohickey
-file list, whether `root.js` exists, each slot's path and inputs, which
-tab is the user's active one, their current `selection` (on the active
-slot), and the `generation` — an internal counter that ticks whenever a
-source file changes, useful only for checking that an edit was picked
-up.
+*last-published* value (`build`: `ok` / `error` / `pending`, plus the
+error message), so it still answers when the project is broken.
+`stale: true` on a slot means a newer generation's answer is queued or
+building — the value shown is the last one published, never masked by
+an in-progress build. Also there: the project path and name, the
+doohickey file list, whether `root.js` exists, each slot's path and
+inputs, which tab is the user's active one, their current `selection`
+(on the active slot), the `generation` — an internal counter that ticks
+whenever a source file changes, useful only for checking that an edit
+was picked up — and `health` (below).
+
+**`health`: the whole-project failure list.** Slots only cover what's
+on screen; in the background the engine also sweeps every file per
+generation — a meta check of each one (syntax errors, load-time
+throws, bad meta), plus a build of its default view for files whose
+declared inputs all have defaults. `health` lists the failures only:
+`{path, error}` per file whose last check failed, with `stale: true`
+when the current generation hasn't re-evaluated it yet. Absence claims
+nothing beyond "no known failure" — and a passing default view is a
+canary at one specific view, not a verdict: an error can genuinely
+depend on inputs, so a file can be `ok` here and still fail at a
+slot's inputs (or vice versa). Files with a required no-default plain
+input can't build standalone by design; for them the meta check is the
+whole check.
 
 ## inspect
 
@@ -347,6 +364,17 @@ engine until collected with `odm poll`:
   `fov` spelling `render` accepts, so pasting it into a render replays
   their exact view). Stamped at send time: the user may have moved on
   by the time you poll.
+- Every poll response also carries the current diagnostics: `builds`
+  (per active slot: `build` = `ok`/`error`/`pending`, `error`, and
+  `stale` when a newer answer is on the way) and `health` (per-file
+  failures from the background sweep — see `status` above). So "it
+  broke" arrives with the red slot attached, and a timed-out poll still
+  reports current state. Responses never carry build *logs* — query the
+  view (any view command) to get error + logs in full; memoization
+  returns the same bytes whether it replays or re-runs.
+- Messages from the engine itself — host warnings like "file watcher
+  unavailable" — arrive in the same queue, marked `"from": "engine"`
+  (absence = the user).
 - It also exits (nonzero) if the engine goes away, so it never hangs
   forever. `--timeout <sec>` additionally bounds the wait, exiting with
   `"messages": []` — use it if your harness limits how long a command
@@ -354,7 +382,12 @@ engine until collected with `odm poll`:
 - `--follow` never exits: it prints one compact JSON line per batch (the
   same object, one per line) and keeps waiting. For a harness that
   surfaces each line of a long-running command, this is one standing
-  command instead of a relaunch per message.
+  command instead of a relaunch per message. It also sets `events`, so
+  a line arrives (possibly with empty `messages`) whenever a build or
+  health value *changes* — a slot turning red, a different error, a
+  heal. Value changes only: your own ok→ok saves, redundant rebuilds
+  and stale flips don't emit, and a reconnect re-reports current
+  failures rather than losing them.
 - Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
   a message is only retired once the poll that took it has printed it,
   so anything it didn't get to goes back in the queue for the next one.

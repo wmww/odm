@@ -111,10 +111,17 @@ you collect them with `odm poll`:
   forever. `--timeout <sec>` additionally bounds the wait, exiting with
   `"messages": []` — use it if your harness limits how long a command
   may run.
+- Every response also carries `builds` (each view slot's build state:
+  ok/error/pending, with the error) and `health` (files whose
+  background check failed) — so a broken build reaches you with the
+  next poll, viewed or not. Engine warnings arrive as messages marked
+  `"from": "engine"`.
 - `--follow` never exits: it prints one compact JSON line per batch (the
-  same object, one per line) and keeps waiting. For a harness that
-  surfaces each line of a long-running command, this is one standing
-  command instead of a relaunch per message.
+  same object, one per line) and keeps waiting, including a line
+  whenever a build or health value changes (a slot turning red, a
+  heal). For a harness that surfaces each line of a long-running
+  command, this is one standing command instead of a relaunch per
+  message.
 - Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
   a message is only retired once the poll that took it has printed it,
   so anything it didn't get to goes back in the queue for the next one.

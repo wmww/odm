@@ -58,6 +58,10 @@ struct BuildQueue {
 pub enum Who {
     User,
     Agent,
+    /// A host warning (watcher dead, odm.toml/prompt sync trouble, …):
+    /// session events, not build output — they ride the transcript so both
+    /// the viewer chat panel and `odm poll` see them.
+    Engine,
 }
 
 /// How far a message has got towards the agent. A user message is only ever
@@ -124,13 +128,28 @@ pub enum ActivityKind {
 /// Bounds activity memory: pushes past this drop the oldest event.
 const ACTIVITY_CAP: usize = 8;
 
-/// One taken message: transcript index, text, send-time view snapshot.
-pub(crate) type PolledMessage = (usize, String, Option<Value>);
+/// One taken message: transcript index, sender, text, send-time view
+/// snapshot.
+pub(crate) struct PolledMessage {
+    pub index: usize,
+    pub who: Who,
+    pub text: String,
+    pub view: Option<Value>,
+}
+
+/// The follow stream's comparison value: every failing key — active slots
+/// (`slot:<name>`) and swept files (`file:<path>`) — mapped to its error.
+/// Absent keys read as none, so equal maps ⇔ nothing new to report; stale
+/// flags and rebuild churn deliberately never appear here.
+pub(crate) type DiagnosticMap = std::collections::BTreeMap<String, String>;
 
 /// How a blocked poll ended.
 pub(crate) enum PollOutcome {
     /// Messages `InFlight` until the caller confirms or returns them.
     Messages(Vec<PolledMessage>),
+    /// Events mode only: the diagnostic value differs from the caller's
+    /// baseline. Nothing was taken.
+    Changed,
     TimedOut,
     /// The client hung up while we waited. Nothing was taken.
     Disconnected,
@@ -148,6 +167,24 @@ struct Chat {
     cv: Condvar,
     /// Polls currently blocked. The viewer tells the user when it is 0.
     listeners: AtomicUsize,
+}
+
+/// Pending health-sweep work: the generation the items evaluate against
+/// and the files still to check. A newer sync replaces the whole queue
+/// (latest-wins, same as slots).
+#[derive(Default)]
+struct SweepState {
+    sync: Option<SyncResult>,
+    pending: VecDeque<String>,
+}
+
+/// A file's last-evaluated health value: the outcome of its meta check /
+/// default-view build, and the generation it was evaluated at (older than
+/// current ⇔ stale — shown as the last known value, visibly stale, never
+/// silently re-presented as current).
+pub(crate) struct HealthEntry {
+    pub generation: u64,
+    pub error: Option<String>,
 }
 
 pub struct EngineState {
@@ -171,6 +208,16 @@ pub struct EngineState {
     /// `"view": true` queries adopt and poll snapshots describe.
     active_slot: Mutex<Option<String>>,
     queue: BuildQueue,
+    /// Background health sweep: per generation, a meta check of every file
+    /// plus a default-view build of every standalone-buildable one, run
+    /// behind slot builds (a default-inputs canary for files no one has
+    /// open — a canary at one view, never a verdict on the file).
+    sweep: Mutex<SweepState>,
+    /// The sweep pass currently building, cancellable so a queued slot
+    /// build preempts it (the item requeues itself).
+    sweep_active: Mutex<Option<Arc<odm_build::Pass>>>,
+    /// file → last-evaluated health value.
+    health: Mutex<HashMap<String, HealthEntry>>,
     /// Viewer selection, in the order it was picked: (node id, name).
     pub(crate) selection: Mutex<Vec<(String, Option<String>)>>,
     chat: Chat,
@@ -208,6 +255,9 @@ impl EngineState {
             last_generation: Mutex::new(None),
             active_slot: Mutex::new(None),
             queue: BuildQueue::default(),
+            sweep: Mutex::new(SweepState::default()),
+            sweep_active: Mutex::new(None),
+            health: Mutex::new(HashMap::new()),
             selection: Mutex::new(Vec::new()),
             chat: Chat::default(),
             activity: Mutex::new(VecDeque::new()),
@@ -225,6 +275,9 @@ impl EngineState {
     pub fn stop(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         if let Some((_, pass)) = self.queue.active.lock().unwrap().as_ref() {
+            pass.cancel();
+        }
+        if let Some(pass) = self.sweep_active.lock().unwrap().as_ref() {
             pass.cancel();
         }
         self.queue.cv.notify_all();
@@ -316,19 +369,20 @@ impl EngineState {
             pass.cancel();
         }
         self.enqueue(slot);
-        // Same rationale as the pre-views code: no revision bump, no wake —
-        // "Building…" only appears for builds slow enough to overlap.
-        if let Some(p) = self.published.lock().unwrap().get_mut(slot) {
-            p.building = true;
-        }
     }
 
     /// Drop a slot (a closed viewer tab). Its published root stays alive
     /// only through anyone still holding the `Published` clone.
     pub fn remove_view(&self, slot: &str) {
-        self.views.lock().unwrap().remove(slot);
-        self.published.lock().unwrap().remove(slot);
+        {
+            // Both under the `views` lock, atomically vs `enqueue`'s marking.
+            let mut views = self.views.lock().unwrap();
+            views.remove(slot);
+            self.published.lock().unwrap().remove(slot);
+        }
         self.queue.pending.lock().unwrap().retain(|s| s != slot);
+        // Closing a broken tab heals the diagnostic value.
+        self.wake_pollers();
     }
 
     /// Queue every active slot for rebuild (file change, new generation).
@@ -345,6 +399,26 @@ impl EngineState {
             pending.push(slot.to_string());
         }
         drop(pending);
+        // Every enqueue marks the published value stale — a newer answer is
+        // on the way. (No revision bump, no wake: the viewer's "Building…"
+        // only appears for builds slow enough to overlap; agents read the
+        // flag as `stale`.) Under the `views` lock so a race with
+        // `remove_view` can't resurrect a dead slot's entry.
+        {
+            let views = self.views.lock().unwrap();
+            if views.contains_key(slot) {
+                self.published
+                    .lock()
+                    .unwrap()
+                    .entry(slot.to_string())
+                    .or_default()
+                    .building = true;
+            }
+        }
+        // Slot builds preempt an in-flight sweep item (it requeues itself).
+        if let Some(pass) = self.sweep_active.lock().unwrap().as_ref() {
+            pass.cancel();
+        }
         self.queue.cv.notify_all();
     }
 
@@ -408,17 +482,40 @@ impl EngineState {
         self.wake();
     }
 
+    /// A host warning, queued for the next poll like a user message (same
+    /// delivery handshake, `"from": "engine"` on the wire) and shown in the
+    /// viewer's chat panel. Callers keep their stderr print — that one is
+    /// for daemon logs.
+    pub fn engine_warning(&self, text: String) {
+        let entry =
+            TranscriptEntry { who: Who::Engine, text, delivery: Delivery::Pending, view: None };
+        self.chat.lines.lock().unwrap().push(entry);
+        self.chat.cv.notify_all();
+        self.wake();
+    }
+
     /// Block until at least one message is pending, then take them all — as
     /// `InFlight`, not delivered: the caller owns them until it confirms
     /// ([`confirm_delivery`](Self::confirm_delivery)) or gives them back
     /// ([`return_pending`](Self::return_pending)).
+    ///
+    /// With `events` (a follow poll's baseline: what its connection last
+    /// reported), the poll also ends — taking nothing — whenever the
+    /// diagnostic value differs from the baseline. State-compare on every
+    /// wake, not an event queue: missed or spurious wakes can neither lose
+    /// nor duplicate anything.
     ///
     /// `peer` is checked on every wake-up so a poll whose client has gone stops
     /// waiting instead of sitting on the queue forever.
     ///
     /// Deliberately touches neither the build gate nor the build: a poll
     /// blocked for minutes must not hold up any other command.
-    pub(crate) fn poll_messages(&self, timeout: Option<Duration>, peer: &Peer) -> PollOutcome {
+    pub(crate) fn poll_messages(
+        &self,
+        timeout: Option<Duration>,
+        peer: &Peer,
+        events: Option<&DiagnosticMap>,
+    ) -> PollOutcome {
         let _listening = Listening::new(self);
         // A timeout too far out for an Instant means no deadline: `+` would
         // panic, and a poll bounded by the heat death of the universe isn't.
@@ -437,13 +534,23 @@ impl EngineState {
                 .filter(|(_, e)| e.delivery == Delivery::Pending)
                 .map(|(i, e)| {
                     e.delivery = Delivery::InFlight;
-                    (i, e.text.clone(), e.view.clone())
+                    PolledMessage {
+                        index: i,
+                        who: e.who,
+                        text: e.text.clone(),
+                        view: e.view.clone(),
+                    }
                 })
                 .collect();
             if !taken.is_empty() {
                 drop(lines);
                 self.wake();
                 return PollOutcome::Messages(taken);
+            }
+            if let Some(baseline) = events
+                && self.diagnostic_map() != *baseline
+            {
+                return PollOutcome::Changed;
             }
             lines = match deadline {
                 None => self.chat.cv.wait(lines).unwrap(),
@@ -494,6 +601,44 @@ impl EngineState {
         self.chat.cv.notify_all();
     }
 
+    /// The current diagnostic value (see [`DiagnosticMap`]). Reads only the
+    /// `published` and `health` maps — never the build gate.
+    pub(crate) fn diagnostic_map(&self) -> DiagnosticMap {
+        let mut map = DiagnosticMap::new();
+        for (slot, p) in self.published.lock().unwrap().iter() {
+            if let Some(e) = &p.error {
+                map.insert(format!("slot:{slot}"), e.clone());
+            }
+        }
+        for (path, h) in self.health.lock().unwrap().iter() {
+            if let Some(e) = &h.error {
+                map.insert(format!("file:{path}"), e.clone());
+            }
+        }
+        map
+    }
+
+    /// Failing health values, sorted by path: (path, generation evaluated
+    /// at, error). Reporting is failures-only; ok/skipped is derivable on
+    /// demand by querying the file.
+    pub(crate) fn health_failures(&self) -> Vec<(String, u64, String)> {
+        let mut v: Vec<(String, u64, String)> = self
+            .health
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(p, h)| h.error.clone().map(|e| (p.clone(), h.generation, e)))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Generation of the last sync the build loop saw (what health entries'
+    /// staleness is judged against when no fresh sync is at hand).
+    pub(crate) fn last_generation(&self) -> Option<u64> {
+        *self.last_generation.lock().unwrap()
+    }
+
     /// Read the chat, for the viewer's panel. `f` runs under the chat lock:
     /// keep it to reading — sending or polling from inside it deadlocks.
     pub fn with_transcript<R>(&self, f: impl FnOnce(&[TranscriptEntry]) -> R) -> R {
@@ -506,26 +651,92 @@ impl EngineState {
     }
 
     /// Background build loop: blocks on queued slots, builds, publishes.
+    /// Health-sweep items run only while no slot is queued (slots pop
+    /// first, so the sweep never delays a user scrub or an agent command).
     /// Run on a dedicated thread; returns only once the session is stopped.
     pub fn run_build_loop(self: &Arc<Self>) {
+        enum Work {
+            Slot(String),
+            Sweep(SyncResult, String),
+        }
         loop {
-            let slot = {
+            let work = {
                 let mut pending = self.queue.pending.lock().unwrap();
                 loop {
                     if self.stopping() {
                         return;
                     }
                     if !pending.is_empty() {
-                        break pending.remove(0);
+                        break Work::Slot(pending.remove(0));
+                    }
+                    if let Some((sync, path)) = self.next_sweep_item() {
+                        break Work::Sweep(sync, path);
                     }
                     pending = self.queue.cv.wait(pending).unwrap();
                 }
             };
-            // A slot may have been removed while queued.
-            let Some(view) = self.view_of(&slot) else { continue };
-            // Failures are already published; a cancelled build means a
-            // newer request for this slot is (or will be) queued.
-            let _ = self.build_slot(&slot, view);
+            match work {
+                Work::Slot(slot) => {
+                    // A slot may have been removed while queued.
+                    let Some(view) = self.view_of(&slot) else { continue };
+                    // Failures are already published; a cancelled build means
+                    // a newer request for this slot is (or will be) queued.
+                    let _ = self.build_slot(&slot, view);
+                }
+                Work::Sweep(sync, path) => self.sweep_one(&sync, &path),
+            }
+        }
+    }
+
+    fn next_sweep_item(&self) -> Option<(SyncResult, String)> {
+        let mut sweep = self.sweep.lock().unwrap();
+        let path = sweep.pending.pop_front()?;
+        Some((sweep.sync.clone().expect("pending sweep items imply a sync"), path))
+    }
+
+    /// Evaluate one file's health value against `sync`: the meta check
+    /// (catches syntax errors, load-time throws, bad meta — every file),
+    /// then the default-view build for standalone-buildable files. A file
+    /// whose meta declares a required no-default plain input fails
+    /// standalone by design, so the meta tier is its whole check.
+    fn sweep_one(&self, sync: &SyncResult, path: &str) {
+        // The gate covers meta extraction too (module evaluation can put
+        // store objects nothing roots yet), same as `query_view`.
+        let _gate = self.build_gate.read().unwrap();
+        let Some(source) = sync.snapshot.sources.get(path) else { return };
+        let meta = self.build.meta(path, source);
+        let error = match meta.as_ref() {
+            Err(e) => Some(e.clone()),
+            Ok(m) if !m.inputs.values().all(|i| i.cascade || i.default.is_some()) => None,
+            Ok(_) => {
+                let pass = self.build.start_pass(sync, View::of(path));
+                *self.sweep_active.lock().unwrap() = Some(pass.clone());
+                let result = self.build.build_view(&pass);
+                *self.sweep_active.lock().unwrap() = None;
+                match result {
+                    Ok(_) => None,
+                    Err(f) if f.kind == FailureKind::Cancelled => {
+                        // Preempted by a slot build (or superseded): retry
+                        // later if this sweep is still the current one.
+                        let mut sweep = self.sweep.lock().unwrap();
+                        if sweep.sync.as_ref().is_some_and(|s| s.generation == sync.generation) {
+                            sweep.pending.push_back(path.to_string());
+                        }
+                        return;
+                    }
+                    Err(f) => Some(f.message),
+                }
+            }
+        };
+        let mut health = self.health.lock().unwrap();
+        let prev = health.insert(
+            path.to_string(),
+            HealthEntry { generation: sync.generation.0, error: error.clone() },
+        );
+        let changed = prev.as_ref().and_then(|p| p.error.as_ref()) != error.as_ref();
+        drop(health);
+        if changed {
+            self.wake_pollers();
         }
     }
 
@@ -592,7 +803,8 @@ impl EngineState {
     }
 
     /// A new generation makes every active slot stale: queue rebuilds
-    /// (except `building`, the slot already being built from it).
+    /// (except `building`, the slot already being built from it), and
+    /// reschedule the health sweep over the generation's files.
     fn note_generation(&self, sync: &SyncResult, building: Option<&str>) {
         {
             let mut last = self.last_generation.lock().unwrap();
@@ -607,6 +819,21 @@ impl EngineState {
                 self.enqueue(&slot);
             }
         }
+        {
+            // Latest-wins: pending items of the old generation are dropped,
+            // an in-flight sweep build is cancelled (it won't requeue).
+            let mut sweep = self.sweep.lock().unwrap();
+            sweep.sync = Some(sync.clone());
+            sweep.pending = sync.snapshot.sources.keys().cloned().collect();
+            if let Some(pass) = self.sweep_active.lock().unwrap().as_ref() {
+                pass.cancel();
+            }
+        }
+        // Deleted files' health goes with the files; a deleted broken file
+        // heals the diagnostic value.
+        self.health.lock().unwrap().retain(|p, _| sync.snapshot.sources.contains_key(p));
+        self.queue.cv.notify_all();
+        self.wake_pollers();
     }
 
     fn publish_success(
@@ -644,10 +871,12 @@ impl EngineState {
             self.build.publish(sync.generation, roots);
         }
         self.wake();
+        self.wake_pollers();
     }
 
     /// `generation: None` (e.g. scan errors) keeps the last known generation.
-    fn publish_failure(
+    /// pub(crate) for the socket tests (`server::tests`).
+    pub(crate) fn publish_failure(
         &self,
         slot: &str,
         generation: Option<u64>,
@@ -667,6 +896,7 @@ impl EngineState {
         entry.building = self.queue.pending.lock().unwrap().iter().any(|s| s == slot);
         drop(published);
         self.wake();
+        self.wake_pollers();
     }
 }
 
@@ -721,8 +951,9 @@ pub(crate) mod tests {
 
     fn texts(outcome: PollOutcome) -> Vec<String> {
         match outcome {
-            PollOutcome::Messages(m) => m.into_iter().map(|(_, t, _)| t).collect(),
+            PollOutcome::Messages(m) => m.into_iter().map(|m| m.text).collect(),
             PollOutcome::TimedOut => vec![],
+            PollOutcome::Changed => panic!("changed"),
             PollOutcome::Disconnected => panic!("disconnected"),
             PollOutcome::Stopped => panic!("stopped"),
         }
@@ -738,11 +969,11 @@ pub(crate) mod tests {
         let peer = Peer::default();
         state.send_message("one".into(), None);
         state.send_message("two".into(), None);
-        assert_eq!(texts(state.poll_messages(None, &peer)), ["one", "two"]);
+        assert_eq!(texts(state.poll_messages(None, &peer, None)), ["one", "two"]);
         // Taken, but not the agent's until it says so.
         assert_eq!(deliveries(&state), [Delivery::InFlight; 2]);
         // Nothing pending now: a second poll only has the timeout to return on.
-        assert!(texts(state.poll_messages(Some(Duration::ZERO), &peer)).is_empty());
+        assert!(texts(state.poll_messages(Some(Duration::ZERO), &peer, None)).is_empty());
     }
 
     #[test]
@@ -759,7 +990,7 @@ pub(crate) mod tests {
                 state.send_message("hello".into(), None);
             });
         }
-        assert_eq!(texts(state.poll_messages(None, &Peer::default())), ["hello"]);
+        assert_eq!(texts(state.poll_messages(None, &Peer::default(), None)), ["hello"]);
         assert_eq!(state.listeners(), 0);
     }
 
@@ -775,7 +1006,7 @@ pub(crate) mod tests {
                 state.stop();
             });
         }
-        assert!(matches!(state.poll_messages(None, &Peer::default()), PollOutcome::Stopped));
+        assert!(matches!(state.poll_messages(None, &Peer::default(), None), PollOutcome::Stopped));
     }
 
     /// The user's `odm poll` is killed while it waits. The poll must end (or
@@ -794,7 +1025,7 @@ pub(crate) mod tests {
                 state.wake_pollers();
             });
         }
-        assert!(matches!(state.poll_messages(None, &peer), PollOutcome::Disconnected));
+        assert!(matches!(state.poll_messages(None, &peer, None), PollOutcome::Disconnected));
         assert_eq!(state.listeners(), 0);
     }
 
@@ -806,7 +1037,7 @@ pub(crate) mod tests {
             assert_eq!(entries.len(), 1);
             assert_eq!((entries[0].who, entries[0].text.as_str()), (Who::Agent, "built it"));
         });
-        assert!(texts(state.poll_messages(Some(Duration::ZERO), &Peer::default())).is_empty());
+        assert!(texts(state.poll_messages(Some(Duration::ZERO), &Peer::default(), None)).is_empty());
     }
 
     #[test]
@@ -824,7 +1055,11 @@ pub(crate) mod tests {
                 (polled, state.handle(json!({"cmd": "say", "text": "ok"}), &mut conn))
             }
         });
-        assert_eq!(replies.0, json!({"ok": true, "messages": [{"text": "hi"}]}));
+        assert_eq!(replies.0["messages"], json!([{"text": "hi"}]));
+        // Every poll response carries the diagnostics snapshot, even with
+        // nothing built yet.
+        assert_eq!(replies.0["builds"][0]["build"], json!("pending"));
+        assert_eq!(replies.0["health"], json!([]));
         assert_eq!(replies.1, json!({"ok": true}));
         state.with_transcript(|t| assert_eq!(t.len(), 2));
     }
@@ -953,6 +1188,168 @@ pub(crate) mod tests {
         assert_eq!(seqs, (3..(ACTIVITY_CAP as u64 + 3)).collect::<Vec<_>>());
         assert_eq!(events[0].caption, "render 3.js");
         assert!(state.take_activity().is_empty(), "drain empties the queue");
+    }
+
+    /// The one comparison rule of events polls: emit iff any key's
+    /// error-or-none differs from the baseline. Ok→ok republish and stale
+    /// flips are not events; a fresh baseline (reconnect) re-reports.
+    #[test]
+    fn events_polls_answer_on_value_changes_only() {
+        let state = engine();
+        let peer = Peer::default();
+        let view = View::of("root.js");
+        let poll = |state: &EngineState, base: &DiagnosticMap| {
+            state.poll_messages(Some(Duration::ZERO), &peer, Some(base))
+        };
+
+        // Everything-ok equals the empty baseline: nothing to report.
+        let base = state.diagnostic_map();
+        assert_eq!(base, DiagnosticMap::new());
+        assert!(matches!(poll(&state, &base), PollOutcome::TimedOut));
+
+        // ok → error emits; the same failure republished does not; a
+        // different message does (the error is the value).
+        state.publish_failure(DEFAULT_SLOT, None, &view, "boom".into(), vec![]);
+        assert!(matches!(poll(&state, &base), PollOutcome::Changed));
+        let base = state.diagnostic_map();
+        state.publish_failure(DEFAULT_SLOT, None, &view, "boom".into(), vec![]);
+        assert!(matches!(poll(&state, &base), PollOutcome::TimedOut));
+        state.publish_failure(DEFAULT_SLOT, None, &view, "boom 2".into(), vec![]);
+        assert!(matches!(poll(&state, &base), PollOutcome::Changed));
+
+        // Stale flips are not part of the value: a queued rebuild of the
+        // broken slot changes nothing until it publishes.
+        let base = state.diagnostic_map();
+        state.set_view(DEFAULT_SLOT, view.clone());
+        assert!(state.published(DEFAULT_SLOT).building);
+        assert!(matches!(poll(&state, &base), PollOutcome::TimedOut));
+
+        // Closing the broken tab heals (error → none).
+        state.remove_view(DEFAULT_SLOT);
+        assert!(matches!(poll(&state, &base), PollOutcome::Changed));
+
+        // A reconnecting follower starts from the empty baseline and
+        // re-reports a standing failure instead of losing it.
+        state.views.lock().unwrap().insert("tab-1".into(), view.clone());
+        state.publish_failure("tab-1", None, &view, "still broken".into(), vec![]);
+        assert!(matches!(poll(&state, &DiagnosticMap::new()), PollOutcome::Changed));
+    }
+
+    /// Headless parity: the build loop alone (no viewer) keeps the default
+    /// slot published, so `status`/poll are truthful under
+    /// `odm run --headless`.
+    #[test]
+    fn the_build_loop_publishes_without_a_viewer() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("root.js"),
+            "export default function build(ctx) { return odm.box([1, 1, 1]); }",
+        )
+        .unwrap();
+        let state = EngineState::new(dir.path().to_path_buf(), env()).unwrap();
+        let loop_thread = {
+            let state = state.clone();
+            std::thread::spawn(move || state.run_build_loop())
+        };
+        state.rebuild_active();
+        within({
+            let state = state.clone();
+            move || {
+                while state.published(DEFAULT_SLOT).root.is_none() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        });
+        let mut conn = Conn::new(state.clone());
+        let v = state.handle(json!({"cmd": "status"}), &mut conn);
+        assert_eq!(v["views"][0]["build"], json!("ok"), "{v}");
+        state.stop();
+        loop_thread.join().unwrap();
+    }
+
+    /// The health sweep is the failure signal for files no one has open:
+    /// a broken unviewed file shows up (with its error), healing removes
+    /// it, and its value feeds poll's `health` and the events stream.
+    #[test]
+    fn health_sweep_covers_unviewed_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("root.js"),
+            "export default function build(ctx) { return odm.box([1, 1, 1]); }",
+        )
+        .unwrap();
+        // Unviewed: no slot ever points here. Also standalone-unbuildable
+        // files are meta-checked only — give it a required input to prove
+        // the skip doesn't flag it.
+        std::fs::write(dir.path().join("orphan.js"), "export default () => { throw new Error('orphan broke'); }").unwrap();
+        std::fs::write(
+            dir.path().join("gated.js"),
+            r#"
+            export const meta = { inputs: { s: { type: 'solid' } } };
+            export default (ctx) => ctx.input('s');
+            "#,
+        )
+        .unwrap();
+
+        let state = EngineState::new(dir.path().to_path_buf(), env()).unwrap();
+        let loop_thread = {
+            let state = state.clone();
+            std::thread::spawn(move || state.run_build_loop())
+        };
+        state.rebuild_active();
+        within({
+            let state = state.clone();
+            move || {
+                while state.health_failures().is_empty() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                state.health_failures()
+            }
+        });
+        let failures = state.health_failures();
+        assert_eq!(failures.len(), 1, "only the broken file is reported: {failures:?}");
+        assert_eq!(failures[0].0, "orphan.js");
+        assert!(failures[0].2.contains("orphan broke"), "{failures:?}");
+        // The value rides the poll snapshot.
+        let mut conn = Conn::new(state.clone());
+        let v = state.handle(json!({"cmd": "poll", "timeout": 0}), &mut conn);
+        assert_eq!(v["health"][0]["path"], json!("orphan.js"), "{v}");
+
+        // Healing the file heals the value (the next sweep of the new
+        // generation re-evaluates it).
+        std::fs::write(dir.path().join("orphan.js"), "export default () => odm.box(2);").unwrap();
+        // No watcher thread in this test: nudge a sync the way any CLI
+        // command would.
+        let sync = state.build.sync().unwrap();
+        state.note_generation(&sync, None);
+        within({
+            let state = state.clone();
+            move || {
+                while !state.health_failures().is_empty() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        });
+        state.stop();
+        loop_thread.join().unwrap();
+    }
+
+    /// Engine host warnings ride the transcript: queued like user messages,
+    /// marked `"from": "engine"` on the wire, shown in the viewer panel.
+    #[test]
+    fn engine_warnings_reach_poll_and_transcript() {
+        let state = engine();
+        state.engine_warning("file watcher unavailable".into());
+        state.with_transcript(|t| {
+            assert_eq!((t[0].who, t[0].delivery), (Who::Engine, Delivery::Pending));
+        });
+        let mut conn = Conn::new(state.clone());
+        let v = state.handle(json!({"cmd": "poll"}), &mut conn);
+        assert_eq!(v["messages"][0]["from"], json!("engine"), "{v}");
+        assert_eq!(v["messages"][0]["text"], json!("file watcher unavailable"), "{v}");
+        // Same delivery handshake as user messages.
+        state.handle(json!({"cmd": "ack"}), &mut conn);
+        assert_eq!(deliveries(&state), [Delivery::Done]);
     }
 
     #[test]

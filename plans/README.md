@@ -6,23 +6,10 @@ discussions that followed. Cross-references note where plans touch.
 - `camera-nodes.md` — shelved: cameras as JS-built scene nodes (named,
   animatable views); the camera overlay pipeline it needs landed
   2026-08-17, so it now waits only on a demonstrated need.
-- `agent-activity-view.md` — viewer cards showing the agent's last CLI
-  action (render/raycast/inspect) behind the chat transcript.
 - `terminal.md` — terminal emulator tabs in the viewer (new `odm-term`
   crate, alacritty_terminal, $SHELL at the project dir; not
   agent-specific, nothing runs by default). Tab placement means no
-  overlap with agent-activity-view's chat-area real estate.
-- `js-diagnostics.md` — diagnostics surfacing (from the deleted issue;
-  rethink pass 2026-08-17): fix duplicate log replay on late memo
-  invalidation, host warnings into the transcript, log-level enum + the
-  viewer's error/console panes merged devtools-style (thrown error =
-  last console entry),
-  headless gains the build loop + watcher (precondition — nothing
-  publishes headless today), per-slot build values on poll with
-  value-change wakes for `--follow`, a failures-only health sweep over
-  unviewed doohickeys (gated on the uncancellable-eval issue), and a
-  confirmed memo-consistency bug: a caught failed invoke records no dep,
-  so fixing the child leaves the catcher stale.
+  overlap with the activity view's chat-area real estate.
 - `web-export.md` — export a project as a static interactive web page:
   frozen generation, doohickey JS bundled to run natively in browser,
   core crates + our renderer compiled to wasm (Manifold via emscripten
@@ -54,4 +41,10 @@ tripwire-test convention are in notes/architecture.md's odm-kernel entry);
 `render-frames.md` (landed 2026-08-17 — `frames` contact sheets: partial
 requests merged over the base, shared union-bounds framing, captioned
 tiles; standing rules in `notes/agent-surface.md`'s contact sheets
-section).
+section); `js-diagnostics.md` (landed 2026-08-17 — failed-invoke deps,
+log-replay rollback, log-level enum + one console pane, engine warnings
+in the transcript, headless thread parity, poll `builds`/`health` with
+`events` follow wakes, the health sweep; standing rules in
+`notes/agent-surface.md`'s async-diagnostics section, mechanics in
+notes/architecture.md; the deferred failure-memoization follow-up is
+issues/memoize-failures.md).

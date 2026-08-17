@@ -198,7 +198,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   nowhere near a bottleneck at CAD scale.
 - `odm-engine` — library, entered via `odm run` (`run_headless(project)` /
   `run_viewer(Option<project>)`).
-  Headless: socket server only. Default: + eframe
+  Headless runs the same background threads as a viewer session (build
+  loop + watcher + health sweep, `session::spawn_background`) minus the
+  UI — the engine keeps its slots' published values current, a viewer is
+  just eyes on them; `status`/poll are truthful headless and the memo
+  cache stays warm. Default: + eframe
   viewer (menu bar, tab strip — one view per tab, persisted in
   `.odm/viewer.json`; classic notebook tabs, each with its own close box, a
   red label when that tab's last build failed —, offscreen texture viewport via
@@ -206,9 +210,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (right side; controls from the tab's fall-through report: trackbars for
   ranged numbers, toggles, choice buttons, JSON-ish text fields, presets), a
   `t` transport when a ranged cascade number named t falls through
-  (scrub + play at 1 unit/sec looping), error + console panels with
-  last-good scene (`Published.logs` is latest-attempt: success or failure,
-  colored by level), click-select via CPU raycast when shaded / nearest-wire
+  (scrub + play at 1 unit/sec looping), one devtools-style console panel
+  with last-good scene (`Published.logs` is latest-attempt: success or
+  failure, colored by `LogLevel`; a failed build's error is the final
+  red entry — presentation-only merge, `Published.error` stays its own
+  field), click-select via CPU raycast when shaded / nearest-wire
   screen-space pick when wireframe, shift-click to select several,
   **agent activity view** — see below),
   background build loop over the active view slots
@@ -462,12 +468,46 @@ agent-agnostic and enough.
 - **`--follow` is the same thing for harnesses that watch lines** (Claude
   Code's Monitor, say): park one command at session start and every batch
   arrives as a push — no relaunch per message, and no gap where nobody is
-  listening. Purely a CLI-side loop (`follow_poll`): send poll, print the
-  response as one compact JSON line, flush, ack, poll again — so the engine and
-  the protocol's one-response-per-request rule are untouched, and delivery is
-  the same two-phase handshake per batch. A `--timeout` alongside it is an
+  listening. The loop stays CLI-side (`follow_poll`): send poll, print the
+  response as one compact JSON line, flush, ack, poll again — so the
+  protocol's one-response-per-request rule is untouched, and delivery is
+  the same two-phase handshake per batch. `--follow` additionally sets the
+  request's `events` flag (2026-08-17, the one revision of "`--follow`
+  never reaches the engine"): the engine must know to answer on diagnostic
+  value changes too, not just messages. A `--timeout` alongside it is an
   error (nothing to bound). `docs/prompts/cli.md` tells the agent to park a
   follow if its harness can watch lines, and to loop `--timeout` otherwise.
+- **Build diagnostics ride poll** (2026-08-17, plans/js-diagnostics.md):
+  every poll response carries `builds` (per active slot: `build` =
+  ok/error/pending + `error` + `stale`) and `health` (failures-only list
+  from the background sweep), read from `published`/`health` at answer
+  time — never the build gate. With `events`, a blocked poll also returns
+  (possibly empty `messages`) whenever the *diagnostic value* — the map of
+  failing slots/files → error, `EngineState::diagnostic_map` — differs
+  from what the connection last reported (`Conn::events_baseline`).
+  State-compare on every wake (publishes, sweep stores, `remove_view` and
+  new generations call `wake_pollers`), not an event queue: missed/spurious
+  wakes and reconnects can neither lose nor duplicate; ok→ok rebuilds and
+  stale flips don't emit. Logs never ride poll — query the view for
+  error + logs (memoized replay is byte-identical to a re-run).
+- **The health sweep** (state.rs `SweepState`/`sweep_one`): per generation
+  the build loop, when no slot is queued, meta-checks every file and
+  builds the default view of every standalone-buildable one (all
+  non-cascade inputs have defaults; others get the meta tier only). Slot
+  builds preempt an in-flight sweep pass (cancelled item requeues; a new
+  generation supersedes the queue wholesale). Results land in a per-file
+  `health` map (value + generation; older generation ⇔ reported with
+  `stale: true`). Failures-only in every surface; a file's absence claims
+  nothing, and per the per-view axiom an ok default view never precludes a
+  slot failing at other inputs. Broken files are the expensive case until
+  failures are memoized (issues/memoize-failures.md).
+- **Engine host warnings are transcript entries** (`Who::Engine`): watcher
+  creation/watch failures, open-time odm.toml/prompt-sync warnings (queued
+  right after `EngineState` construction — `session::OpenScan`), server
+  death. Same Pending→InFlight→Done handshake as user messages; on the
+  wire they're `"from": "engine"` (absence = user); the viewer renders
+  them `engine: …` in `theme::WARN`. stderr prints stay for daemon logs.
+  Session events, not build output — deliberately not in the console pane.
 - **Delivery is committed, not assumed** (the fix for a 2026-07-27 bug where
   Ctrl+C on a poll made the next message disappear). Each entry carries a
   `Delivery`: `Pending` → `InFlight` (a poll took it) → `Done`, and *only* an

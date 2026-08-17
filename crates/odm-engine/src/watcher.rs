@@ -36,12 +36,24 @@ impl EngineState {
         }) {
             Ok(w) => w,
             Err(e) => {
+                // Silently losing the watcher would end live rebuild for the
+                // whole session; the transcript makes it visible to the user
+                // and the agent's next poll.
                 eprintln!("file watcher unavailable: {e}");
+                self.engine_warning(format!(
+                    "file watcher unavailable ({e}) — builds won't refresh on file saves \
+                     this session; CLI queries still sync"
+                ));
                 return;
             }
         };
         if let Err(e) = watcher.watch(&project, notify::RecursiveMode::Recursive) {
             eprintln!("file watcher failed on {}: {e}", project.display());
+            self.engine_warning(format!(
+                "file watcher failed on {} ({e}) — builds won't refresh on file saves \
+                 this session; CLI queries still sync",
+                project.display()
+            ));
             return;
         }
         while rx.recv().is_ok() {

@@ -31,8 +31,10 @@ command count.
 `odm [--project <dir>] <cmd> ['{…json}']` — the argument *is* the socket
 request body, minus `cmd`. No per-command flags, no other positionals;
 bare = defaults. Exceptions, deliberately: `poll --timeout/--follow`
-(configures the CLI's own waiting; `--follow` never reaches the engine),
-`say <free text>`, `docs` (engineless), `--project` prefix (transport).
+(configures the CLI's own waiting; the follow *loop* stays CLI-side, but
+since 2026-08-17 `--follow` also sets the request's `events` flag so the
+engine answers on build/health value changes), `say <free text>`, `docs`
+(engineless), `--project` prefix (transport).
 The engine's spec table validates field names (typos list siblings,
 removed commands get redirect errors) — one error path, no CLI grammar
 errors beyond "that wasn't a JSON object". Wire word is `inputs`
@@ -158,6 +160,30 @@ writing the values costs tokens ~nothing vs reading tiles.
   asked. GPU mesh cache is pruned once against the union of frames.
 - Docs-only per policy (spec-table entry + docs/cli.md section); the
   prompt is unchanged.
+
+## Async diagnostics (landed 2026-08-17, plans/js-diagnostics.md)
+
+- **Per-slot encoding is value + freshness, not a state machine**:
+  `build` = `ok`/`error`/`pending` (the last-published value; `error`
+  rides next to it) plus `stale: true` when a newer answer is queued or
+  building. This *revised* `status`'s old `ok|error|building|pending`,
+  where "building" masked the value. One helper
+  (`commands.rs::build_fields`) feeds both `status.views` and poll
+  `builds`.
+- **Every poll response carries `builds` + `health`** (failures-only
+  file list from the background sweep; `status` gets the same `health`).
+  Logs never ride poll — querying the view returns error + logs, and
+  memoization makes that byte-identical to the original run. Reporting
+  per-file ok/skipped rows would re-run the 191 KB `tree` mistake;
+  failures only, absence claims nothing.
+- **Errors are per-view, not per-doohickey**: an error can genuinely
+  depend on inputs, so no surface may say "this file is broken/fine" —
+  slots report the exact views on screen, `health` a default-inputs
+  canary per file, and the two may disagree (that's information).
+- Engine host warnings are poll messages with `"from": "engine"`;
+  absence = user (the shape the prompt teaches).
+- `events: true` on poll (what `--follow` sets): answer on diagnostic
+  value changes, compared per connection against what it last reported.
 
 ## Standing cuts (don't reintroduce)
 

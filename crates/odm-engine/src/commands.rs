@@ -139,7 +139,7 @@ impl EngineState {
         // gate shared inside `query_view`; the chat commands neither sync
         // nor build, so a poll blocked for minutes holds up nothing.
         match req {
-            Request::Poll(p) => self.cmd_poll(p.timeout, conn),
+            Request::Poll(p) => self.cmd_poll(p.timeout, p.events, conn),
             Request::Say(s) => self.cmd_say(&s.text),
             Request::Ack => Ok(json!({ "acked": conn.confirm() })),
             Request::Status => self.cmd_status(),
@@ -199,18 +199,7 @@ impl EngineState {
                 o.insert("path".into(), json!(view.path));
                 o.insert("inputs".into(), Value::Object(inputs));
                 o.insert("active".into(), json!(is_active));
-                let p: Published = self.published(&slot);
-                // Last-published outcome; "pending" = no build finished yet.
-                let state = match (&p.error, p.building, p.root.is_some()) {
-                    (_, true, _) => "building",
-                    (Some(_), _, _) => "error",
-                    (None, _, true) => "ok",
-                    (None, _, false) => "pending",
-                };
-                o.insert("build".into(), json!(state));
-                if let Some(e) = &p.error {
-                    o.insert("error".into(), json!(e));
-                }
+                build_fields(&self.published(&slot), &mut o);
                 if is_active {
                     o.insert("selection".into(), selection_json(&self.selection.lock().unwrap()));
                 }
@@ -228,7 +217,48 @@ impl EngineState {
             // Active view slots (viewer tabs, or the headless default);
             // `"view": <slot>` requests adopt their state.
             "views": views,
+            "health": self.health_json(Some(sync.generation.0)),
         }))
+    }
+
+    /// Every active slot's diagnostic value, for poll responses: what
+    /// `status.views` reports minus the inputs/selection detail. Reads only
+    /// the `views` and `published` maps — never the build gate.
+    fn builds_json(&self) -> Value {
+        Value::Array(
+            self.views()
+                .into_iter()
+                .map(|(slot, view)| {
+                    let mut o = Map::new();
+                    o.insert("slot".into(), json!(slot));
+                    o.insert("path".into(), json!(view.path));
+                    build_fields(&self.published(&slot), &mut o);
+                    Value::Object(o)
+                })
+                .collect(),
+        )
+    }
+
+    /// The health sweep's failing files — failures only; a file's absence
+    /// claims nothing beyond "no known failure". `current`: the generation
+    /// stale-ness is judged against.
+    fn health_json(&self, current: Option<u64>) -> Value {
+        Value::Array(
+            self.health_failures()
+                .into_iter()
+                .map(|(path, generation, error)| {
+                    let mut o = Map::new();
+                    o.insert("path".into(), json!(path));
+                    o.insert("error".into(), json!(error));
+                    // The value shown is the last evaluated one; a poll
+                    // right after an edit must not present it as current.
+                    if current.is_some_and(|c| c != generation) {
+                        o.insert("stale".into(), json!(true));
+                    }
+                    Value::Object(o)
+                })
+                .collect(),
+        )
     }
 
     /// Resolve a request's (path, inputs, preset) into a `View` against a
@@ -841,7 +871,12 @@ impl EngineState {
     /// the client acknowledges them (`Ack`, sent by the CLI once it has
     /// printed them). Kill the CLI at any point and the connection dies with
     /// unacknowledged messages, which puts them back in the queue.
-    fn cmd_poll(&self, timeout: Option<f64>, conn: &mut Conn) -> Result<Value, CmdError> {
+    ///
+    /// Every response also carries the current `builds`/`health` snapshot;
+    /// with `events` (what `--follow` sets), a blocked poll additionally
+    /// returns — possibly with empty `messages` — whenever that diagnostic
+    /// value differs from what this connection last reported.
+    fn cmd_poll(&self, timeout: Option<f64>, events: bool, conn: &mut Conn) -> Result<Value, CmdError> {
         // try_from rejects negative, NaN, infinite *and* too-large-for-Duration
         // in one go; the from_ variant panics on the last two.
         let timeout = match timeout.map(std::time::Duration::try_from_secs_f64).transpose() {
@@ -851,9 +886,10 @@ impl EngineState {
                 return Err(CmdError::bad_request(what));
             }
         };
-        let taken = match self.poll_messages(timeout, conn.peer()) {
+        let baseline = events.then(|| conn.events_baseline().clone());
+        let taken = match self.poll_messages(timeout, conn.peer(), baseline.as_ref()) {
             PollOutcome::Messages(taken) => taken,
-            PollOutcome::TimedOut => Vec::new(),
+            PollOutcome::TimedOut | PollOutcome::Changed => Vec::new(),
             // Both leave nothing in flight, and both want the poll to end
             // rather than sit on a queue nobody is coming back for.
             PollOutcome::Disconnected => {
@@ -863,23 +899,36 @@ impl EngineState {
                 return Err(CmdError::new("stopped", "engine is shutting down"));
             }
         };
+        // Baseline before the snapshot below: a value change landing in
+        // between is then re-reported next time (idempotent) instead of
+        // silently swallowed.
+        conn.set_events_baseline(self.diagnostic_map());
         // Each message carries the snapshot of what the user was looking at
         // *when they sent it* (tab path + inputs, selection, camera) —
         // "make this longer" arrives with "this" attached, stamped at send
-        // time because a poll can collect long after the send.
+        // time because a poll can collect long after the send. Engine host
+        // warnings ride the same queue, marked `"from": "engine"` (absence
+        // = the user).
         let messages: Vec<Value> = taken
             .iter()
-            .map(|(_, text, view)| {
+            .map(|m| {
                 let mut o = Map::new();
-                o.insert("text".into(), json!(text));
-                if let Some(v) = view {
+                o.insert("text".into(), json!(m.text));
+                if m.who == crate::state::Who::Engine {
+                    o.insert("from".into(), json!("engine"));
+                }
+                if let Some(v) = &m.view {
                     o.insert("view".into(), v.clone());
                 }
                 Value::Object(o)
             })
             .collect();
-        conn.hold(taken.into_iter().map(|(i, _, _)| i));
-        Ok(json!({ "messages": messages }))
+        conn.hold(taken.into_iter().map(|m| m.index));
+        Ok(json!({
+            "messages": messages,
+            "builds": self.builds_json(),
+            "health": self.health_json(self.last_generation()),
+        }))
     }
 
     fn cmd_say(&self, text: &str) -> Result<Value, CmdError> {
@@ -896,6 +945,26 @@ impl EngineState {
             Some(Object::Node(n)) => Ok(n.clone()),
             _ => Err(CmdError::new("internal", "scene root missing from store")),
         }
+    }
+}
+
+/// One slot's diagnostic value, shared by `status.views` and poll `builds`:
+/// `build` is the last-published *value* (ok / error / pending — an error
+/// keeps `error` next to it), and `stale` says a newer generation's answer
+/// is queued or building. The value is never masked by a "building" state:
+/// an ok slot mid-rebuild stays `ok` + `stale`.
+fn build_fields(p: &Published, o: &mut Map<String, Value>) {
+    let state = match (&p.error, p.root.is_some()) {
+        (Some(_), _) => "error",
+        (None, true) => "ok",
+        (None, false) => "pending",
+    };
+    o.insert("build".into(), json!(state));
+    if let Some(e) = &p.error {
+        o.insert("error".into(), json!(e));
+    }
+    if p.building {
+        o.insert("stale".into(), json!(true));
     }
 }
 

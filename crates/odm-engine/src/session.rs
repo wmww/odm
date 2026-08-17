@@ -87,9 +87,13 @@ impl Sessions {
         // Claim the new socket before retiring the old session: this is the
         // step that fails when another engine already has the project.
         let listener = server::bind(&socket_of(&project)).map_err(|e| e.to_string())?;
-        let questions = sync_on_open(&project);
+        let scan = sync_on_open(&project);
         let state = EngineState::new(project, self.env.clone()).map_err(|e| e.to_string())?;
-        state.set_agent_questions(questions);
+        state.set_agent_questions(scan.questions);
+        // The transcript persists, so the agent's first poll collects these.
+        for warning in scan.warnings {
+            state.engine_warning(warning);
+        }
         if let Some(wake) = self.wake.lock().unwrap().clone() {
             state.set_wake(wake);
         }
@@ -114,23 +118,35 @@ pub enum AgentQuestion {
     CreateFiles,
 }
 
+/// What the open-time scan produced: questions the viewer must ask, and
+/// warnings for the transcript. The warnings fire before an `EngineState`
+/// exists, so they travel back to be queued right after construction —
+/// the transcript persists, and the agent's first poll collects them.
+pub struct OpenScan {
+    pub questions: Vec<AgentQuestion>,
+    pub warnings: Vec<String>,
+}
+
 /// Everything the engine writes to a project it did not author, done in one
 /// place: this engine's version in `odm.toml`, and the standard prompt in
 /// whichever agent files opted in by carrying the markers. Both are
-/// best-effort — warnings go to stderr, and nothing here blocks an open.
+/// best-effort — warnings go to stderr (daemon logs) *and* into the
+/// returned scan, and nothing here blocks an open.
 ///
 /// Returns what could not be done without asking. Headless calls this too
 /// (for the marked-file updates) and ignores the questions.
-pub fn sync_on_open(project: &Path) -> Vec<AgentQuestion> {
+pub fn sync_on_open(project: &Path) -> OpenScan {
+    let mut warnings = Vec::new();
     // An unreadable marker already fails loudly at scan time, and an
     // unwritable one shouldn't block opening.
     match odm_build::sync_marker(project) {
-        Ok(Some(warning)) => eprintln!("warning: {warning}"),
+        Ok(Some(warning)) => warnings.push(warning),
         Ok(None) => {}
-        Err(e) => eprintln!("warning: could not update odm.toml: {e}"),
+        Err(e) => warnings.push(format!("could not update odm.toml: {e}")),
     }
     let report = odm_prompt::sync(project);
-    for warning in &report.warnings {
+    warnings.extend(report.warnings);
+    for warning in &warnings {
         eprintln!("warning: {warning}");
     }
     let mut questions: Vec<AgentQuestion> =
@@ -138,7 +154,21 @@ pub fn sync_on_open(project: &Path) -> Vec<AgentQuestion> {
     if report.none_exist {
         questions.push(AgentQuestion::CreateFiles);
     }
-    questions
+    OpenScan { questions, warnings }
+}
+
+/// Build loop + watcher: the threads that keep an engine's slots (and the
+/// health sweep) current. Shared by viewer sessions and headless — an
+/// engine keeps its values current; a viewer is just eyes on them.
+pub(crate) fn spawn_background(state: &Arc<EngineState>) {
+    {
+        let state = state.clone();
+        std::thread::spawn(move || state.run_build_loop());
+    }
+    {
+        let state = state.clone();
+        std::thread::spawn(move || state.run_watcher());
+    }
 }
 
 /// Socket server, build loop and watcher for one session. Each returns when
@@ -148,17 +178,13 @@ fn spawn_threads(state: &Arc<EngineState>, listener: std::os::unix::net::UnixLis
     {
         let state = state.clone();
         std::thread::spawn(move || {
-            if let Err(e) = server::serve_on(state, listener, &sock) {
+            if let Err(e) = server::serve_on(state.clone(), listener, &sock) {
                 eprintln!("server error: {e}");
+                state.engine_warning(format!(
+                    "CLI server died: {e} — agent commands will fail until the engine restarts"
+                ));
             }
         });
     }
-    {
-        let state = state.clone();
-        std::thread::spawn(move || state.run_build_loop());
-    }
-    {
-        let state = state.clone();
-        std::thread::spawn(move || state.run_watcher());
-    }
+    spawn_background(state);
 }

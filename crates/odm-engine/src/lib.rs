@@ -25,12 +25,25 @@ pub fn run_headless(project: PathBuf) -> anyhow::Result<()> {
     // One project, no viewer to switch it: no session machinery needed.
     let env =
         Arc::new(odm_js::JsEnv::new().map_err(|e| anyhow::anyhow!("js snapshot: {e}"))?);
+    // Claim the socket first: an already-served project must fail before
+    // anything touches its files.
+    let sock = project.join(".odm/engine.sock");
+    let listener = server::bind(&sock)?;
     // Questions need a UI; headless gets the silent half (marker + marked
-    // agent files) and drops the rest.
-    session::sync_on_open(&project);
+    // agent files), drops the questions, and queues the warnings for poll.
+    let scan = session::sync_on_open(&project);
     let state = state::EngineState::new(project.clone(), env)
         .map_err(|e| anyhow::anyhow!("engine startup failed: {e}"))?;
-    server::serve(state, &project.join(".odm/engine.sock"))
+    for warning in scan.warnings {
+        state.engine_warning(warning);
+    }
+    // Headless runs the same background threads as a viewer session — the
+    // engine keeps its slots' published values (and the health sweep)
+    // current; a viewer is just eyes on them. `status`/poll stay truthful,
+    // and background rebuilds keep the memo cache warm for agent queries.
+    session::spawn_background(&state);
+    state.rebuild_active();
+    server::serve_on(state, listener, &sock)
 }
 
 /// Open the viewer on `project` (canonical), or on no project at all — which

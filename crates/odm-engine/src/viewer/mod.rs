@@ -895,6 +895,8 @@ impl ViewerApp {
                         }
                         Who::User => (format!("> {}", entry.text), theme::TEXT),
                         Who::Agent => (entry.text.clone(), theme::AGENT_TEXT),
+                        // Host warnings, where the user already looks.
+                        Who::Engine => (format!("engine: {}", entry.text), theme::WARN),
                     };
                     ui.label(egui::RichText::new(text).color(color));
                 }

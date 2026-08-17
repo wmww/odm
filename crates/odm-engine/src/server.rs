@@ -40,11 +40,6 @@ pub fn bind(sock_path: &Path) -> anyhow::Result<UnixListener> {
     Ok(listener)
 }
 
-pub fn serve(state: Arc<EngineState>, sock_path: &Path) -> anyhow::Result<()> {
-    let listener = bind(sock_path)?;
-    serve_on(state, listener, sock_path)
-}
-
 /// Serve until the session stops. `accept` can't watch the stop flag, so
 /// `EngineState::stop` pokes the socket to wake it (see the hook below).
 pub fn serve_on(
@@ -137,13 +132,31 @@ pub(crate) struct Conn {
     /// Transcript indices a `poll` on this connection handed out, awaiting
     /// `ack`. Never more than one poll's worth in practice.
     in_flight: Vec<usize>,
+    /// The diagnostic value this connection last reported (events polls
+    /// compare against it; see `EngineState::diagnostic_map`). Fresh per
+    /// connection, so a reconnecting follower re-reports current failures
+    /// instead of losing them.
+    events_baseline: crate::state::DiagnosticMap,
 }
 
 impl Conn {
     /// A connection nothing is reading from yet: with no [`read_requests`]
     /// thread behind it the peer never dies, which is what tests want.
     pub(crate) fn new(state: Arc<EngineState>) -> Conn {
-        Conn { state, peer: Arc::new(Peer::default()), in_flight: Vec::new() }
+        Conn {
+            state,
+            peer: Arc::new(Peer::default()),
+            in_flight: Vec::new(),
+            events_baseline: crate::state::DiagnosticMap::new(),
+        }
+    }
+
+    pub(crate) fn events_baseline(&self) -> &crate::state::DiagnosticMap {
+        &self.events_baseline
+    }
+
+    pub(crate) fn set_events_baseline(&mut self, map: crate::state::DiagnosticMap) {
+        self.events_baseline = map;
     }
 
     pub(crate) fn peer(&self) -> &Peer {
@@ -287,6 +300,41 @@ mod tests {
         drop(client);
         std::thread::sleep(Duration::from_millis(50));
         state.with_transcript(|t| assert!(t.iter().all(|e| e.delivery == Delivery::Done)));
+        state.stop();
+    }
+
+    /// A parked events poll (`odm poll --follow`) is woken by a build
+    /// transition alone — no user message involved — and answers with the
+    /// diagnostics snapshot and empty `messages`.
+    #[test]
+    fn a_follow_poll_wakes_on_a_build_failure() {
+        let state = engine();
+        let (_dir, sock) = serving(&state);
+
+        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut reader = BufReader::new(client.try_clone().unwrap());
+        client.write_all(b"{\"cmd\":\"poll\",\"events\":true}\n").unwrap();
+        wait_until("the poll to block", || state.listeners() == 1);
+
+        state.publish_failure(
+            "default",
+            None,
+            &odm_build::View::of("root.js"),
+            "root.js: boom".into(),
+            vec![],
+        );
+        let mut reply = String::new();
+        reader.read_line(&mut reply).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(v["messages"], serde_json::json!([]), "{reply}");
+        assert_eq!(v["builds"][0]["build"], serde_json::json!("error"), "{reply}");
+        assert_eq!(v["builds"][0]["error"], serde_json::json!("root.js: boom"), "{reply}");
+
+        // The same connection's next poll has the new baseline: the same
+        // standing failure is not re-reported — the poll blocks again
+        // instead of firing immediately.
+        client.write_all(b"{\"cmd\":\"poll\",\"events\":true}\n").unwrap();
+        wait_until("the re-poll to block", || state.listeners() == 1);
         state.stop();
     }
 

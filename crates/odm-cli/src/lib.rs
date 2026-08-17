@@ -79,8 +79,10 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     // Set by the poll arm below; see `follow_poll`.
     let mut follow = false;
     let request = match cmd.as_str() {
-        // Poll's flags configure this process's waiting behavior, not a
-        // structured request (`--follow` never reaches the engine).
+        // Poll's flags configure this process's waiting behavior — the loop
+        // stays CLI-side. `--follow` additionally sets the request's
+        // `events` flag: the engine must know to answer on build/health
+        // value changes, not just messages.
         "poll" => {
             let (timeout, f) = parse_poll(rest)?;
             follow = f;
@@ -88,6 +90,9 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             v.insert("cmd".into(), json!("poll"));
             if let Some(t) = timeout {
                 v.insert("timeout".into(), json!(t));
+            }
+            if follow {
+                v.insert("events".into(), json!(true));
             }
             v
         }

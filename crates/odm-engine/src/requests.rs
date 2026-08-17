@@ -170,6 +170,9 @@ pub(crate) struct ClearanceReq {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PollReq {
     pub timeout: Option<f64>,
+    /// Also answer on build/health value changes (what `--follow` sets).
+    #[serde(default)]
+    pub events: bool,
 }
 
 #[derive(Deserialize)]
@@ -399,14 +402,25 @@ const SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "poll",
-        summary: "wait for messages the user typed in the viewer",
+        summary: "wait for messages the user typed in the viewer; every response also \
+                  carries `builds` (per-slot build state) and `health` (per-file \
+                  failures from the background sweep)",
         view: false,
-        fields: &[f(
-            "timeout",
-            "number",
-            "seconds to wait before answering with no messages (default: wait until a \
-             message arrives or the engine stops)",
-        )],
+        fields: &[
+            f(
+                "timeout",
+                "number",
+                "seconds to wait before answering with no messages (default: wait until a \
+                 message arrives or the engine stops)",
+            ),
+            f(
+                "events",
+                "bool",
+                "also answer (possibly with empty `messages`) whenever a slot's build value \
+                 or a file's health value differs from what this connection last reported — \
+                 what `odm poll --follow` sets",
+            ),
+        ],
         js_twin: None,
         hidden: false,
     },
