@@ -73,15 +73,23 @@ rewrite.
   WebGL2 backend later only if reach demands it.
   Pixels won't be bit-identical to a desktop GPU — same cross-adapter
   policy as native golden PNGs (none exist for the same reason).
-- **egui on web** for the UI, keeping the theme. Force integer
+- **egui on web** for the UI, keeping the theme. Decided against a
+  DOM/HTML chrome (2026-08-17): the viewer core
+  (`plans/viewer-core.md`) is shared with desktop, so tree,
+  click-select, console pane, toggles, and future viewer features come
+  from one frontend — a DOM chrome would be a second frontend needing
+  permanent feature-parity work, the UI analogue of the three.js
+  renderer rewrite this plan already rejects. Force integer
   `pixels_per_point` (fractional DPR blurs the bitmap fonts — same rule
   as native). `SlowIdle`/winit machinery is desktop-only; eframe's web
   backend has its own loop and our repaint-on-demand style fits it.
 - **Threading: MVP is main-thread**, accepting jank during builds —
   including the initial build on page load (no baked data ships; see
   bundle format). Show build progress/loading state instead of a frozen
-  page. Eventual: engine in a Worker, flattened scene posted to the
-  main thread. Don't build the worker split into the MVP.
+  page. Cancellation is a no-op on web (the main thread can't interrupt
+  a build anyway; runaway build = reload) — the executor seam's cancel
+  handle does nothing. Eventual: engine in a Worker, flattened scene
+  posted to the main thread. Don't build the worker split into the MVP.
 
 ## Export bundle format
 
@@ -94,8 +102,9 @@ Static directory, no server smarts required:
   project's API-version surfaces (the bundler must respect `//! odm <v>`
   per-file surface selection, same as snapshot install order)
 - manifest: exported view (path; default = `root.js`), initial
-  inputs/cascade, presets, and export-time-extracted metas (so the web
-  runtime never needs `extract_export`)
+  inputs/cascade, and export-time-extracted metas (so the web runtime
+  never needs `extract_export`). MVP is exactly one view, no presets —
+  presets/tabs are phase 4 (see open questions)
 
 **No baked build output ships** (decided 2026-08-17): the client builds
 everything from source on load. A pre-warmed memo snapshot was
@@ -138,8 +147,11 @@ staleness detection ("rebuild the template first").
 
 Exported page behavior = one viewer tab: input panel from the
 fall-through report, `t` transport when a ranged `t` falls through,
-tree + click-select, orbit/pan/zoom, wireframe/x-ray toggles. Rebuilds
-are latest-wins debounced like the desktop build loop.
+tree + click-select, orbit/pan/zoom, wireframe/x-ray toggles — all from
+the shared viewer core, not web-specific code. The rebuild loop is
+degenerate on a synchronous main thread: build; if inputs changed
+meanwhile, build once more with the newest values. No port of the
+desktop background-build machinery.
 
 ## Phases
 
@@ -178,11 +190,10 @@ landable alone):
   cancellation handles); native impl = today's behavior; odm-js becomes
   an optional/feature dep so odm-build compiles for wasm without V8.
   Pragma/doc parsing (`sources.rs`) moves somewhere V8-free.
-- Viewer-core extraction from odm-engine: viewport + tree + input panel
-  + transport + theme, parameterized over a small engine interface
-  (submit view, read published result/report), with the desktop app as
-  the first consumer. The input panel is already a pure render of
-  (report, tab values), which is the right shape.
+- Viewer-core extraction: moved to its own plan,
+  `plans/viewer-core.md` — done first, regardless of web export. The
+  engine interface it defines (submit view / read published result) is
+  exactly what the web host implements in phase 2.
 
 **Phase 2 — web runtime:**
 
@@ -202,9 +213,9 @@ landable alone):
   conformance test if kept at all — then remove the directory (and its
   mention in `notes/`).
 
-**Phase 3 — the `export` command + site shell:** CLI command on the
-running engine (it knows the current generation and that it builds
-clean); writes the bundle directory. Wire the viewer core to the web host;
+**Phase 3 — the `export` command + site shell:** the `export` command
+(engine-side or standalone — see open questions); writes the bundle
+directory. Wire the viewer core to the web host;
 manifest/initial-view handling; a `--serve`-less README note that any
 static file server works (wasm needs correct MIME; document
 `python -m http.server` caveat if any).
@@ -222,7 +233,8 @@ supersample control on the page.
    trap — test odm-kernel's error paths (weld failure, degenerate
    booleans) under wasm before trusting them.
 2. **Viewer entanglement** — viewer code touches `EngineState`
-   directly; extraction is real work but improves desktop layering.
+   directly. Covered by `plans/viewer-core.md`, sequenced before this
+   plan.
 3. **wgpu-on-WebGPU gaps** — believed none for our passes; spike
    verifies.
 4. **Drift between hosts** — two ops backends and two executors can
@@ -246,9 +258,11 @@ shipped in the manifest.
 
 - ~~Kernel module boundary~~ — resolved: one module (spike).
 - Where `export` runs: engine command vs. standalone CLI mode. With no
-  memo pre-warm the hot-store rationale is gone; engine-side still
-  offers "current generation, known to build clean", but standalone got
-  more attractive — decide in phase 3.
+  memo pre-warm the hot-store rationale is gone; standalone needs
+  sources + framework + template only (no socket protocol addition,
+  works in CI), and a broken project just shows its error in the
+  exported page like it would in the viewer. Engine-side offers little
+  now — lean standalone, decide in phase 3.
 - Multiple tabs/views per export, and whether the manifest should carry
   presets as the page's "scenes" menu.
 - Mobile/touch: egui touch support exists; orbit/pinch mapping —
