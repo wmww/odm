@@ -13,7 +13,8 @@
   grammar CLI, the geometry-query parity rules, and the standing CLI
   cuts. Read before adding commands, request fields, or response fields.
 - `design-decisions.md` — why the stack/architecture is what it is: decisions
-  from the 2026-07 concept review, rejected alternatives, licensing, egui
+  from the 2026-07 concept review plus later dated ones (colors, "user
+  state: sent, not sampled"), rejected alternatives, licensing, egui
   i18n limits.
 - `spike-findings.md` — measured facts from the pre-MVP spikes and stack
   verification: V8/deno_core threading rules and numbers, scheduler dedup

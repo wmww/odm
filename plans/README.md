@@ -5,8 +5,13 @@ discussions that followed. Cross-references note where plans touch.
 
 - `render-frames.md` — contact-sheet renders: `frames` as an array of
   partial requests merged over the base, one captioned tiled PNG.
-- `render-camera.md` — `look` as the one camera field; render adopts the
-  viewer tab's camera on `view`.
+- `render-camera.md` — one camera parameter set (defaults = auto fit,
+  request fields overlay): `look` keywords/vector, `focus`, `zoom`,
+  resolved camera echoed in responses and poll snapshots. Reworked
+  2026-08-17; land before render-frames.
+- `camera-nodes.md` — shelved: cameras as JS-built scene nodes (named,
+  animatable views); waits on render-camera's overlay pipeline and a
+  demonstrated need.
 - `agent-activity-view.md` — viewer cards showing the agent's last CLI
   action (render/raycast/inspect) behind the chat transcript.
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:

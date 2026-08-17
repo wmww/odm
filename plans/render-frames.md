@@ -18,22 +18,22 @@ free at this scale.)
 ```
 odm render '{"path": "swing.js", "frames": [{"inputs": {"t": 0}}, {"inputs": {"t": 0.75}}, {"inputs": {"t": 1.5}}]}'
 odm render '{"inputs": {"x": 1}, "frames": [{"inputs": {"t": 0, "y": 20}}, {"inputs": {"t": 1, "y": 10}}]}'
-odm render '{"frames": [{"look": "top"}, {"look": "front"}, {"look": "left"}, {"look": "iso"}]}'
+odm render '{"frames": [{"look": "top"}, {"look": "front"}, {"look": "left"}, {}]}'
 ```
 
 Any per-frame field goes: multiple inputs at once (aspect-ratio sweeps),
 `preset` (compare presets), camera (`look` — a drafting sheet of the
-canonical views; see `render-camera.md`). Merge is shallow per field except
-`inputs`, which merges by key over the base's.
+canonical views, with `{}` as the default overview tile; see
+`render-camera.md`). Merge is shallow per field except `inputs`, which
+merges by key over the base's.
 
-- **Shared framing.** The auto camera fits per-scene bounds; fitting each
-  tile separately makes scale jump between tiles and motion read wrong.
-  Build every frame, union their bounds, fit once from the union
-  (`camera.rs` `resolve` already takes bounds — pass the union). Per-frame
-  `look` directions still work; the fit, not the direction, is shared.
-  Explicit per-frame cameras are used as-is. Mixed sheets (e.g. an adopted
-  tab camera in the base, per-frame `look` overrides): auto-framed tiles
-  share the union fit; explicit-camera tiles opt out per-tile.
+- **Shared framing.** The default camera fits per-scene bounds; fitting
+  each tile separately makes scale jump between tiles and motion read
+  wrong. Build every frame, union their bounds, compute the default fit
+  once from the union (in render-camera.md's overlay pipeline, the shared
+  part is the *defaults*). Per-frame `look`/`ortho` still apply per tile;
+  a tile giving its own placement (`eye`/`zoom`/`focus`) opts out of the
+  shared fit for that parameter.
 - **Captions.** Each tile captioned with its frame's overrides
   (`t=0.75`, `look=top`). The wgpu renderer has no text path; tiles are
   composited into the sheet CPU-side anyway — stamp captions there with a

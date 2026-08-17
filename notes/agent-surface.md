@@ -98,6 +98,9 @@ grammar. Standing decisions:
   so the command's only remaining use was inspection, which is docs.
 - One "target what the user sees" knob: `"view": true` = active viewer
   tab, `"view": "<slot>"` = a named slot. There is no `--viewer-state`.
+  Adoption covers path+inputs only, never the camera — per
+  design-decisions.md "User state: sent, not sampled" (the camera the
+  user saw travels with their message in the poll snapshot instead).
 - `generation` appears only in `status` (internal consistency counter).
 - Nothing agent-visible prints content hashes.
 - Removed-command redirects live engine-side (`requests.rs::removed`),
