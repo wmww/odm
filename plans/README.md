@@ -12,11 +12,15 @@ discussions that followed. Cross-references note where plans touch.
   crate, alacritty_terminal, $SHELL at the project dir; not
   agent-specific, nothing runs by default). Tab placement means no
   overlap with agent-activity-view's chat-area real estate.
-- `js-diagnostics.md` — diagnostics surfacing (from the deleted issue,
-  claims re-validated 2026-08-17): fix duplicate log replay on late
-  memo invalidation, host warnings into the transcript, log-level enum,
-  per-slot build status on poll with transition wakes for `--follow`,
-  and a default-inputs health sweep over unviewed doohickeys.
+- `js-diagnostics.md` — diagnostics surfacing (from the deleted issue;
+  rethink pass 2026-08-17): fix duplicate log replay on late memo
+  invalidation, host warnings into the transcript, log-level enum,
+  headless gains the build loop + watcher (precondition — nothing
+  publishes headless today), per-slot build values on poll with
+  value-change wakes for `--follow`, a failures-only health sweep over
+  unviewed doohickeys (gated on the uncancellable-eval issue), and a
+  confirmed memo-consistency bug: a caught failed invoke records no dep,
+  so fixing the child leaves the catcher stale.
 - `web-export.md` — export a project as a static interactive web page:
   frozen generation, doohickey JS bundled to run natively in browser,
   core crates + our renderer compiled to wasm (Manifold via emscripten
