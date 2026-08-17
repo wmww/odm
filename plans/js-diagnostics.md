@@ -101,13 +101,20 @@ Everything needed is already in `Published` (per-slot `revision`,
 `building`, `error`, `logs`, `view`), readable under the `published`
 mutex alone — the poll-never-takes-cmd_lock rule holds throughout.
 
+Errors are per-*view* (path + inputs + cascades), not per-doohickey —
+there is no "this doohickey fails" state. What poll reports is therefore
+two things: the **slots** (what the user is looking at, exact inputs and
+all) and a **project health sweep** (below) covering everything they
+aren't.
+
 **Design:**
 - **Every poll response gains a top-level `builds` snapshot**: per active
   slot `{slot, path, build: ok|error|building|pending, error?}` — the
   same derivation `cmd_status` uses (share the helper). Latest-wins by
   construction; cheap (no logs). One-shot poll thus always answers with
   current build state alongside whatever messages it collected; the
-  user's "it broke" arrives with the red slot attached.
+  user's "it broke" arrives with the red slot attached. This is "errors
+  as the user sees them" — each tab's current view.
 - **Follow mode wakes on material transitions.** The poll request gains a
   boolean (say `"events": true`), sent by `odm poll --follow` — revising
   the "`--follow` never reaches the engine" rule: the *loop* stays
@@ -132,6 +139,39 @@ mutex alone — the poll-never-takes-cmd_lock rule holds throughout.
   no separate channel.
 - Agent-initiated command errors stay synchronous return values, as
   decided; nothing routes through poll.
+
+### Project health sweep (default-inputs canary)
+
+Slots only cover what's on screen. Today a doohickey nobody has open has
+*no* failure signal at all — meta extraction is lazy, per-build, cached
+by code hash (`scheduler.rs:259-285`), and sync just content-hashes
+files, so even a syntax error in an unviewed file is invisible. Most
+doohickeys take no inputs or fail the same way regardless of them, so
+building each at its defaults is a good canary. Two tiers:
+
+- **Meta check, every file.** Extracting `meta` evaluates the module, so
+  it catches syntax errors, load-time throws, and bad meta for the whole
+  project. Cheap (hash-cached, already exists) — just needs to be *run*
+  per generation for all files instead of only on demand.
+- **Default-view build, standalone-buildable files only.** Build each
+  file as its default view (declared defaults, nothing set —
+  `scheduler.rs:30`). Skip files whose meta declares a required
+  no-default plain input: those fail standalone by design
+  (`scheduler.rs:668-675`; solids can't even have defaults,
+  `meta.rs:247`) — for them the meta tier is the check. Memoization
+  makes unchanged files near-free; a file open in a tab with default
+  inputs is the same view, already built.
+
+Scheduling: sweep items queue *behind* slot builds on the build thread
+and a new generation supersedes pending ones (latest-wins, same as
+slots) — the sweep never delays a user scrub or an agent command.
+
+Reporting: a `health` section next to `builds` — per file
+`{path, check: ok|error|skipped, error?}` (`skipped` = not
+standalone-buildable, meta ok). Same material-change rule feeds the
+follow stream: an unviewed file breaking (or healing) is a transition
+line. No logs here either; the agent reproduces with a view command.
+Viewer surfacing (e.g. marking files in tab pickers) can come later.
 
 **Surface updates:** `requests.rs` spec table (`events` field),
 `docs/cli.md` poll section, `notes/agent-surface.md` (the `--follow`

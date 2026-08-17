@@ -15,8 +15,8 @@ discussions that followed. Cross-references note where plans touch.
 - `js-diagnostics.md` — diagnostics surfacing (from the deleted issue,
   claims re-validated 2026-08-17): fix duplicate log replay on late
   memo invalidation, host warnings into the transcript, log-level enum,
-  and per-slot build status on poll with transition wakes for
-  `--follow`.
+  per-slot build status on poll with transition wakes for `--follow`,
+  and a default-inputs health sweep over unviewed doohickeys.
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
   separating translation. Corrects clearance.md's premise: manifold-csg
