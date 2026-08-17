@@ -12,12 +12,16 @@ test = true
 # Compiles in the test-only "test" API version (one deliberate surface
 # difference) so the multi-version machinery stays exercised before v1
 # exists. Enabled by dev-dependencies only; release builds reject the id.
-test-api-version = []
+# The version enum lives in odm-build; this just turns it on there too.
+test-api-version = ["odm-build/test-api-version"]
 
 [dependencies]
 odm-ir = { path = "../odm-ir" }
 odm-store = { path = "../odm-store" }
 odm-kernel = { path = "../odm-kernel" }
+# For the executor seam (odm_build::Executor and the types crossing it):
+# odm-js is the native implementation of odm-build's JS-host trait.
+odm-build = { path = "../odm-build" }
 deno_core = "=0.408.0"
 deno_error = "=0.7.1"
 serde = { version = "1", features = ["derive"] }

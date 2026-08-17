@@ -3,7 +3,7 @@
 //! is the project marker.
 
 use odm_ir::Hash;
-use odm_js::ApiVersion;
+use crate::version::ApiVersion;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -211,8 +211,8 @@ fn walk(
             let code = std::fs::read_to_string(&path)
                 .map_err(|e| ScanError::Io { path: rel.clone(), err: e.to_string() })?;
             let hash = Hash::of_bytes(code.as_bytes());
-            let api = odm_js::parse_pragma(&code).map(|v| v.unwrap_or(ApiVersion::Unstable));
-            let description = odm_js::parse_doc(&code);
+            let api = crate::version::parse_pragma(&code).map(|v| v.unwrap_or(ApiVersion::Unstable));
+            let description = crate::version::parse_doc(&code);
             generation_sources.insert(rel.clone(), hash);
             sources.insert(rel, Source { code, hash, api, description });
         }

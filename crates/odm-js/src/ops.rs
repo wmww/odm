@@ -1,4 +1,5 @@
 use crate::session::SessionState;
+use odm_build::cascade_value_hash;
 use deno_core::{OpState, op2};
 use deno_error::JsErrorBox;
 use odm_ir::{Hash, Transform};
@@ -8,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const MAX_LOG_LINES: usize = 1000;
-pub(crate) const MISSING_CASCADE: &[u8] = b"__odm_missing__";
 
 fn sess(state: &mut OpState) -> &mut SessionState {
     state.borrow_mut::<SessionState>()
@@ -256,7 +256,7 @@ struct CtxRead {
 pub fn op_cascade_read(state: &mut OpState, #[string] key: String) -> CtxRead {
     let s = sess(state);
     let value = s.cascade.get(&key).cloned();
-    let value_hash = crate::cascade_value_hash(value.as_ref());
+    let value_hash = cascade_value_hash(value.as_ref());
     // Record each key once; within a build the value cannot change.
     if !s.deps.iter().any(|d| matches!(d, Dep::Cascade { key: k, .. } if *k == key)) {
         s.deps.push(Dep::Cascade { key, value: value_hash });

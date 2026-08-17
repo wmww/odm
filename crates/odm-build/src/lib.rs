@@ -8,13 +8,22 @@
 //! Consistency invariant: every published result is byte-equivalent to a
 //! from-scratch build of its generation.
 
+pub mod executor;
+mod ir_json;
 pub mod meta;
 mod registry;
 mod report;
 mod scheduler;
 mod sources;
+mod version;
 
+pub use executor::{
+    BuildError, BuildInput, BuildInterrupt, BuildOutput, EXTRACT_TIMEOUT, Executor, FailedBuild,
+    InterruptHandle, InvokeError, Invoker, LogLevel, LogLine, cascade_value_hash,
+};
+pub use ir_json::node_from_json;
 pub use meta::{ExtType, Input, Meta};
+pub use version::{ApiVersion, SUPPORTED, parse_doc, parse_pragma};
 pub use report::{
     InputKind, InputReport, ReportEntry, ValueSource, check_input_names, declared_entries,
 };

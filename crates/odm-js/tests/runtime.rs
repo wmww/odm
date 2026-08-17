@@ -47,7 +47,7 @@ fn build_full(
             store: w.store.clone(),
             cancel: None,
             invoker,
-            on_isolate: None,
+            on_handle: None,
         },
     )
 }
@@ -378,7 +378,7 @@ impl Invoker for NestedInvoker {
                 store: self.world.store.clone(),
                 cancel: None,
                 invoker: None,
-                on_isolate: None,
+                on_handle: None,
             },
         )
         .map_err(|e| odm_js::InvokeError::from(e.to_string()))?;
@@ -632,7 +632,7 @@ fn args_hash_uses_canonical_json() {
     let _ = json!({}).hash();
 }
 
-/// run_build with an on_isolate hook handing the handle to a killer thread
+/// run_build with an on_handle hook handing the handle to a killer thread
 /// that terminates after `delay`. V8 occasionally swallows a lone terminate
 /// (a pending flag consumed in a JS-idle gap, or cleared by deno_core's
 /// exception conversion — measured ~0.2% on the TLA path), so after 2s the
@@ -650,14 +650,14 @@ fn build_with_killer(
     let cancel2 = cancel.clone();
     let done = Arc::new(AtomicBool::new(false));
     let done2 = done.clone();
-    let (tx, rx) = std::sync::mpsc::channel::<odm_js::IsolateHandle>();
+    let (tx, rx) = std::sync::mpsc::channel::<odm_js::InterruptHandle>();
     let killer = std::thread::spawn(move || -> bool {
         let handle = rx.recv().unwrap();
         std::thread::sleep(delay);
         if cancel_token_too {
             cancel2.cancel();
         }
-        handle.terminate_execution();
+        handle.interrupt();
         for _ in 0..200 {
             if done2.load(Ordering::SeqCst) {
                 return false;
@@ -667,7 +667,7 @@ fn build_with_killer(
         let mut retried = false;
         while !done2.load(Ordering::SeqCst) {
             retried = true;
-            handle.terminate_execution();
+            handle.interrupt();
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         retried
@@ -685,7 +685,7 @@ fn build_with_killer(
             store: w.store.clone(),
             cancel: Some(cancel),
             invoker: None,
-            on_isolate: Some(Box::new(move |h| {
+            on_handle: Some(Box::new(move |h| {
                 let _ = tx.send(h);
             })),
         },

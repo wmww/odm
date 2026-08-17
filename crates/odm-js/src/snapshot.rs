@@ -12,7 +12,7 @@
 //! indexes (measured 2026-07-29 — see notes/spike-findings.md and
 //! tests/multi_snapshot.rs).
 
-use crate::version::ApiVersion;
+use odm_build::ApiVersion;
 use deno_core::{
     JsRuntimeForSnapshot, ModuleLoadOptions, ModuleLoadReferrer, ModuleLoadResponse,
     ModuleResolveResponse, ModuleSourceCode, ModuleSpecifier, PollEventLoopOptions, RuntimeOptions,
@@ -187,7 +187,7 @@ impl JsEnv {
         // Load every supported version's manifest; each registers its
         // installer in `__odmVersions`. Side modules: doohickeys get to be
         // the main module at runtime.
-        for &version in crate::version::SUPPORTED {
+        for &version in odm_build::SUPPORTED {
             let entry =
                 ModuleSpecifier::parse(version_manifest(version)).map_err(|e| e.to_string())?;
             futures::executor::block_on(async {

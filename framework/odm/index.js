@@ -8,8 +8,10 @@
 import * as THREE from '../three/entry.js';
 import { parseColor } from './colors.js';
 
+// The engine-ops seam: the host (V8 isolate natively, the web export's
+// runtime in a browser) supplies one object with every op_* function.
 function ops() {
-  const o = globalThis.Deno?.core?.ops;
+  const o = globalThis.__odmOps ?? globalThis.Deno?.core?.ops;
   if (!o || !o.op_solid_box) {
     throw new Error('ODM engine ops unavailable: this code only runs inside a build');
   }
@@ -681,7 +683,7 @@ export function installGlobals(g) {
   };
 
   const log = (level) => (...a) => {
-    const o = globalThis.Deno?.core?.ops;
+    const o = globalThis.__odmOps ?? globalThis.Deno?.core?.ops;
     if (o?.op_log) o.op_log(level, a.map(safeString).join(' '));
   };
   g.console = {

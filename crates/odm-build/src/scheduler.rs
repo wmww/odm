@@ -1,8 +1,12 @@
+use crate::executor::{
+    BuildError, BuildInput, EXTRACT_TIMEOUT, Executor, InterruptHandle, InvokeError, Invoker,
+    LogLine, cascade_value_hash,
+};
 use crate::meta::Meta;
 use crate::registry::{Acquire, RKey, Registry};
 use crate::sources::{ProjectSnapshot, ScanError, Source, scan_project};
+use crate::version::ApiVersion;
 use odm_ir::{Hash, Hasher, hash_json};
-use odm_js::{ApiVersion, BuildError, BuildInput, Invoker, JsEnv, LogLine, run_build};
 use odm_kernel::{CancelToken, Kernel};
 use odm_store::{
     Dep, GenerationId, InvokeOutcome, MemoEntry, MemoFailureKind, MemoKey, MemoOutput, Store,
@@ -163,7 +167,7 @@ pub struct Pass {
     view: View,
     cancel: CancelToken,
     cancelled: AtomicBool,
-    isolates: Mutex<Vec<odm_js::IsolateHandle>>,
+    builds: Mutex<Vec<InterruptHandle>>,
     logs: Mutex<Vec<(String, LogLine)>>,
     stats: Mutex<BuildStats>,
     /// Child-time accumulators for the in-progress build chain (builds nest
@@ -173,30 +177,34 @@ pub struct Pass {
 
 impl Pass {
     /// Cancel this pass: kernel ops abort within ~tens of ms, JS is
-    /// terminated between/inside builds (module top level included). A
-    /// watchdog re-terminates until the pass's live isolates drain: V8 can
+    /// interrupted between/inside builds (module top level included). A
+    /// watchdog re-interrupts until the pass's live builds drain: V8 can
     /// swallow a lone terminate (a pending flag is cleared by exception
     /// conversion, e.g. deno_core's exception_to_err), which would otherwise
-    /// leave a JS loop spinning forever.
+    /// leave a JS loop spinning forever. On wasm (single thread, no handles
+    /// ever registered) this only sets the flags.
     pub fn cancel(self: &Arc<Self>) {
         if self.cancelled.swap(true, Ordering::SeqCst) {
             return; // already cancelled; the first call's watchdog covers us
         }
         self.cancel.cancel();
-        for handle in self.isolates.lock().unwrap().iter() {
-            handle.terminate_execution();
+        for handle in self.builds.lock().unwrap().iter() {
+            handle.interrupt();
         }
-        let pass = self.clone();
-        std::thread::spawn(move || loop {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let isolates = pass.isolates.lock().unwrap();
-            if isolates.is_empty() {
-                return;
-            }
-            for handle in isolates.iter() {
-                handle.terminate_execution();
-            }
-        });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let pass = self.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let builds = pass.builds.lock().unwrap();
+                if builds.is_empty() {
+                    return;
+                }
+                for handle in builds.iter() {
+                    handle.interrupt();
+                }
+            });
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -255,7 +263,7 @@ pub struct PassResult {
 pub struct BuildEngine {
     pub store: Arc<Store>,
     pub kernel: Arc<Kernel>,
-    env: Arc<JsEnv>,
+    executor: Arc<dyn Executor>,
     registry: Registry,
     pub stats: Stats,
     project: PathBuf,
@@ -270,13 +278,13 @@ impl BuildEngine {
     pub fn new(
         store: Arc<Store>,
         kernel: Arc<Kernel>,
-        env: Arc<JsEnv>,
+        executor: Arc<dyn Executor>,
         project: PathBuf,
     ) -> Arc<BuildEngine> {
         Arc::new(BuildEngine {
             store,
             kernel,
-            env,
+            executor,
             registry: Registry::default(),
             stats: Stats::default(),
             project,
@@ -300,17 +308,18 @@ impl BuildEngine {
 
     fn extract_meta(&self, path: &str, source: &Source) -> Result<Meta, String> {
         let api = source.api.clone().map_err(|e| format!("{path}: {e}"))?;
-        let raw = odm_js::extract_export(
-            &self.env,
-            path,
-            &source.code,
-            api,
-            "meta",
-            self.kernel.clone(),
-            self.store.clone(),
-            odm_js::EXTRACT_TIMEOUT,
-        )
-        .map_err(|e| format!("{path}: reading meta: {e}"))?;
+        let raw = self
+            .executor
+            .extract_export(
+                path,
+                &source.code,
+                api,
+                "meta",
+                self.kernel.clone(),
+                self.store.clone(),
+                EXTRACT_TIMEOUT,
+            )
+            .map_err(|e| format!("{path}: reading meta: {e}"))?;
         match raw {
             None => Ok(Meta::default()),
             Some(v) => Meta::parse(&v).map_err(|e| format!("{path}: meta: {e}")),
@@ -350,7 +359,7 @@ impl BuildEngine {
             view,
             cancel: CancelToken::new(),
             cancelled: AtomicBool::new(false),
-            isolates: Mutex::new(Vec::new()),
+            builds: Mutex::new(Vec::new()),
             logs: Mutex::new(Vec::new()),
             stats: Mutex::new(BuildStats::default()),
             timers: Mutex::new(Vec::new()),
@@ -441,7 +450,7 @@ impl BuildEngine {
                 .map_err(|msg| fail(path, FailureKind::Input, format!("{path}: cascade {msg}")))?;
             pre_deps.push(Dep::Cascade {
                 key: name.clone(),
-                value: odm_js::cascade_value_hash(Some(value)),
+                value: cascade_value_hash(Some(value)),
             });
         }
 
@@ -563,45 +572,42 @@ impl BuildEngine {
             env: env.clone(),
         };
 
-        let pass_for_isolate = pass.clone();
+        let pass_for_handle = pass.clone();
         let pushed = Arc::new(AtomicBool::new(false));
         let pushed_flag = pushed.clone();
         pass.timers.lock().unwrap().push(std::time::Duration::ZERO);
-        let started = std::time::Instant::now();
-        let result = run_build(
-            &self.env,
-            BuildInput {
-                path,
-                code,
-                api,
-                args,
-                decls,
-                cascade: &env.values,
-                kernel: self.kernel.clone(),
-                store: self.store.clone(),
-                cancel: Some(pass.cancel.clone()),
-                invoker: Some(Box::new(invoker)),
-                on_isolate: Some(Box::new(move |handle| {
-                    // Under the isolates lock so this either sees the cancel
-                    // flag or gets terminated by cancel()'s iteration —
-                    // cancel() landing before registration must not leave
-                    // this isolate running.
-                    let mut isolates = pass_for_isolate.isolates.lock().unwrap();
-                    if pass_for_isolate.is_cancelled() {
-                        handle.terminate_execution();
-                    }
-                    isolates.push(handle);
-                    pushed_flag.store(true, Ordering::SeqCst);
-                })),
-            },
-        );
-        // Isolates nest LIFO, so ours is the top of the stack; drop the
-        // handle now that the isolate is gone (cancel() stays O(live builds)).
+        let started = clock::now();
+        let result = self.executor.run_build(BuildInput {
+            path,
+            code,
+            api,
+            args,
+            decls,
+            cascade: &env.values,
+            kernel: self.kernel.clone(),
+            store: self.store.clone(),
+            cancel: Some(pass.cancel.clone()),
+            invoker: Some(Box::new(invoker)),
+            on_handle: Some(Box::new(move |handle| {
+                // Under the builds lock so this either sees the cancel
+                // flag or gets interrupted by cancel()'s iteration —
+                // cancel() landing before registration must not leave
+                // this build running.
+                let mut builds = pass_for_handle.builds.lock().unwrap();
+                if pass_for_handle.is_cancelled() {
+                    handle.interrupt();
+                }
+                builds.push(handle);
+                pushed_flag.store(true, Ordering::SeqCst);
+            })),
+        });
+        // Builds nest LIFO, so ours is the top of the stack; drop the
+        // handle now that the build is gone (cancel() stays O(live builds)).
         if pushed.load(Ordering::SeqCst) {
-            pass.isolates.lock().unwrap().pop();
+            pass.builds.lock().unwrap().pop();
         }
         {
-            let elapsed = started.elapsed();
+            let elapsed = clock::elapsed(started);
             let mut timers = pass.timers.lock().unwrap();
             let children = timers.pop().unwrap_or_default();
             if let Some(parent) = timers.last_mut() {
@@ -676,7 +682,7 @@ impl BuildEngine {
         for dep in &entry.deps {
             match dep {
                 Dep::Cascade { key, value } => {
-                    let current = odm_js::cascade_value_hash(env.get(key));
+                    let current = cascade_value_hash(env.get(key));
                     if current != *value {
                         return false;
                     }
@@ -814,10 +820,10 @@ impl Invoker for EngineInvoker {
         path: &str,
         args: &Value,
         cascade: &Map<String, Value>,
-    ) -> Result<Hash, odm_js::InvokeError> {
+    ) -> Result<Hash, InvokeError> {
         let child_env = self.env.with_cascade(cascade);
         self.engine.get_or_build(&self.pass, &self.chain, path, args, &child_env).map_err(|f| {
-            odm_js::InvokeError {
+            InvokeError {
                 identity: (f.kind != FailureKind::Cancelled).then(|| f.identity()),
                 message: f.message,
             }
@@ -827,4 +833,24 @@ impl Invoker for EngineInvoker {
 
 fn fail(path: &str, kind: FailureKind, message: impl Into<String>) -> BuildFailure {
     BuildFailure { path: path.to_string(), kind, message: message.into() }
+}
+
+/// Build timing that compiles everywhere: `Instant::now` panics on
+/// wasm32-unknown-unknown, so there stats report zero durations instead.
+mod clock {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn now() -> std::time::Instant {
+        std::time::Instant::now()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn elapsed(started: std::time::Instant) -> std::time::Duration {
+        started.elapsed()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn now() {}
+    #[cfg(target_arch = "wasm32")]
+    pub fn elapsed(_started: ()) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
 }

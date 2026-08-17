@@ -46,7 +46,7 @@ fn build_box(env: &JsEnv) -> Result<(), String> {
             store,
             cancel: None,
             invoker: None,
-            on_isolate: None,
+            on_handle: None,
         },
     )
     .map_err(|e| e.to_string())?;
@@ -113,7 +113,7 @@ fn snapshot_creation_inside_invoke() {
                     store,
                     cancel: None,
                     invoker: None,
-                    on_isolate: None,
+                    on_handle: None,
                 },
             )
             .map_err(|e| odm_js::InvokeError::from(e.to_string()))?;
@@ -139,7 +139,7 @@ fn snapshot_creation_inside_invoke() {
             store,
             cancel: None,
             invoker: Some(Box::new(SnapshottingInvoker)),
-            on_isolate: None,
+            on_handle: None,
         },
     );
     out.expect("outer build with nested snapshot creation");

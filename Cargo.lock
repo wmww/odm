@@ -2792,6 +2792,7 @@ dependencies = [
  "deno_error",
  "futures",
  "include_dir",
+ "odm-build",
  "odm-ir",
  "odm-js",
  "odm-kernel",

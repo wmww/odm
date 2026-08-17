@@ -5,112 +5,59 @@
 //! strictly LIFO on a thread — a nested invoke creates its own isolate, uses
 //! it, and drops it before the outer isolate resumes. Never interleave.
 
-mod ir_json;
 mod ops;
 mod session;
 mod snapshot;
-mod version;
 
-pub use ir_json::node_from_json;
-pub use session::{InvokeError, Invoker, LogLevel, LogLine, SessionState};
+pub use session::SessionState;
 pub use snapshot::JsEnv;
-pub use version::{ApiVersion, SUPPORTED, parse_doc, parse_pragma};
 
-/// Re-export so downstream crates can hold isolate handles without a direct
-/// deno_core dependency.
-pub use deno_core::v8::IsolateHandle;
-
-/// Canonical hash of a cascade value as recorded in `Dep::Cascade`
-/// (missing keys hash to a distinct sentinel). The scheduler must use this
-/// exact function when validating memo entries.
-pub fn cascade_value_hash(v: Option<&Value>) -> Hash {
-    match v {
-        Some(v) => odm_ir::hash_json(v),
-        None => Hash::of_bytes(ops::MISSING_CASCADE),
-    }
-}
+// The executor seam's types live in odm-build; re-export the ones this
+// crate's callers use alongside the V8 implementation.
+pub use odm_build::{
+    ApiVersion, BuildError, BuildInput, BuildOutput, EXTRACT_TIMEOUT, FailedBuild,
+    InterruptHandle, InvokeError, Invoker, LogLevel, LogLine, node_from_json,
+};
 
 use deno_core::error::JsError;
 use deno_core::{JsRuntime, PollEventLoopOptions, RuntimeOptions, serde_v8, v8};
-use odm_ir::Hash;
-use odm_store::Dep;
+use odm_build::BuildInterrupt;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[derive(Debug, thiserror::Error)]
-pub enum BuildError {
-    /// Syntax or runtime error in doohickey JS; agent-readable, includes stack.
-    #[error("{0}")]
-    Js(String),
-    #[error("build cancelled")]
-    Cancelled,
-    #[error("build output invalid: {0}")]
-    BadOutput(String),
-    #[error("internal: {0}")]
-    Internal(String),
-}
+/// [`InterruptHandle`] over V8 `TerminateExecution`. Terminating during
+/// module evaluation is safe: deno_core's mod_evaluate handles it, and the
+/// rusty_v8 #830 / v8 12379 crash needs top-level await machinery
+/// (stress-tested clean on v8 149 — see runtime.rs termination tests).
+struct IsolateInterrupt(v8::IsolateHandle);
 
-/// A failed build plus the console output it produced before failing. Logs
-/// stay data all the way up — each surface (CLI JSON, viewer panel) decides
-/// how to show them next to the error.
-#[derive(Debug)]
-pub struct FailedBuild {
-    pub error: BuildError,
-    pub logs: Vec<LogLine>,
-    /// Deps recorded up to the failure, so the scheduler can memoize pure
-    /// failures with entries that validate like any other.
-    pub deps: Vec<Dep>,
-}
-
-impl std::fmt::Display for FailedBuild {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.error.fmt(f)
+impl BuildInterrupt for IsolateInterrupt {
+    fn interrupt(&self) {
+        self.0.terminate_execution();
     }
 }
 
-impl From<BuildError> for FailedBuild {
-    fn from(error: BuildError) -> FailedBuild {
-        FailedBuild { error, logs: Vec::new(), deps: Vec::new() }
+/// The native executor: one fresh disposable isolate per build, created
+/// from the framework snapshot.
+impl odm_build::Executor for JsEnv {
+    fn run_build(&self, input: BuildInput<'_>) -> Result<BuildOutput, FailedBuild> {
+        run_build(self, input)
     }
-}
 
-pub struct BuildInput<'a> {
-    /// Project-relative path, used for module specifier + error messages.
-    pub path: &'a str,
-    pub code: &'a str,
-    /// API version from the file's `//! odm <version>` pragma; picks the
-    /// framework snapshot this build's isolate is created from.
-    pub api: ApiVersion,
-    /// Effective args: caller args validated against the file's declared
-    /// inputs, with defaults merged in by the scheduler.
-    pub args: &'a Value,
-    /// Input declarations for `ctx.input` routing/hydration, as JSON:
-    /// `{ name: { cascade: bool, type: string|null } }`.
-    pub decls: &'a Value,
-    /// The build's environment: cascade input values by name.
-    pub cascade: &'a HashMap<String, Value>,
-    pub kernel: Arc<odm_kernel::Kernel>,
-    pub store: Arc<odm_store::Store>,
-    pub cancel: Option<odm_kernel::CancelToken>,
-    /// Callback for nested `ctx.invoke()`; None makes invoke fail.
-    pub invoker: Option<Box<dyn Invoker>>,
-    /// Called with the isolate handle before any doohickey code runs
-    /// (module top level included); the scheduler may use it to
-    /// TerminateExecution from another thread. Terminating during module
-    /// evaluation is safe: deno_core's mod_evaluate handles it, and the
-    /// rusty_v8 #830 / v8 12379 crash needs top-level await machinery
-    /// (stress-tested clean on v8 149 — see runtime.rs termination tests).
-    pub on_isolate: Option<Box<dyn FnOnce(v8::IsolateHandle)>>,
-}
-
-#[derive(Debug)]
-pub struct BuildOutput {
-    /// Hash of the output `Node` in the store.
-    pub output: Hash,
-    pub deps: Vec<Dep>,
-    pub logs: Vec<LogLine>,
+    fn extract_export(
+        &self,
+        path: &str,
+        code: &str,
+        api: ApiVersion,
+        export: &str,
+        kernel: Arc<odm_kernel::Kernel>,
+        store: Arc<odm_store::Store>,
+        timeout: std::time::Duration,
+    ) -> Result<Option<Value>, BuildError> {
+        extract_export(self, path, code, api, export, kernel, store, timeout)
+    }
 }
 
 /// Run one doohickey build in a fresh disposable isolate.
@@ -131,7 +78,7 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
     rt.execute_script("odm:select-version", snapshot::select_version_script(input.api))
         .map_err(|e| BuildError::Internal(format!("select api version {}: {e}", input.api)))?;
 
-    let BuildInput { path, args, decls, cascade, kernel, store, cancel, invoker, on_isolate, .. } =
+    let BuildInput { path, args, decls, cascade, kernel, store, cancel, invoker, on_handle, .. } =
         input;
     let session = SessionState {
         kernel,
@@ -144,11 +91,13 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
     };
     rt.op_state().borrow_mut().put(session);
 
-    // Hand out the isolate handle before the module (whose top level is
+    // Hand out the interrupt handle before the module (whose top level is
     // arbitrary doohickey code) evaluates, so even `while(true){}` outside
     // build() stays terminable.
-    if let Some(cb) = on_isolate {
-        cb(rt.v8_isolate().thread_safe_handle());
+    if let Some(cb) = on_handle {
+        let handle: InterruptHandle =
+            Arc::new(IsolateInterrupt(rt.v8_isolate().thread_safe_handle()));
+        cb(handle);
     }
 
     let take_session = |rt: &mut JsRuntime| -> SessionState {
@@ -238,7 +187,7 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
         Err(e) => return Err(failed(e, &mut session)),
     };
 
-    let output = match ir_json::node_from_json(&store, &ir_value) {
+    let output = match node_from_json(&store, &ir_value) {
         Ok(o) => o,
         Err(m) => return Err(failed(BuildError::BadOutput(m), &mut session)),
     };
@@ -248,11 +197,6 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
         logs: std::mem::take(&mut session.logs),
     })
 }
-
-/// Default watchdog for [`extract_export`] module evaluation. Top level
-/// should be milliseconds; anything near this makes every build of the file
-/// unusably slow anyway.
-pub const EXTRACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Load a doohickey module (without calling its build()) and return one of
 /// its exports as JSON — `None` if the export is absent. The conformance
