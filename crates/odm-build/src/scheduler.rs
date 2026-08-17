@@ -450,9 +450,15 @@ impl BuildEngine {
         let rkey = RKey { env: env.hash, code: key.code, args: key.args };
 
         loop {
-            if let Some(entry) = self.store.memo_get(&key)
-                && self.validate(pass, chain, path, args_hash, &env, &entry)
+            // Candidates are MRU-first; a candidate recorded under another
+            // environment fails fast on its (up-front) cascade deps.
+            if let Some(entry) = self
+                .store
+                .memo_candidates(&key)
+                .into_iter()
+                .find(|e| self.validate(pass, chain, path, args_hash, &env, e))
             {
+                self.store.memo_promote(&key, &entry);
                 self.stats.memo_hits.fetch_add(1, Ordering::Relaxed);
                 pass.stats.lock().unwrap().memo_hits += 1;
                 // Replay the original run's console output so logs don't

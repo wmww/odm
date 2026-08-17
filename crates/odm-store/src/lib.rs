@@ -10,4 +10,4 @@ mod store;
 
 pub use generation::{Generation, GenerationId};
 pub use memo::{Dep, LogLine, MemoEntry, MemoKey};
-pub use store::{Object, RootPin, Store};
+pub use store::{MEMO_CAP, MEMO_PER_KEY, Object, RootPin, Store};

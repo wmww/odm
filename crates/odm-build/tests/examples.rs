@@ -144,6 +144,14 @@ fn piston_animates_and_memoizes_static_parts() {
     // sin(2π) ≈ -2.4e-16 and hashing is bit-exact.)
     let r0b = e.build_view(&e.start_pass(&sync, view_at(0.0))).unwrap();
     assert_eq!(r0.root, r0b.root, "same t, same scene hash");
+
+    // Replaying already-scrubbed frames is pure memo hits: the cache holds
+    // one entry per t seen, not just the latest.
+    let builds_after_scrub = e.stats.builds.load(std::sync::atomic::Ordering::Relaxed);
+    e.build_view(&e.start_pass(&sync, view_at(0.5))).unwrap();
+    e.build_view(&e.start_pass(&sync, view_at(0.0))).unwrap();
+    let builds_after_replay = e.stats.builds.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(builds_after_replay, builds_after_scrub, "playback after a scrub is free");
 }
 
 #[test]

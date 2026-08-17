@@ -78,11 +78,13 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   mark-sweep GC (roots = generation roots + memo outputs; quiescence-only;
   `Object::refs` walks the node graph as well as meshes, so a live root pins
   its whole subtree),
-  memo cache (key = code+args hashes; entry = recorded deps + output;
-  `Dep::Invoke` stores the actual args Value so validation can re-run
-  invokes, `Dep::Cascade` a value hash — missing keys hash a sentinel, use
-  `odm_js::cascade_value_hash`; eviction is whole-cache clear only, see
-  issues/memo-cache-policy.md).
+  memo cache (key = code+args hashes; per key a bounded MRU list of
+  entries — one per environment seen, `MEMO_PER_KEY` = 64 — so scrubbing
+  `t` revalidates instead of rebuilding; global LRU cap `MEMO_CAP` = 4096
+  entries since every entry's output is a GC root; entry = recorded deps +
+  output; `Dep::Invoke` stores the actual args Value so validation can
+  re-run invokes, `Dep::Cascade` a value hash — missing keys hash a
+  sentinel, use `odm_js::cascade_value_hash`).
 - `odm-kernel` — manifold-csg wrapper: primitives (cylinder along Z),
   extrude/revolve (around Z), booleans/hull with per-operand transforms,
   weld with boundary-edge diagnosis (Manifold's own error is bare
@@ -222,8 +224,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   deque ~8, gated on `viewer_attached()` = wake hook set, so headless pays
   nothing — `cmd_render` even skips the RGBA capture). Events are
   self-contained (flattened `Arc<RenderScene>` / RGBA pixels, never store
-  hashes — memo eviction keeps one entry per key, so display-time store
-  reads would dangle). Viewer side (viewer/activity.rs): card queue snaps
+  hashes — memo entries are LRU-evicted, so display-time store reads could
+  dangle). Viewer side (viewer/activity.rs): card queue snaps
   through at 1.2s DWELL, last card persists, pure `advance_cards` policy is
   unit-tested with injected time; raycast cards frame the ray side-on (yaw ⊥
   azimuth, pitch 0.5; near-vertical keeps default) and draw it via
@@ -251,10 +253,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   query never waits on another view's build (only its own, plus gc's few
   ms). Post-build store reads (inspect/flatten/render) are gate-free but
   hold a `Store::pin_root` guard (`query_view` takes it under the gate):
-  a one-off build's root is otherwise pinned only by its memo entry, and a
-  concurrent rebuild of the same (code, args) under different cascade
-  values — a viewer scrub — overwrites that entry, after which a publish's
-  gc would sweep the scene mid-read. (Published slot roots are pinned as
+  a one-off build's root is otherwise pinned only by its memo entry, and
+  memo entries can be LRU-evicted at any time (per-key and global caps),
+  after which a publish's gc would sweep the scene mid-read. (Published slot roots are pinned as
   generation roots instead.) The renderer has its own mutex (renders
   serialize with each other only). One grammar
   (2026-08, plans/cli-json-args.md): a CLI command's argument is the JSON

@@ -25,7 +25,10 @@ unless marked otherwise.
   (a) dependency-tracked context reads — a doohickey that never reads `t`
   has a memo entry valid for all t; (b) content-addressed outputs — the same
   object at n transforms is one geometry blob + one stored subtree + n tiny
-  wrapper nodes (IR children are hashes, so nothing is copied per placement).
+  wrapper nodes (IR children are hashes, so nothing is copied per placement);
+  (c) per-environment memo entries (bounded MRU per key, 2026-08-17) — a
+  t-reader keeps entries for recently seen t values, so playback after a
+  scrub is pure hits.
 - Geometry lives engine-side, content-addressed; JS holds opaque handles;
   vertex data crosses the boundary only on explicit request. Cross-isolate
   invoke forces serializable args — a feature: it enforces the IR discipline.

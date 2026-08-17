@@ -31,16 +31,59 @@ impl Object {
     }
 }
 
+/// Max memo entries kept per key. Deps (cascade values like `t`) are not
+/// part of the key, so one key holds one entry per environment seen; the
+/// cap bounds per-lookup validation work while keeping enough entries that
+/// timeline playback after a scrub stays free.
+pub const MEMO_PER_KEY: usize = 64;
+/// Max memo entries across all keys; past it, globally least-recently-used
+/// entries are evicted (each entry pins its output — and transitively its
+/// meshes — against GC, so the cache must be bounded).
+pub const MEMO_CAP: usize = 4096;
+
+struct MemoSlot {
+    entry: MemoEntry,
+    /// Global LRU stamp from `MemoState::clock`; unique per slot.
+    tick: u64,
+}
+
+#[derive(Default)]
+struct MemoState {
+    /// Per key, most-recently-used first.
+    map: HashMap<MemoKey, Vec<MemoSlot>>,
+    clock: u64,
+    /// Total entries across keys.
+    len: usize,
+}
+
+impl MemoState {
+    /// Drop globally least-recently-used entries until `target` remain.
+    fn evict(&mut self, target: usize) {
+        let excess = self.len.saturating_sub(target);
+        if excess == 0 {
+            return;
+        }
+        let mut ticks: Vec<u64> =
+            self.map.values().flat_map(|v| v.iter().map(|s| s.tick)).collect();
+        let (_, threshold, _) = ticks.select_nth_unstable(excess - 1);
+        let threshold = *threshold;
+        self.map.retain(|_, slots| {
+            slots.retain(|s| s.tick > threshold);
+            !slots.is_empty()
+        });
+        self.len -= excess;
+    }
+}
+
 /// Content-addressed store + generation registry + memo cache.
 pub struct Store {
     objects: RwLock<HashMap<Hash, Arc<Object>>>,
-    memo: RwLock<HashMap<MemoKey, MemoEntry>>,
+    memo: RwLock<MemoState>,
     gens: Mutex<GenState>,
     /// Refcounted temporary GC roots ([`pin_root`](Store::pin_root)): results
     /// being read outside any generation (one-off CLI builds). A memo entry
-    /// pins a build's output too, but only until the same (code, args) key is
-    /// rebuilt under different cascade values and overwritten — a pin holds
-    /// for as long as the reader needs it.
+    /// pins a build's output too, but only until the entry is evicted — a
+    /// pin holds for as long as the reader needs it.
     pins: Mutex<HashMap<Hash, usize>>,
 }
 
@@ -72,7 +115,7 @@ impl Store {
     pub fn new() -> Arc<Store> {
         Arc::new(Store {
             objects: RwLock::new(HashMap::new()),
-            memo: RwLock::new(HashMap::new()),
+            memo: RwLock::new(MemoState::default()),
             gens: Mutex::new(GenState { next: 0, live: HashMap::new() }),
             pins: Mutex::new(HashMap::new()),
         })
@@ -142,22 +185,72 @@ impl Store {
 
     // --- memo ---
 
+    /// The most recently used entry under `key` — what the last build or
+    /// validated hit of this (code, args) produced.
     pub fn memo_get(&self, key: &MemoKey) -> Option<MemoEntry> {
-        self.memo.read().unwrap().get(key).cloned()
+        self.memo.read().unwrap().map.get(key).and_then(|v| v.first()).map(|s| s.entry.clone())
     }
 
+    /// All entries under `key`, most recently used first. Deps are not part
+    /// of the key, so one entry per environment seen coexists (bounded by
+    /// [`MEMO_PER_KEY`]); the scheduler validates candidates in this order.
+    pub fn memo_candidates(&self, key: &MemoKey) -> Vec<MemoEntry> {
+        match self.memo.read().unwrap().map.get(key) {
+            Some(v) => v.iter().map(|s| s.entry.clone()).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Insert an entry as `key`'s most recent. Bounded: [`MEMO_PER_KEY`]
+    /// entries per key (least recent dropped) and [`MEMO_CAP`] overall
+    /// (globally least-recently-used dropped, with slack so evictions batch).
     pub fn memo_insert(&self, key: MemoKey, entry: MemoEntry) {
-        self.memo.write().unwrap().insert(key, entry);
+        let mut guard = self.memo.write().unwrap();
+        let st = &mut *guard;
+        st.clock += 1;
+        let slots = st.map.entry(key).or_default();
+        st.len += 1;
+        // Two racing passes can build identical entries; keep one.
+        if let Some(i) = slots.iter().position(|s| s.entry == entry) {
+            slots.remove(i);
+            st.len -= 1;
+        }
+        slots.insert(0, MemoSlot { entry, tick: st.clock });
+        if slots.len() > MEMO_PER_KEY {
+            slots.pop();
+            st.len -= 1;
+        }
+        if st.len > MEMO_CAP {
+            st.evict(MEMO_CAP - MEMO_CAP / 8);
+        }
     }
 
+    /// Mark `entry` (a validated hit) as `key`'s most recently used, for
+    /// both the per-key candidate order and the global LRU.
+    pub fn memo_promote(&self, key: &MemoKey, entry: &MemoEntry) {
+        let mut guard = self.memo.write().unwrap();
+        let st = &mut *guard;
+        if let Some(slots) = st.map.get_mut(key)
+            && let Some(i) = slots.iter().position(|s| s.entry == *entry)
+        {
+            st.clock += 1;
+            let mut slot = slots.remove(i);
+            slot.tick = st.clock;
+            slots.insert(0, slot);
+        }
+    }
+
+    /// Total memo entries across all keys.
     pub fn memo_len(&self) -> usize {
-        self.memo.read().unwrap().len()
+        self.memo.read().unwrap().len
     }
 
     /// Drop the whole memo cache. Always sound (consistency invariant does
-    /// not depend on the cache); finer eviction can come later.
+    /// not depend on the cache).
     pub fn memo_clear(&self) {
-        self.memo.write().unwrap().clear();
+        let mut st = self.memo.write().unwrap();
+        st.map.clear();
+        st.len = 0;
     }
 
     // --- gc ---
@@ -178,7 +271,7 @@ impl Store {
         }
         {
             let memo = self.memo.read().unwrap();
-            pending.extend(memo.values().map(|e| e.output));
+            pending.extend(memo.map.values().flat_map(|v| v.iter().map(|s| s.entry.output)));
         }
         pending.extend(self.pins.lock().unwrap().keys().copied());
 

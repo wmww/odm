@@ -135,16 +135,16 @@ fn cascade_only_invalidates_readers() {
     assert_eq!(builds(&e), 3, "only root (the t reader) rebuilds");
     assert_ne!(r0.root, r1.root);
 
-    // Same t again: sadly the (code,args) memo now stores t=1.0; t=0.0 is a
-    // rebuild of root only.
+    // Scrub back to t=0: the memo keeps an entry per environment seen, so
+    // the t=0 entry revalidates — no rebuild.
     let r0b = e.build_view(&e.start_pass(&sync, view_with(json!({ "t": 0.0 })))).unwrap();
-    assert_eq!(builds(&e), 4);
+    assert_eq!(builds(&e), 3, "t=0 entry still cached");
     assert_eq!(r0.root, r0b.root, "content addressing: same t, same scene hash");
 
     // Setting t=0 explicitly is the same environment as the declared
     // default: pure memo hit.
     e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
-    assert_eq!(builds(&e), 4, "explicit default == auto-provided default");
+    assert_eq!(builds(&e), 3, "explicit default == auto-provided default");
 }
 
 #[test]

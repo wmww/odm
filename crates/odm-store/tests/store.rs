@@ -1,5 +1,5 @@
 use odm_ir::{Canonical, Hash, Mesh, Node};
-use odm_store::{Dep, MemoEntry, MemoKey, Object, Store};
+use odm_store::{Dep, MEMO_CAP, MEMO_PER_KEY, MemoEntry, MemoKey, Object, Store};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -98,8 +98,8 @@ fn memo_output_survives_gc() {
 }
 
 /// The hazard a pin exists for: a memo entry pins a one-off build's output
-/// only until the same key is rebuilt under other cascade values (a scrub)
-/// and overwritten — the reader's pin must hold through that.
+/// only until the entry is evicted — the reader's pin must hold through
+/// that.
 #[test]
 fn pinned_root_survives_gc_until_dropped() {
     let store = Store::new();
@@ -136,6 +136,76 @@ fn memo_round_trip() {
     store.memo_insert(key, entry.clone());
     assert_eq!(store.memo_get(&key), Some(entry));
     assert_eq!(store.memo_len(), 1);
+}
+
+/// A fabricated entry whose deps record cascade `t` = `seed` and whose
+/// output hashes distinctly per seed.
+fn t_entry(seed: u64) -> MemoEntry {
+    MemoEntry {
+        deps: vec![Dep::Cascade { key: "t".into(), value: Hash::of_bytes(&seed.to_le_bytes()) }],
+        output: Hash::of_bytes(&(!seed).to_le_bytes()),
+        logs: vec![],
+    }
+}
+
+#[test]
+fn memo_keeps_entries_per_environment() {
+    let store = Store::new();
+    let key = MemoKey { code: Hash::of_bytes(b"c"), args: Hash::of_bytes(b"a") };
+    let out0 = store.put(mesh_obj(0.0));
+    let out1 = store.put(mesh_obj(1.0));
+    let e0 = MemoEntry { output: out0, ..t_entry(0) };
+    let e1 = MemoEntry { output: out1, ..t_entry(1) };
+
+    store.memo_insert(key, e0.clone());
+    store.memo_insert(key, e1.clone());
+    assert_eq!(store.memo_len(), 2, "distinct deps coexist under one key");
+    assert_eq!(store.memo_get(&key), Some(e1.clone()), "most recent first");
+    assert_eq!(store.memo_candidates(&key), vec![e1.clone(), e0.clone()]);
+
+    store.gc();
+    assert!(store.contains(out0) && store.contains(out1), "every entry's output is a gc root");
+
+    store.memo_promote(&key, &e0);
+    assert_eq!(store.memo_candidates(&key), vec![e0.clone(), e1.clone()]);
+
+    // Re-inserting an existing entry dedups rather than duplicating.
+    store.memo_insert(key, e1.clone());
+    assert_eq!(store.memo_len(), 2);
+    assert_eq!(store.memo_candidates(&key), vec![e1, e0]);
+}
+
+#[test]
+fn memo_per_key_cap_drops_least_recent() {
+    let store = Store::new();
+    let key = MemoKey { code: Hash::of_bytes(b"c"), args: Hash::of_bytes(b"a") };
+    for i in 0..(MEMO_PER_KEY as u64 + 1) {
+        store.memo_insert(key, t_entry(i));
+    }
+    assert_eq!(store.memo_len(), MEMO_PER_KEY);
+    let candidates = store.memo_candidates(&key);
+    assert_eq!(candidates.first(), Some(&t_entry(MEMO_PER_KEY as u64)));
+    assert!(!candidates.contains(&t_entry(0)), "least recent entry evicted");
+}
+
+#[test]
+fn memo_global_cap_evicts_lru_across_keys() {
+    let store = Store::new();
+    let key_of = |i: u64| MemoKey {
+        code: Hash::of_bytes(&i.to_le_bytes()),
+        args: Hash::of_bytes(b"a"),
+    };
+    for i in 0..(MEMO_CAP as u64) {
+        store.memo_insert(key_of(i), t_entry(i));
+    }
+    // Touch key 0 so it is no longer the LRU, then overflow the cap.
+    store.memo_promote(&key_of(0), &t_entry(0));
+    store.memo_insert(key_of(MEMO_CAP as u64), t_entry(MEMO_CAP as u64));
+    assert!(store.memo_len() <= MEMO_CAP);
+    assert!(store.memo_len() > MEMO_CAP / 2, "eviction batches, not clears");
+    assert!(store.memo_get(&key_of(0)).is_some(), "recently touched survives");
+    assert!(store.memo_get(&key_of(1)).is_none(), "least recently used evicted");
+    assert!(store.memo_get(&key_of(MEMO_CAP as u64)).is_some(), "newest survives");
 }
 
 #[test]

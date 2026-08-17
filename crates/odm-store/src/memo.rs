@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 /// Memo lookup key. Dependencies are deliberately NOT part of the key — they
 /// are only known after running — so entries store recorded deps which the
-/// scheduler validates Salsa-style on hit.
+/// scheduler validates Salsa-style on hit. The store keeps a bounded MRU
+/// list of entries per key (one per environment seen), so scrubbing a
+/// cascade value like `t` back and forth revalidates instead of rebuilding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MemoKey {
     /// Hash of the doohickey's source code.

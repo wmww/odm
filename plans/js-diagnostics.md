@@ -37,9 +37,8 @@ Where that stands today:
   item 5 is the fix, and item 6 depends on its representation.
 - Deliberate carve-outs, not violations: `"stats": true` is the *one*
   surface that intentionally exposes run counts and cache behavior —
-  that's its purpose (see issues/memo-cache-policy.md's thrash
-  observability); engine-host warnings (item 2) are session events, not
-  build output, hence a separate channel.
+  that's its purpose (cache-thrash observability); engine-host warnings
+  (item 2) are session events, not build output, hence a separate channel.
 
 Second axis: **errors are per-view, not per-doohickey**. (path + inputs +
 cascades) determines the result; most doohickeys fail identically at any
@@ -330,7 +329,8 @@ Two costs to carry consciously:
 Also note: the sweep materializes every standalone file's default-view
 output in the memo cache (meshes pinned, kernel cache live) — same
 footprint as "user opened every file once", automatic per project. Fine
-at current scale; feeds the issues/memo-cache-policy.md ledger.
+at current scale, and bounded by the memo cache's per-key MRU +
+global LRU caps.
 
 Reporting: a `health` section next to `builds` — **failures only**:
 `{path, error, stale?: true}` per file whose last-evaluated check
@@ -406,8 +406,10 @@ exactly like success logs replay today.
   fail in the caller's frame before the memo key exists; nothing to
   memoize, and they're cheap to re-derive.
 - Store ripples: failure entries pin no output, so `Store::gc`'s
-  memo-output roots skip them; one-entry-per-key overwrite and
-  no-eviction (issues/memo-cache-policy.md) apply unchanged.
+  memo-output roots skip them; the cache policy (bounded MRU per key +
+  global LRU cap, 2026-08-17) applies unchanged — failure entries live in
+  the same per-key lists and are evicted the same way, with smaller
+  memory pressure since they pin no meshes.
 
 ## Order
 
