@@ -173,14 +173,18 @@ desktop background-build machinery.
   wasm-ld live at `~/.local/opt/wasm-cxx/` via
   `WASM_CXX_SHIM_LIBCXX_HEADERS`/`WASM_CXX_SHIM_WASM_LD` (see the spike
   README).
-- *egui+wgpu web hello* (still open): our theme + bitmap fonts + one
-  mesh on WebGPU; check font crispness at integer scaling, and that the
-  depth-peel pass structure validates on a browser device (limits: peel
-  textures, Rgba16Float blend).
+- *egui+wgpu web hello*: **DONE, green** (2026-08-17,
+  `spikes/web-hello/` — kept as reference until the web runtime folds it
+  in). Chromium 151 / Vulkan / RADV, `Backends::BROWSER_WEBGPU` forced
+  (no fallback): full pass structure validates — depth peel, Rgba16Float
+  blend, line-quad wires/grid with fade, overlays, supersample 1×/2×/4× —
+  no validation errors, correct layering. Bitmap fonts crisp with
+  `pixels_per_point` rounded to integer. eframe web +
+  `Renderer::with_device` + the viewer's OffscreenTarget structure map
+  1:1. 8.0 MB wasm at `opt-level="s"` before any size pass.
+  `wasm-bindgen-cli` must match the Cargo.lock pin (0.2.126).
 
-Renderer spike green → commit to the plan; red → rethink (three.js
-fallback only becomes a question if the *renderer* spike fails, which is
-the unlikely one).
+Phase 0 is complete: both spikes green — committed to the plan.
 
 **Phase 1 — seams in existing code** (desktop-neutral refactors, each
 landable alone):
