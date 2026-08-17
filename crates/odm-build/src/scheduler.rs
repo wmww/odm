@@ -425,7 +425,7 @@ impl BuildEngine {
         // Boundary validation: every arg must name a declared (non-cascade)
         // input and pass its schema; declared defaults fill the rest. The
         // merged "effective args" are what the build sees and memoizes on.
-        let effective = effective_args(path, meta, args)
+        let effective = effective_args(path, meta, args, chain.is_empty())
             .map_err(|msg| fail(path, FailureKind::Input, msg))?;
         let args = Value::Object(effective);
         let args_hash = hash_json(&args);
@@ -738,10 +738,14 @@ struct ChainLink {
 }
 
 /// Validate caller args against the declared inputs and merge in defaults.
+/// `at_view` switches the unknown-input wording: view args are values
+/// pinned on a view/tab (the file itself may be fine), invoke args are the
+/// calling code's.
 pub(crate) fn effective_args(
     path: &str,
     meta: &Meta,
     args: &Value,
+    at_view: bool,
 ) -> Result<Map<String, Value>, String> {
     let empty = Map::new();
     let args = match args {
@@ -749,20 +753,30 @@ pub(crate) fn effective_args(
         Value::Null => &empty,
         _ => return Err(format!("{path}: args must be an object")),
     };
+    // All unknown names in one error, not one per rebuild.
+    let unknown: Vec<&String> = args.keys().filter(|n| !meta.inputs.contains_key(*n)).collect();
+    if !unknown.is_empty() {
+        let names = quoted(&unknown);
+        let (s, them) = if unknown.len() == 1 { ("", "it") } else { ("s", "them") };
+        return Err(if at_view {
+            format!(
+                "{path}: unknown input{s} {names} in the view's pinned values — the file no \
+                 longer declares {them}; clear {them} from the view (the file itself may be \
+                 fine). {}{}",
+                declared_args(meta),
+                cascade_note(meta)
+            )
+        } else {
+            format!(
+                "{path}: unknown input{s} {names} in args; {}{}",
+                declared_args(meta),
+                cascade_note(meta)
+            )
+        });
+    }
     let mut effective = Map::new();
     for (name, value) in args {
-        let Some(input) = meta.inputs.get(name) else {
-            let declared: Vec<&str> = meta
-                .inputs
-                .iter()
-                .filter(|(_, i)| !i.cascade)
-                .map(|(n, _)| n.as_str())
-                .collect();
-            return Err(format!(
-                "{path}: unknown input {name:?} in args; declared args: {}",
-                if declared.is_empty() { "(none)".into() } else { declared.join(", ") }
-            ));
-        };
+        let input = &meta.inputs[name];
         if input.cascade {
             return Err(format!(
                 "{path}: {name:?} is a cascade input — it travels in the invoke's cascade \
@@ -772,6 +786,7 @@ pub(crate) fn effective_args(
         let v = input.accept(name, value).map_err(|msg| format!("{path}: {msg}"))?;
         effective.insert(name.clone(), v);
     }
+    let mut missing: Vec<&String> = Vec::new();
     for (name, input) in &meta.inputs {
         if input.cascade || effective.contains_key(name) {
             continue;
@@ -780,14 +795,43 @@ pub(crate) fn effective_args(
             Some(d) => {
                 effective.insert(name.clone(), d.clone());
             }
-            None => {
-                return Err(format!(
-                    "{path}: required input {name:?} was not passed (and has no default)"
-                ));
-            }
+            None => missing.push(name),
         }
     }
+    if !missing.is_empty() {
+        let names = quoted(&missing);
+        return Err(if missing.len() == 1 {
+            format!("{path}: required input {names} was not passed (and has no default)")
+        } else {
+            format!("{path}: required inputs {names} were not passed (and have no defaults)")
+        });
+    }
     Ok(effective)
+}
+
+fn quoted(names: &[&String]) -> String {
+    names.iter().map(|n| format!("{n:?}")).collect::<Vec<_>>().join(", ")
+}
+
+fn declared_args(meta: &Meta) -> String {
+    let plain: Vec<&str> =
+        meta.inputs.iter().filter(|(_, i)| !i.cascade).map(|(n, _)| n.as_str()).collect();
+    format!(
+        "declared args: {}",
+        if plain.is_empty() { "(none)".into() } else { plain.join(", ") }
+    )
+}
+
+/// Cascade inputs are settable too (on the view, or an invoke's cascade) —
+/// omitting them from the error read as "not settable at all".
+fn cascade_note(meta: &Meta) -> String {
+    let cascade: Vec<&str> =
+        meta.inputs.iter().filter(|(_, i)| i.cascade).map(|(n, _)| n.as_str()).collect();
+    if cascade.is_empty() {
+        String::new()
+    } else {
+        format!("; cascade inputs (set on the view or via cascade, not args): {}", cascade.join(", "))
+    }
 }
 
 /// The declaration table `ctx.input` routes and hydrates with:

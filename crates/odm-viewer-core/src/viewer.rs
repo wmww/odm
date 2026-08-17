@@ -49,7 +49,9 @@ impl Default for Viewer {
 impl Viewer {
     /// Pull the tab's latest published build; re-flatten on change. `keep`
     /// names extra GPU-cached meshes to survive the prune (the desktop's
-    /// activity cards; pass `|_| false` otherwise).
+    /// activity cards; pass `|_| false` otherwise). True when the tab's
+    /// values changed (stale pinned args dropped, view resubmitted) — the
+    /// host's cue to persist tabs.
     pub fn poll_published(
         &mut self,
         engine: &dyn Engine,
@@ -57,10 +59,10 @@ impl Viewer {
         ctx: &egui::Context,
         renderer: &mut Renderer,
         keep: &dyn Fn(&odm_ir::Hash) -> bool,
-    ) {
+    ) -> bool {
         let p = engine.published(&tab.slot);
         if p.revision == tab.published.revision {
-            return;
+            return false;
         }
         let mut selection_reset = false;
         if let Some((root_hash, root_obj)) = &p.root
@@ -71,10 +73,11 @@ impl Viewer {
             // children/meshes may race a GC of a superseding build; on a miss
             // keep the old scene and retry next poll (revision stays
             // unrecorded).
-            let retry = |what: &str, ctx: &egui::Context| {
+            let retry = |what: &str, ctx: &egui::Context| -> bool {
                 eprintln!("viewer {what} failed (retrying next poll)");
                 // Nothing else need wake us, so book the retry ourselves.
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                false
             };
             let store = engine.store();
             let scene = match flatten_node(store, root) {
@@ -99,6 +102,13 @@ impl Viewer {
         if selection_reset {
             self.set_selection(engine, tab, Vec::new());
         }
+        // A failed build over stale pinned args (the target dropped or
+        // renamed inputs) can only keep failing; drop them and resubmit.
+        if tab.prune_stale_args() {
+            engine.set_view(&tab.slot, tab.view());
+            return true;
+        }
+        false
     }
 
     /// F (and View ▸ Frame): fit the selection if there is one, else the whole

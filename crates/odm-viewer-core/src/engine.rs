@@ -3,7 +3,7 @@
 //! queries — everything is a view. The desktop engine implements this over
 //! `EngineState`; the web host will implement it over the wasm build loop.
 
-use odm_build::{InputReport, View};
+use odm_build::{InputReport, ReportEntry, View};
 use odm_render::Instance;
 use odm_store::{LogLine, Object, Store};
 use std::sync::Arc;
@@ -29,6 +29,11 @@ pub struct Published {
     /// Fall-through report of the last successful build: the view-settable
     /// inputs (the input panel's data source).
     pub report: Arc<InputReport>,
+    /// The target's declared inputs at the last *failed* build, when its
+    /// meta was still extractable — what [`crate::Tab::prune_stale_args`]
+    /// drops stale pinned args against. `None` on success (the report is
+    /// fresher) or when the failure precedes meta (scan error, broken meta).
+    pub declared: Option<Arc<Vec<ReportEntry>>>,
 }
 
 /// What the core asks of its host. Everything a tab draws comes back through

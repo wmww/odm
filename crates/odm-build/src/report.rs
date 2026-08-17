@@ -303,7 +303,9 @@ impl BuildEngine {
         let Some(source) = pass.snapshot().sources.get(path) else { return };
         let meta = self.meta(path, source);
         let Ok(meta) = meta.as_ref() else { return };
-        let Ok(effective) = crate::scheduler::effective_args(path, meta, args) else { return };
+        let Ok(effective) = crate::scheduler::effective_args(path, meta, args, false) else {
+            return;
+        };
         let args_hash = hash_json(&Value::Object(effective));
 
         // A node can be reached along many paths (shared parts); its
@@ -388,7 +390,7 @@ impl BuildEngine {
         if meta.inputs.get(name).is_some_and(|i| i.cascade) {
             return true;
         }
-        let Ok(effective) = crate::scheduler::effective_args(path, meta, args) else {
+        let Ok(effective) = crate::scheduler::effective_args(path, meta, args, false) else {
             return true;
         };
         let args_hash = hash_json(&Value::Object(effective));

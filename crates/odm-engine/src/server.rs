@@ -322,6 +322,7 @@ mod tests {
             &odm_build::View::of("root.js"),
             "root.js: boom".into(),
             vec![],
+            None,
         );
         let mut reply = String::new();
         reader.read_line(&mut reply).unwrap();

@@ -31,9 +31,7 @@ pub enum Event {
 pub fn apply(tab: &mut Tab, report: &InputReport, events: Vec<Event>) {
     for event in events {
         match event {
-            Event::Set(section, name, value) => {
-                tab.set_values_mut(section).insert(name, value);
-            }
+            Event::Set(section, name, value) => set_or_clear(tab, report, section, name, value),
             Event::Clear(section, name) => {
                 tab.set_values_mut(section).remove(&name);
             }
@@ -48,12 +46,45 @@ pub fn apply(tab: &mut Tab, report: &InputReport, events: Vec<Event>) {
                             .find(|e| &e.name == input)
                             .map(section_of)
                             .unwrap_or(Section::Cascade);
-                        tab.set_values_mut(section).insert(input.clone(), value.clone());
+                        set_or_clear(tab, report, section, input.clone(), value.clone());
                     }
                 }
             }
             Event::Play(on) => tab.playing = on,
         }
+    }
+}
+
+/// Pin a set value — unless it equals the input's declared default, which
+/// clears the pin instead: "set to the default" and "cleared to the
+/// default" are one state, not two (the × would otherwise claim a
+/// difference that isn't there).
+fn set_or_clear(tab: &mut Tab, report: &InputReport, section: Section, name: String, value: Value) {
+    let default = report
+        .inputs
+        .iter()
+        .find(|e| e.name == name && section_of(e) == section)
+        .map(|e| &e.default);
+    if default.is_some_and(|d| same_value(&value, d)) {
+        tab.set_values_mut(section).remove(&name);
+    } else {
+        tab.set_values_mut(section).insert(name, value);
+    }
+}
+
+/// Value equality with numbers compared numerically — a trackbar emits
+/// floats while defaults are often written as integers, and 5 must equal
+/// 5.0 here.
+pub(crate) fn same_value(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| same_value(a, b))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len() && x.iter().all(|(k, va)| y.get(k).is_some_and(|vb| same_value(va, vb)))
+        }
+        _ => a == b,
     }
 }
 
@@ -152,7 +183,13 @@ fn control(
         if let Some(d) = &entry.description {
             label.on_hover_text(d);
         }
-        let is_set = tab.set_values(section).contains_key(&name);
+        // A pinned value equal to the default (possible via old persisted
+        // tabs; `apply` clears the pin on set) shows no × either — "set to
+        // the default" must not look different from "cleared".
+        let is_set = tab
+            .set_values(section)
+            .get(&name)
+            .is_some_and(|v| !same_value(v, &entry.default));
         if is_set && theme::button(ui, "×").clicked() {
             events.push(Event::Clear(section, name.clone()));
         }
@@ -474,6 +511,51 @@ mod tests {
         assert_eq!(h.tab.set_args["height"], json!(42));
         h.frame(Vec::new());
         assert_eq!(h.field_text("height"), "42");
+    }
+
+    /// Setting an input to its declared default is a clear, not a pin: the
+    /// key leaves the tab and the × goes away — "manually set to the
+    /// default" and "cleared to the default" are one state, not two.
+    #[test]
+    fn setting_the_default_clears_the_pin() {
+        let mut h = Harness::new(box_report());
+        h.click_at(h.field_center("height"));
+        h.key(egui::Key::A, egui::Modifiers::COMMAND);
+        h.frame(vec![egui::Event::Text("42".into())]);
+        h.key(egui::Key::Enter, egui::Modifiers::default());
+        assert_eq!(h.tab.set_args["height"], json!(42));
+        h.frame(Vec::new());
+        assert!(h.texts.iter().any(|(_, t)| t == "×"), "a pinned value shows ×");
+
+        h.click_at(h.field_center("height"));
+        h.key(egui::Key::A, egui::Modifiers::COMMAND);
+        h.frame(vec![egui::Event::Text("30".into())]);
+        h.key(egui::Key::Enter, egui::Modifiers::default());
+        assert!(!h.tab.set_args.contains_key("height"), "typing the default clears the pin");
+        h.frame(Vec::new());
+        assert!(!h.texts.iter().any(|(_, t)| t == "×"));
+        assert_eq!(h.field_text("height"), "30");
+    }
+
+    /// A preset value equal to the declared default doesn't pin either, and
+    /// a legacy pinned-at-default value (old persisted tabs; floats vs
+    /// integer defaults) shows no ×.
+    #[test]
+    fn default_valued_pins_show_no_x() {
+        let mut h = Harness::new(InputReport {
+            inputs: vec![number_entry("height", 30), number_entry("wall", 3)],
+            presets: vec![preset("thin", json!({ "height": 30, "wall": 1 }))],
+            ..Default::default()
+        });
+        h.click_text("thin");
+        assert!(!h.tab.set_args.contains_key("height"), "preset at the default doesn't pin");
+        assert_eq!(h.tab.set_args["wall"], json!(1));
+
+        // 30.0 == 30: a float pin at an integer default is still "unset".
+        h.tab.set_args.insert("height".into(), json!(30.0));
+        h.frame(Vec::new());
+        let xs = h.texts.iter().filter(|(_, t)| t == "×").count();
+        assert_eq!(xs, 1, "only wall's pin shows an ×");
     }
 
     /// Leaving a field without Enter discards the edit instead of applying

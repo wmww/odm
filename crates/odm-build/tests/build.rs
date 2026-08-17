@@ -247,6 +247,20 @@ fn inputs_validate_at_boundaries() {
     assert_eq!(err.kind, FailureKind::Input);
     assert!(err.message.contains("unknown input \"nope\""), "{}", err.message);
 
+    // All unknown pinned values in one error — not one per rebuild —
+    // blamed on the view's pinned values rather than the file, with the
+    // settable list including cascade inputs.
+    let bad =
+        View { path: "wheel.js".into(), args: obj(json!({ "gone": 2, "nope": 1 })), cascade: Map::new() };
+    let err = e.build_view(&e.start_pass(&sync, bad)).unwrap_err();
+    assert!(
+        err.message.contains("\"gone\"") && err.message.contains("\"nope\""),
+        "both at once: {}",
+        err.message
+    );
+    assert!(err.message.contains("pinned values"), "{}", err.message);
+    assert!(err.message.contains("cascade inputs") && err.message.contains("t"), "{}", err.message);
+
     // A cascade value that fails the reader's schema errors at that reader
     // (the kind flattens to Js across the invoke boundary, like any nested
     // failure; the message keeps the story).

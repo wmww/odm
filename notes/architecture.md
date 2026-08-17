@@ -424,6 +424,22 @@ frozen at its first-frame value, blind to presets/×):
   build fails). The tab is the only writer of view-level values, so unset
   always means "resolves to the default".
 
+Two behaviors added 2026-08-17 (issues/stale-pinned-view-inputs):
+
+- Setting a value equal to its declared default *clears* the pin instead
+  (`inputs::set_or_clear`, numbers compared numerically), and the × only
+  shows for a real difference — "set to the default" and "cleared" are one
+  state, in the tab, the view identity, and viewer.json alike.
+- Stale pinned args (the target dropped/renamed an input) self-heal: a
+  failed slot build publishes the target's declared inputs
+  (`Published.declared`, cleared on success), `Tab::prune_stale_args` drops
+  pinned args no longer declared plain — only when the failure was built
+  from the tab's current values, and never touching cascade values — and
+  `poll_published` resubmits (returns true = host persists tabs). The
+  build error itself reports *all* unknown view args in one message,
+  blamed on the view's pinned values, with cascade inputs listed as
+  settable (`effective_args`'s `at_view`).
+
 Text fields get stable explicit egui ids (`("input", section, name)` via
 `theme::text_edit`'s id param) so focus/cursor state survives rows
 appearing above them — and so tests can find them. `inputs.rs` tests drive

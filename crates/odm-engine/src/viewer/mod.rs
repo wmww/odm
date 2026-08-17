@@ -754,10 +754,10 @@ impl eframe::App for ViewerApp {
         let state = self.state();
         {
             let Self { core, tabs, active, renderer, activity, .. } = &mut *self;
-            core.poll_published(&*state, &mut tabs[*active], ui.ctx(), renderer, &|h| {
+            let pruned = core.poll_published(&*state, &mut tabs[*active], ui.ctx(), renderer, &|h| {
                 activity.keeps(h)
             });
-            if core.advance_transport(ui.ctx(), &*state, &mut tabs[*active]) {
+            if core.advance_transport(ui.ctx(), &*state, &mut tabs[*active]) || pruned {
                 tabs::save(state.project(), tabs, *active);
             }
         }

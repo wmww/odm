@@ -807,7 +807,7 @@ impl EngineState {
             Ok(s) => s,
             Err(e) => {
                 drop(gate);
-                self.publish_failure(slot, None, &view, e.to_string(), Vec::new());
+                self.publish_failure(slot, None, &view, e.to_string(), Vec::new(), None);
                 return Err(CmdError::new("scan", e.to_string()));
             }
         };
@@ -816,6 +816,20 @@ impl EngineState {
         *self.queue.active.lock().unwrap() = Some((slot.to_string(), pass.clone()));
         let result = self.build.build_view(&pass);
         *self.queue.active.lock().unwrap() = None;
+        // A failure publish carries the target's declared inputs, so the
+        // viewer can drop pinned args the file no longer takes. Extracted
+        // under the gate (meta evaluation can touch the store) — cached
+        // from the build itself in practice.
+        let declared = match &result {
+            Err(f) if f.kind != FailureKind::Cancelled => {
+                sync.snapshot.sources.get(&view.path).and_then(|s| {
+                    self.build.meta(&view.path, s).as_ref().as_ref().ok().map(|m| {
+                        odm_build::declared_entries(&view.path, m, &view)
+                    })
+                })
+            }
+            _ => None,
+        };
         drop(gate);
         match result {
             Ok(res) => {
@@ -832,6 +846,7 @@ impl EngineState {
                         &view,
                         f.message.clone(),
                         logs.clone(),
+                        declared,
                     );
                 }
                 Err(CmdError::from_failure(&f, logs))
@@ -927,6 +942,7 @@ impl EngineState {
         entry.logs = Arc::new(logs);
         entry.building = self.queue.pending.lock().unwrap().iter().any(|s| s == slot);
         entry.report = Arc::new(report);
+        entry.declared = None;
         // Every active slot's current-generation root stays pinned; then GC.
         let roots: Vec<odm_ir::Hash> = published
             .values()
@@ -944,6 +960,8 @@ impl EngineState {
     }
 
     /// `generation: None` (e.g. scan errors) keeps the last known generation.
+    /// `declared` is the target's declared inputs when meta was extractable —
+    /// what a viewer tab prunes stale pinned args against.
     /// pub(crate) for the socket tests (`server::tests`).
     pub(crate) fn publish_failure(
         &self,
@@ -952,6 +970,7 @@ impl EngineState {
         view: &View,
         message: String,
         logs: Vec<(String, LogLine)>,
+        declared: Option<Vec<odm_build::ReportEntry>>,
     ) {
         let mut published = self.published.lock().unwrap();
         let entry = published.entry(slot.to_string()).or_default();
@@ -963,6 +982,7 @@ impl EngineState {
         entry.error = Some(message);
         entry.logs = Arc::new(logs);
         entry.building = self.queue.pending.lock().unwrap().iter().any(|s| s == slot);
+        entry.declared = declared.map(Arc::new);
         drop(published);
         self.wake();
         self.wake_pollers();
@@ -1358,12 +1378,12 @@ pub(crate) mod tests {
 
         // ok → error emits; the same failure republished does not; a
         // different message does (the error is the value).
-        state.publish_failure(DEFAULT_SLOT, None, &view, "boom".into(), vec![]);
+        state.publish_failure(DEFAULT_SLOT, None, &view, "boom".into(), vec![], None);
         assert!(matches!(poll(&state, &base), PollOutcome::Changed));
         let base = state.diagnostic_map();
-        state.publish_failure(DEFAULT_SLOT, None, &view, "boom".into(), vec![]);
+        state.publish_failure(DEFAULT_SLOT, None, &view, "boom".into(), vec![], None);
         assert!(matches!(poll(&state, &base), PollOutcome::TimedOut));
-        state.publish_failure(DEFAULT_SLOT, None, &view, "boom 2".into(), vec![]);
+        state.publish_failure(DEFAULT_SLOT, None, &view, "boom 2".into(), vec![], None);
         assert!(matches!(poll(&state, &base), PollOutcome::Changed));
 
         // Stale flips are not part of the value: a queued rebuild of the
@@ -1380,8 +1400,38 @@ pub(crate) mod tests {
         // A reconnecting follower starts from the empty baseline and
         // re-reports a standing failure instead of losing it.
         state.views.lock().unwrap().insert("tab-1".into(), view.clone());
-        state.publish_failure("tab-1", None, &view, "still broken".into(), vec![]);
+        state.publish_failure("tab-1", None, &view, "still broken".into(), vec![], None);
         assert!(matches!(poll(&state, &DiagnosticMap::new()), PollOutcome::Changed));
+    }
+
+    /// The stale-pinned-view-inputs loop: a tab pinning args the file no
+    /// longer declares fails its build, the failure publish carries the
+    /// target's declared inputs, and the tab prunes + resubmits to a build
+    /// that succeeds.
+    #[test]
+    fn stale_pinned_args_heal_through_the_failure_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("root.js"),
+            "export const meta = { inputs: { a_count: { type: 'number', default: 2 } } };\n\
+             export default (ctx) => odm.box([ctx.input('a_count'), 1, 1]);",
+        )
+        .unwrap();
+        let state = EngineState::new(dir.path().to_path_buf(), env()).unwrap();
+
+        let mut tab = odm_viewer_core::Tab::new("tab-1".into(), "root.js".into());
+        tab.set_args.insert("bays_x".into(), json!(4));
+        assert!(state.build_slot(&tab.slot, tab.view()).is_err());
+        tab.published = state.published(&tab.slot);
+        let err = tab.published.error.clone().expect("stale pinned arg fails the build");
+        assert!(
+            err.contains("\"bays_x\"") && err.contains("view"),
+            "the error names the pin and blames the view, not the file: {err}"
+        );
+
+        assert!(tab.prune_stale_args(), "the failure's declared inputs prune the stale arg");
+        assert!(state.build_slot(&tab.slot, tab.view()).is_ok());
+        assert!(state.published(&tab.slot).error.is_none());
     }
 
     /// Headless parity: the build loop alone (no viewer) keeps the default
