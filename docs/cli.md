@@ -82,7 +82,7 @@ the scene tree, measured exactly: names, bounds, counts — and, on the root ent
 - `node` (string) — one node, by the name you gave it (`"seat"`) or by index path (`"1/0/2"`); default the root
 - `depth` (number) — expand this many levels below the addressed node
 - `recursive` (bool) — expand fully
-- `full` (bool) — every measurement field, repeats expanded
+- `full` (bool) — every measurement field, repeats expanded; `fields` overrides it
 - `fields` (array of strings) — exactly these fields; per-node: `name`, `color`, `bounds`, `tris`, `verts`, `volume`, `area`, `position`, `rotation`, `scale`, `matrix`, `world_matrix`; view-level, on the root entry only: `description`, `inputs` (every settable input: value, type/range, default, declaration site, plain vs cascade), `presets`
 
 ### render
@@ -211,7 +211,11 @@ siblings collapse into one entry with `repeat: N`: their ids run on
 consecutively from the one shown, and they differ only in placement.
 `full` adds `verts`, `volume`, `area` (world-space, computed on demand)
 and the node's own `position`/`rotation`/`scale`, and expands the
-repeats. `fields` picks exactly what you want.
+repeats. Like `tris`, `volume` and `area` are subtree totals — per-solid
+sums, so overlapping siblings double-count shared space (`clearance` is
+the overlap check); if any part of a subtree fails to measure, the key
+is omitted rather than report a partial sum. `fields` picks exactly what
+you want, and overrides `full` when both are given.
 
 **The view's interface.** The root entry (`""` *is* the view) carries
 the view-level fields: `description`, `inputs` — every settable name in

@@ -167,7 +167,11 @@ impl Meta {
         };
         for key in top.keys() {
             if key != "inputs" && key != "presets" {
-                return Err(format!("unknown meta key {key:?}; allowed: inputs, presets"));
+                let hint = match key.as_str() {
+                    "description" => "; the file's description is its leading `//!` comment block",
+                    _ => "",
+                };
+                return Err(format!("unknown meta key {key:?}; allowed: inputs, presets{hint}"));
             }
         }
 
@@ -429,6 +433,7 @@ mod tests {
         let cases: Vec<(Value, &str)> = vec![
             (json!(7), "must be an object"),
             (json!({"input": {}}), "unknown meta key"),
+            (json!({"description": "a box"}), "leading `//!` comment block"),
             (json!({"inputs": {"w": {"type": "number", "minimun": 3}}}), "unknown key \"minimun\""),
             (json!({"inputs": {"w": {"type": "number", "cascadee": true}}}), "unknown key \"cascadee\""),
             (json!({"inputs": {"w": {"type": "float"}}}), "unknown type \"float\""),

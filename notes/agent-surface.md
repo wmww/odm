@@ -106,6 +106,27 @@ grammar. Standing decisions:
   touch nothing — "floating part") was left unbuilt: heuristic,
   false-positives on grounded/intentionally-gapped parts.
 
+## Inspect + description papercuts (landed 2026-08-17)
+
+From the 2026-08 agent feedback (plans/inspect-and-description-papercuts.md):
+
+- **`fields` overrides `full`**, never an error — narrowing is what the
+  agent means, and it's what `fields` alone already does.
+- **`volume`/`area` are subtree totals** like `bounds`/`tris`: per-solid
+  sums, so overlapping siblings double-count (`clearance` is the overlap
+  check). Computed only when requested — `Agg` touches the kernel only
+  then, so default summaries stay cheap. If any mesh in a subtree fails
+  to measure, the key is omitted (no quietly-wrong partial sums). Local
+  measurements cache per mesh hash; instances scale by s³/s² under
+  similarity, else `transform_solid` per instance.
+- **The description stays the leading `//!` block only** — no
+  `meta.description` key (two sources of truth; per-input `description`
+  inside schemas is a different, standard-JSON-Schema thing). The
+  unknown-meta-key error hints at the `//!` block when the key is
+  `"description"`, and the short prompt's example asks for
+  `"description"` explicitly. Revisit only if agents keep reaching for
+  a meta key anyway.
+
 ## Render camera: one parameter set (landed 2026-08-17)
 
 From plans/render-camera.md. A camera is target + gaze direction (or

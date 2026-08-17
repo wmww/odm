@@ -231,19 +231,35 @@ type Aabb = ([f64; 3], [f64; 3]);
 type MeshStats = (Option<Aabb>, usize, usize);
 
 /// Subtree totals: what a node's entry stands for, however far it was
-/// expanded. Aggregates never touch the geometry kernel — they are read off
-/// stored meshes, so a recursive summary stays cheap.
+/// expanded. Aggregates are read off stored meshes and only touch the
+/// geometry kernel when measurements (`volume`/`area`) are requested, so a
+/// default recursive summary stays cheap.
 #[derive(Clone, Copy, Default)]
 struct Agg {
     bounds: Option<Aabb>,
     tris: usize,
     verts: usize,
+    /// Per-solid sums (overlaps double-count, like `tris`). `Some` only
+    /// while requested and every mesh measured cleanly — one failure poisons
+    /// the total, so no quietly-wrong partial sums.
+    volume: Option<f64>,
+    area: Option<f64>,
+}
+
+/// Sums that poison on failure: any None makes the total None.
+fn sum_opt(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a + b),
+        _ => None,
+    }
 }
 
 impl Agg {
     fn merge(&mut self, other: &Agg) {
         self.tris += other.tris;
         self.verts += other.verts;
+        self.volume = sum_opt(self.volume, other.volume);
+        self.area = sum_opt(self.area, other.area);
         match (self.bounds, other.bounds) {
             (_, None) => {}
             (None, b) => self.bounds = b,
@@ -266,11 +282,13 @@ pub struct Inspector<'a> {
     fields: Fields,
     /// Local AABB / counts per mesh hash — repeated parts pay once.
     meshes: HashMap<Hash, MeshStats>,
+    /// Local volume/area per mesh hash — repeated parts pay Manifold once.
+    measures: HashMap<Hash, (Option<f64>, Option<f64>)>,
 }
 
 impl<'a> Inspector<'a> {
     pub fn new(store: &'a Store, kernel: &'a Kernel, fields: Fields) -> Inspector<'a> {
-        Inspector { store, kernel, fields, meshes: HashMap::new() }
+        Inspector { store, kernel, fields, meshes: HashMap::new(), measures: HashMap::new() }
     }
 
     /// The `inspect` response body: `node` expanded `depth` levels deep.
@@ -296,12 +314,22 @@ impl<'a> Inspector<'a> {
         emit: bool,
     ) -> Option<(Option<Value>, Agg)> {
         let world = world_of(node, parent);
+        let measuring = self.fields.volume || self.fields.area;
         let mut agg = Agg::default();
+        if measuring {
+            agg.volume = Some(0.0);
+            agg.area = Some(0.0);
+        }
         if let Some(h) = node.mesh {
             let (local, tris, verts) = self.mesh_stats(h);
             agg.tris += tris;
             agg.verts += verts;
             agg.bounds = local.map(|(min, max)| world_aabb(min, max, &world));
+            if measuring {
+                let (volume, area) = self.measure(h, &world);
+                agg.volume = sum_opt(agg.volume, volume);
+                agg.area = sum_opt(agg.area, area);
+            }
         }
 
         // Children are always visited: aggregates cover the whole subtree
@@ -348,14 +376,11 @@ impl<'a> Inspector<'a> {
         if f.verts {
             obj.insert("verts".into(), json!(agg.verts));
         }
-        if (f.volume || f.area) && let Some(h) = node.mesh {
-            let (volume, area) = self.measure(h, &world);
-            if f.volume && let Some(v) = volume {
-                obj.insert("volume".into(), json!(v));
-            }
-            if f.area && let Some(a) = area {
-                obj.insert("area".into(), json!(a));
-            }
+        if f.volume && let Some(v) = agg.volume {
+            obj.insert("volume".into(), json!(v));
+        }
+        if f.area && let Some(a) = agg.area {
+            obj.insert("area".into(), json!(a));
         }
         if f.position || f.rotation || f.scale {
             let (position, rotation, scale) = decompose(&node.transform.0);
@@ -403,20 +428,29 @@ impl<'a> Inspector<'a> {
 
     /// Volume and surface area of a mesh **in world space**. Under a
     /// similarity (the usual case: rigid motion, maybe uniform scale) they
-    /// are the local measurements scaled by s³/s²; anything else — shear or
-    /// non-uniform scale — measures the transformed solid outright rather
-    /// than report a number that is quietly wrong.
-    fn measure(&self, h: Hash, world: &Mat4) -> (Option<f64>, Option<f64>) {
+    /// are the cached local measurements scaled by s³/s²; anything else —
+    /// shear or non-uniform scale — measures the transformed solid outright
+    /// rather than report a number that is quietly wrong.
+    fn measure(&mut self, h: Hash, world: &Mat4) -> (Option<f64>, Option<f64>) {
         match similarity_scale(world) {
-            Some(s) => (
-                self.kernel.volume(h).ok().map(|v| v * s * s * s),
-                self.kernel.surface_area(h).ok().map(|a| a * s * s),
-            ),
+            Some(s) => {
+                let (volume, area) = self.local_measure(h);
+                (volume.map(|v| v * s * s * s), area.map(|a| a * s * s))
+            }
             None => match self.kernel.transform_solid(h, Transform(*world), None) {
                 Ok(t) => (self.kernel.volume(t).ok(), self.kernel.surface_area(t).ok()),
                 Err(_) => (None, None),
             },
         }
+    }
+
+    fn local_measure(&mut self, h: Hash) -> (Option<f64>, Option<f64>) {
+        if let Some(v) = self.measures.get(&h) {
+            return *v;
+        }
+        let m = (self.kernel.volume(h).ok(), self.kernel.surface_area(h).ok());
+        self.measures.insert(h, m);
+        m
     }
 }
 
@@ -815,6 +849,44 @@ mod tests {
         assert_eq!(v["children"], json!(3), "{v}");
         assert_eq!(v["tris"], json!(3));
         assert_eq!(v["bounds"]["max"], json!([21.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn volume_and_area_are_subtree_totals() {
+        let store = Store::new();
+        let kernel = Kernel::new(store.clone());
+        let cube = kernel.cube(2.0, 2.0, 2.0, true).unwrap(); // volume 8, area 24
+        let leaf = |t: Transform| {
+            store.put(Object::Node(Node { transform: t, mesh: Some(cube), ..Node::default() }))
+        };
+        let mut scaled = Transform::IDENTITY;
+        for i in [0, 5, 10] {
+            scaled.0[i] = 2.0;
+        }
+        // A named wrapper with no mesh of its own, holding two cubes.
+        let wrapper = store.put(Object::Node(Node {
+            name: Some("pair".into()),
+            children: vec![leaf(moved(0.0)), leaf(moved(10.0))],
+            ..Node::default()
+        }));
+        let root = Node { children: vec![wrapper, leaf(scaled)], ..Node::default() };
+
+        let fields = Fields { volume: true, area: true, ..Fields::default() };
+        let mut ins = Inspector::new(&store, &kernel, fields);
+        let v = ins.inspect(&root, "", &odm_render::math::IDENTITY, usize::MAX).unwrap();
+        let near = |v: &Value, want: f64| (v.as_f64().unwrap() - want).abs() < 1e-9;
+        // Root total = sum of leaves: 8 + 8 + 8·2³.
+        assert!(near(&v["volume"], 80.0), "{v}");
+        let kids = v["children"].as_array().unwrap();
+        // The mesh-less wrapper reports its children's summed measurements.
+        assert!(near(&kids[0]["volume"], 16.0) && near(&kids[0]["area"], 48.0), "{v}");
+        // A uniformly scaled instance scales by s³/s².
+        assert!(near(&kids[1]["volume"], 64.0) && near(&kids[1]["area"], 96.0), "{v}");
+        // Identical siblings still collapse; the shown entry is one member's.
+        let inner = kids[0]["children"].as_array().unwrap();
+        assert_eq!(inner.len(), 1, "{v}");
+        assert_eq!(inner[0]["repeat"], json!(2));
+        assert!(near(&inner[0]["volume"], 8.0), "{v}");
     }
 
     #[test]

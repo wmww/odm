@@ -14,13 +14,6 @@ discussions that followed. Cross-references note where plans touch.
   inline links (era hypertext, not buttons): a file opens a tab, a node
   selects in that path's tab. Spans on the action transcript entries,
   resolved on click through `scene::locate`.
-- `inspect-and-description-papercuts.md` — three small fixes from
-  2026-08 agent feedback (absorbs the deleted issues/inspect-papercuts.md
-  and issues/description-not-in-short-prompt.md): `fields` narrows `full`
-  instead of erroring; `volume`/`area` become subtree totals like
-  `bounds`/`tris`; the short prompt's false "reports a file's
-  description" example fixed + a `//!`-block hint in the unknown-meta-key
-  error.
 
 Done and deleted: `cli-diet.md` (surface cuts + the prompt-vs-docs policy —
 now `notes/agent-surface.md`); `render-workflow.md` (superseded by
@@ -59,4 +52,8 @@ verified interactive in Chromium/WebGPU. Everything standing is in
 `distance` with closest points / separating translation and CLI-side
 `between`/`overlapping` leaf naming; the standing contract and the
 min_gap verdict are in notes/agent-surface.md's clearance bullet and
-notes/spike-findings.md).
+notes/spike-findings.md);
+`inspect-and-description-papercuts.md` (landed 2026-08-17 — `fields`
+overrides `full`, `volume`/`area` are subtree totals, description
+prompt/error fixes; standing decisions in notes/agent-surface.md's
+inspect-papercuts section).

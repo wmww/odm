@@ -109,9 +109,10 @@ export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('
   `odm render '{"inputs": {"t": 1.5}}'` sets it like anything else.
   Only readers of `t` rebuild when it changes.
 - `meta.presets` names input bundles; `"preset"` applies one.
-- `odm inspect '{"fields": ["inputs", "presets"]}'` reports a file's
-  description, settable inputs, and presets — even when the build
-  fails.
+- `odm inspect '{"fields": ["description", "inputs", "presets"]}'`
+  reports a file's description, settable inputs, and presets — even
+  when the build fails. The description is the file's leading `//!`
+  comment block, not a meta key.
 
 ## Colors
 

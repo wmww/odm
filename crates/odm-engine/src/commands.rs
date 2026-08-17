@@ -752,9 +752,6 @@ impl EngineState {
         let mut view_fields: Vec<String> = Vec::new();
         let mut node_fields: Vec<String> = Vec::new();
         if let Some(list) = &scope.fields {
-            if scope.full {
-                return Err(CmdError::bad_request("`full` and `fields` are alternatives"));
-            }
             if list.is_empty() {
                 return Err(CmdError::bad_request("`fields` needs at least one field name"));
             }
@@ -1397,6 +1394,30 @@ mod tests {
         } else {
             eprintln!("render event check skipped (no GPU?): {v}");
         }
+    }
+
+    /// `fields` narrows `full` rather than conflicting with it.
+    #[test]
+    fn fields_overrides_full() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("root.js"),
+            "export default function build(ctx) { return odm.box([1, 1, 1]); }",
+        )
+        .unwrap();
+        let state =
+            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
+        let mut conn = Conn::new(state.clone());
+
+        let v = state
+            .handle(json!({"cmd": "inspect", "full": true, "fields": ["tris"]}), &mut conn);
+        assert_eq!(v["ok"], json!(true), "{v}");
+        let node = v["node"].as_object().unwrap();
+        assert!(node.contains_key("tris"), "{v}");
+        assert!(
+            !node.contains_key("volume") && !node.contains_key("position"),
+            "fields wins over full: {v}"
+        );
     }
 
     /// Every project-facing command is one compact line in the chat log,

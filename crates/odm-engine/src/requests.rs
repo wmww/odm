@@ -273,7 +273,7 @@ const SPECS: &[CommandSpec] = &[
             ),
             f("depth", "number", "expand this many levels below the addressed node"),
             f("recursive", "bool", "expand fully"),
-            f("full", "bool", "every measurement field, repeats expanded"),
+            f("full", "bool", "every measurement field, repeats expanded; `fields` overrides it"),
             f(
                 "fields",
                 "array of strings",
