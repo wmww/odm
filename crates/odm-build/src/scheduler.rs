@@ -158,13 +158,30 @@ pub struct Pass {
 
 impl Pass {
     /// Cancel this pass: kernel ops abort within ~tens of ms, JS is
-    /// terminated between/inside builds.
-    pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+    /// terminated between/inside builds (module top level included). A
+    /// watchdog re-terminates until the pass's live isolates drain: V8 can
+    /// swallow a lone terminate (a pending flag is cleared by exception
+    /// conversion, e.g. deno_core's exception_to_err), which would otherwise
+    /// leave a JS loop spinning forever.
+    pub fn cancel(self: &Arc<Self>) {
+        if self.cancelled.swap(true, Ordering::SeqCst) {
+            return; // already cancelled; the first call's watchdog covers us
+        }
         self.cancel.cancel();
         for handle in self.isolates.lock().unwrap().iter() {
             handle.terminate_execution();
         }
+        let pass = self.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let isolates = pass.isolates.lock().unwrap();
+            if isolates.is_empty() {
+                return;
+            }
+            for handle in isolates.iter() {
+                handle.terminate_execution();
+            }
+        });
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -276,6 +293,7 @@ impl BuildEngine {
             "meta",
             self.kernel.clone(),
             self.store.clone(),
+            odm_js::EXTRACT_TIMEOUT,
         )
         .map_err(|e| format!("{path}: reading meta: {e}"))?;
         match raw {
@@ -516,7 +534,15 @@ impl BuildEngine {
                 cancel: Some(pass.cancel.clone()),
                 invoker: Some(Box::new(invoker)),
                 on_isolate: Some(Box::new(move |handle| {
-                    pass_for_isolate.isolates.lock().unwrap().push(handle);
+                    // Under the isolates lock so this either sees the cancel
+                    // flag or gets terminated by cancel()'s iteration —
+                    // cancel() landing before registration must not leave
+                    // this isolate running.
+                    let mut isolates = pass_for_isolate.isolates.lock().unwrap();
+                    if pass_for_isolate.is_cancelled() {
+                        handle.terminate_execution();
+                    }
+                    isolates.push(handle);
                     pushed_flag.store(true, Ordering::SeqCst);
                 })),
             },

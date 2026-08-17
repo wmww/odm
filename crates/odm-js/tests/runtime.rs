@@ -628,3 +628,156 @@ fn args_hash_uses_canonical_json() {
     let _ = Hash::of_bytes(b"x"); // silence unused import if asserts compiled out
     let _ = json!({}).hash();
 }
+
+/// run_build with an on_isolate hook handing the handle to a killer thread
+/// that terminates after `delay`. V8 occasionally swallows a lone terminate
+/// (a pending flag consumed in a JS-idle gap, or cleared by deno_core's
+/// exception conversion — measured ~0.2% on the TLA path), so after 2s the
+/// killer re-terminates until the build dies; the scheduler's cancel
+/// watchdog does the same. Returns the build result and whether a retry was
+/// needed.
+fn build_with_killer(
+    w: &World,
+    code: &'static str,
+    delay: std::time::Duration,
+    cancel_token_too: bool,
+) -> (Result<BuildOutput, FailedBuild>, bool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let cancel = odm_kernel::CancelToken::new();
+    let cancel2 = cancel.clone();
+    let done = Arc::new(AtomicBool::new(false));
+    let done2 = done.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<odm_js::IsolateHandle>();
+    let killer = std::thread::spawn(move || -> bool {
+        let handle = rx.recv().unwrap();
+        std::thread::sleep(delay);
+        if cancel_token_too {
+            cancel2.cancel();
+        }
+        handle.terminate_execution();
+        for _ in 0..200 {
+            if done2.load(Ordering::SeqCst) {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let mut retried = false;
+        while !done2.load(Ordering::SeqCst) {
+            retried = true;
+            handle.terminate_execution();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        retried
+    });
+    let res = run_build(
+        env(),
+        BuildInput {
+            path: "main.js",
+            code,
+            api: odm_js::ApiVersion::Unstable,
+            args: &json!({}),
+            decls: &json!({}),
+            cascade: &HashMap::new(),
+            kernel: w.kernel.clone(),
+            store: w.store.clone(),
+            cancel: Some(cancel),
+            invoker: None,
+            on_isolate: Some(Box::new(move |h| {
+                let _ = tx.send(h);
+            })),
+        },
+    );
+    done.store(true, Ordering::SeqCst);
+    let retried = killer.join().unwrap();
+    (res, retried)
+}
+
+#[test]
+fn top_level_infinite_loop_is_terminable() {
+    let w = world();
+    let (res, _) = build_with_killer(
+        &w,
+        "export const meta = { inputs: {} };\nexport function build() {}\nwhile (true) {}",
+        std::time::Duration::from_millis(100),
+        true,
+    );
+    match res.unwrap_err().error {
+        odm_js::BuildError::Cancelled => {}
+        other => panic!("expected Cancelled, got {other:?}"),
+    }
+}
+
+const TLA_SPIN: &str = "export const meta = { inputs: {} };\nexport function build() {}\n\
+                        await Promise.resolve();\nfor (;;) {}";
+
+#[test]
+fn terminate_during_tla_eval_does_not_crash() {
+    // rusty_v8 #830 / v8 12379: terminating during async-module (top-level
+    // await) machinery used to crash V8. Sweep termination timing across the
+    // eval window; passing = every iteration errors out, no process abort.
+    for i in 0..40u64 {
+        let w = world();
+        let (res, _) =
+            build_with_killer(&w, TLA_SPIN, std::time::Duration::from_micros(i * 50), false);
+        assert!(res.is_err(), "iteration {i} unexpectedly succeeded");
+    }
+}
+
+/// Bigger sweep of the same race (run explicitly with --ignored); reports
+/// how often the first terminate was swallowed.
+#[test]
+#[ignore]
+fn tla_terminate_stress() {
+    let mut swallowed = 0u32;
+    for i in 0..1000u64 {
+        let w = world();
+        let (res, retried) =
+            build_with_killer(&w, TLA_SPIN, std::time::Duration::from_micros((i % 40) * 50), false);
+        assert!(res.is_err(), "iteration {i} unexpectedly succeeded");
+        if retried {
+            swallowed += 1;
+            println!("iteration {i}: first terminate swallowed, retry un-wedged it");
+        }
+    }
+    println!("swallowed terminations: {swallowed}/1000");
+}
+
+#[test]
+fn extract_export_times_out_on_top_level_loop() {
+    let w = world();
+    let err = odm_js::extract_export(
+        env(),
+        "main.js",
+        "export const meta = { inputs: {} };\nwhile (true) {}",
+        odm_js::ApiVersion::Unstable,
+        "meta",
+        w.kernel.clone(),
+        w.store.clone(),
+        std::time::Duration::from_millis(300),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("timed out"), "{err}");
+}
+
+#[test]
+fn stalled_top_level_await_errors_not_hangs() {
+    // A never-resolving top-level await must surface as an error (either
+    // deno_core's stalled-TLA detection or the extract watchdog), not hang.
+    let w = world();
+    let err = odm_js::extract_export(
+        env(),
+        "main.js",
+        "export const meta = { inputs: {} };\nawait new Promise(() => {});",
+        odm_js::ApiVersion::Unstable,
+        "meta",
+        w.kernel.clone(),
+        w.store.clone(),
+        std::time::Duration::from_millis(500),
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("timed out") || msg.to_lowercase().contains("await"),
+        "unexpected error: {msg}"
+    );
+}

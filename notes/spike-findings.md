@@ -14,9 +14,16 @@ did we measure / what did we prove" record behind `design-decisions.md`.
   interleaved access panic. Strictly LIFO nesting works — create inner, use,
   drop, resume outer. Never interleave two isolates' calls on one thread.
 - Cross-thread cancel: `IsolateHandle` is Send+Sync and `terminate_execution`
-  works cross-thread. rusty_v8 #830: terminating during ES module evaluation
-  can crash V8 — so handles register only after module eval
-  (issues/uncancellable-module-eval-loops.md).
+  works cross-thread — including during module evaluation. rusty_v8 #830
+  (closed 2026-08 as upstream v8 12379, not fixed) needs top-level-await
+  machinery to crash; stress-tested clean on v8 149.4.0 with sync and TLA
+  modules (runtime.rs `tla_terminate_stress`), so handles register *before*
+  module eval and top-level `while(true)` is terminable. Gotcha: a lone
+  terminate is occasionally swallowed (~0.2% measured on the TLA path —
+  pending flag consumed in a JS-idle gap, and deno_core's `exception_to_err`
+  unconditionally calls `cancel_terminate_execution`). Cancellers must
+  re-terminate until the isolate actually exits: `Pass::cancel`'s watchdog
+  thread and `extract_export`'s eval-timeout watchdog both do.
 - `JsRuntime::init_platform()` must run once on a common parent thread.
 - Determinism: V8's `--random-seed`/`--predictable` are process-global flags;
   instead Date is frozen and Math.random seeded (mulberry32) by snapshot-time

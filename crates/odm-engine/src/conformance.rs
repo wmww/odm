@@ -111,7 +111,14 @@ fn run_test(project: &Path) -> Result<(), Vec<String>> {
     let api = main.api.clone().map_err(|e| vec![format!("pragma: {e}")])?;
 
     let checks = odm_js::extract_export(
-        &env, "root.js", &main.code, api, "checks", kernel.clone(), store.clone(),
+        &env,
+        "root.js",
+        &main.code,
+        api,
+        "checks",
+        kernel.clone(),
+        store.clone(),
+        odm_js::EXTRACT_TIMEOUT,
     )
     .map_err(|e| vec![format!("reading checks: {e}")])?
     .ok_or_else(|| vec!["conformance test must `export const checks = [...]`".to_string()])?;

@@ -93,9 +93,12 @@ pub struct BuildInput<'a> {
     pub cancel: Option<odm_kernel::CancelToken>,
     /// Callback for nested `ctx.invoke()`; None makes invoke fail.
     pub invoker: Option<Box<dyn Invoker>>,
-    /// Called with the isolate handle once JS is about to run build(); the
-    /// scheduler may use it to TerminateExecution from another thread.
-    /// (Deliberately not called during module evaluation — rusty_v8 #830.)
+    /// Called with the isolate handle before any doohickey code runs
+    /// (module top level included); the scheduler may use it to
+    /// TerminateExecution from another thread. Terminating during module
+    /// evaluation is safe: deno_core's mod_evaluate handles it, and the
+    /// rusty_v8 #830 / v8 12379 crash needs top-level await machinery
+    /// (stress-tested clean on v8 149 — see runtime.rs termination tests).
     pub on_isolate: Option<Box<dyn FnOnce(v8::IsolateHandle)>>,
 }
 
@@ -138,6 +141,13 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
     };
     rt.op_state().borrow_mut().put(session);
 
+    // Hand out the isolate handle before the module (whose top level is
+    // arbitrary doohickey code) evaluates, so even `while(true){}` outside
+    // build() stays terminable.
+    if let Some(cb) = on_isolate {
+        cb(rt.v8_isolate().thread_safe_handle());
+    }
+
     let take_session = |rt: &mut JsRuntime| -> SessionState {
         rt.op_state().borrow_mut().take::<SessionState>()
     };
@@ -163,10 +173,6 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
             }
         }
     };
-
-    if let Some(cb) = on_isolate {
-        cb(rt.v8_isolate().thread_safe_handle());
-    }
 
     // Call __odm.runBuild(namespace, args) and pull the IR JSON back.
     let ns_global = rt
@@ -239,10 +245,17 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
     })
 }
 
+/// Default watchdog for [`extract_export`] module evaluation. Top level
+/// should be milliseconds; anything near this makes every build of the file
+/// unusably slow anyway.
+pub const EXTRACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Load a doohickey module (without calling its build()) and return one of
 /// its exports as JSON — `None` if the export is absent. The conformance
 /// runner reads `export const checks` this way. The module's top level runs,
 /// so it gets a real session (ops work) under the version its pragma picks.
+/// Callers have no cancel plumbing, so a watchdog terminates top-level
+/// evaluation after `timeout` (else `while(true){}` would wedge the caller).
 pub fn extract_export(
     env: &JsEnv,
     path: &str,
@@ -251,6 +264,7 @@ pub fn extract_export(
     export: &str,
     kernel: Arc<odm_kernel::Kernel>,
     store: Arc<odm_store::Store>,
+    timeout: std::time::Duration,
 ) -> Result<Option<Value>, BuildError> {
     let specifier = snapshot::doohickey_specifier(path)
         .map_err(|e| BuildError::Internal(format!("bad doohickey path {path:?}: {e}")))?;
@@ -273,13 +287,45 @@ pub fn extract_export(
         invoker: None,
     });
 
+    let handle = rt.v8_isolate().thread_safe_handle();
+    let timed_out = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let timed_out2 = timed_out.clone();
+    let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        let mut wait = timeout;
+        // A lone terminate can be swallowed (see Pass::cancel in odm-build);
+        // keep re-terminating until evaluation actually returns.
+        while done_rx.recv_timeout(wait) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+            timed_out2.store(true, std::sync::atomic::Ordering::SeqCst);
+            handle.terminate_execution();
+            wait = std::time::Duration::from_millis(100);
+        }
+    });
+
     let mod_id = futures::executor::block_on(async {
         let id = rt.load_main_es_module(&specifier).await?;
         let eval = rt.mod_evaluate(id);
         rt.run_event_loop(PollEventLoopOptions::default()).await?;
         eval.await.map(|_| id)
-    })
-    .map_err(|e| BuildError::Js(format!("{path}: {e}")))?;
+    });
+    let _ = done_tx.send(());
+    let _ = watchdog.join();
+    let timed_out = timed_out.load(std::sync::atomic::Ordering::SeqCst);
+    if timed_out {
+        // Terminate flag may still be pending if eval finished in the race
+        // window; clear it so the namespace reads below aren't poisoned.
+        rt.v8_isolate().cancel_terminate_execution();
+    }
+    let mod_id = mod_id.map_err(|e| {
+        if timed_out {
+            BuildError::Js(format!(
+                "{path}: module evaluation timed out after {timeout:?} \
+                 (infinite loop or stalled await at top level?)"
+            ))
+        } else {
+            BuildError::Js(format!("{path}: {e}"))
+        }
+    })?;
 
     let ns_global = rt
         .get_module_namespace(mod_id)
