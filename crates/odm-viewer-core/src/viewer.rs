@@ -128,7 +128,11 @@ impl Viewer {
         // Nothing to fit (empty scene, or a selection with no geometry under
         // it): leave the camera alone rather than jump it to the origin.
         if bounds.is_some() {
-            tab.orbit.frame(bounds);
+            let aspect = self.tex.as_ref().map_or(1.0, |t| {
+                let [w, h] = t.size();
+                w as f64 / h as f64
+            });
+            tab.orbit.frame(bounds, aspect);
             self.needs_render = true;
         }
     }

@@ -1,7 +1,7 @@
 //! The viewport's orbit camera.
 
 use odm_render::Camera;
-use odm_render::math::{cross, normalize};
+use odm_render::math::{cross, dot, normalize, sub};
 
 /// Vertical field of view every viewport camera uses — also what hosts quote
 /// when they describe the camera (e.g. the chat view snapshot).
@@ -23,24 +23,43 @@ impl Orbit {
             yaw: 1.4f64.atan2(1.0),
             pitch: 0.9f64.atan2((1.0f64 + 1.4 * 1.4).sqrt()),
         };
-        orbit.frame(bounds);
+        orbit.frame(bounds, 1.0);
         orbit
     }
 
-    /// Center on some bounds and back off far enough to fit them, keeping the
-    /// view direction — reframing should not spin the model.
-    pub fn frame(&mut self, bounds: Option<([f64; 3], [f64; 3])>) {
-        let (center, radius) = match bounds {
-            Some((min, max)) => {
-                let c = [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0, (min[2] + max[2]) / 2.0];
-                let d = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-                let r = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() / 2.0;
-                (c, if r > 1e-9 { r } else { 1.0 })
-            }
-            None => ([0.0; 3], 1.0),
+    /// Center on some bounds and back off just far enough that every box
+    /// corner fits the viewport (both fov axes, per-corner depth), keeping
+    /// the view direction — reframing should not spin the model.
+    pub fn frame(&mut self, bounds: Option<([f64; 3], [f64; 3])>, aspect: f64) {
+        const MARGIN: f64 = 1.1;
+        let fallback = MARGIN / (FOV_Y_DEG / 2.0).to_radians().sin();
+        let Some((min, max)) = bounds else {
+            self.target = [0.0; 3];
+            self.distance = fallback;
+            return;
         };
-        self.target = center;
-        self.distance = radius * 1.1 / (FOV_Y_DEG / 2.0).to_radians().sin();
+        self.target =
+            [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0, (min[2] + max[2]) / 2.0];
+        let (s, u, f) = self.basis();
+        let tan_y = (FOV_Y_DEG / 2.0).to_radians().tan();
+        let tan_x = tan_y * aspect.max(1e-3);
+        let mut dist: f64 = 0.0;
+        for i in 0..8 {
+            let corner = [
+                if i & 1 == 0 { min[0] } else { max[0] },
+                if i & 2 == 0 { min[1] } else { max[1] },
+                if i & 4 == 0 { min[2] } else { max[2] },
+            ];
+            let v = sub(corner, self.target);
+            // Forward depth relative to the target plane: a corner nearer
+            // the camera (w < 0) needs proportionally more distance.
+            let w = dot(v, f);
+            let x = dot(v, s).abs() * MARGIN;
+            let y = dot(v, u).abs() * MARGIN;
+            dist = dist.max(x / tan_x - w).max(y / tan_y - w);
+        }
+        // Degenerate bounds (a point) fall back like an empty scene.
+        self.distance = if dist > 1e-9 { dist } else { fallback };
     }
 
     pub fn eye(&self) -> [f64; 3] {
@@ -74,5 +93,64 @@ impl Orbit {
         let s = normalize(cross(f, [0.0, 0.0, 1.0]));
         let u = cross(s, f);
         (s, u, f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stick along x, viewed with the given angles at the given aspect.
+    fn frame_stick(yaw: f64, pitch: f64, aspect: f64) -> Orbit {
+        let mut orbit = Orbit { target: [0.0; 3], distance: 1.0, yaw, pitch };
+        orbit.frame(Some(([-5.0, -0.1, -0.1], [5.0, 0.1, 0.1])), aspect);
+        orbit
+    }
+
+    const TAN_Y: f64 = 0.41421356237309503; // tan(22.5°)
+
+    #[test]
+    fn side_on_stick_fills_a_wide_viewport() {
+        // Eye on +y (yaw 90°): the stick spans the horizontal fov, so the
+        // fit is against tan_x, plus the thickness's depth offset.
+        let orbit = frame_stick(std::f64::consts::FRAC_PI_2, 0.0, 2.0);
+        let want = 5.0 * 1.1 / (TAN_Y * 2.0) + 0.1;
+        assert!((orbit.distance - want).abs() < 1e-9, "{} vs {want}", orbit.distance);
+    }
+
+    #[test]
+    fn dead_on_stick_fits_its_thickness_not_its_length() {
+        // Eye on +x (yaw 0): only the 0.1 cross-section faces the camera;
+        // the length is depth (the near end pushes the eye back 5).
+        let orbit = frame_stick(0.0, 0.0, 2.0);
+        let want = 0.1 * 1.1 / TAN_Y + 5.0;
+        assert!((orbit.distance - want).abs() < 1e-9, "{} vs {want}", orbit.distance);
+    }
+
+    #[test]
+    fn framing_keeps_the_view_direction_and_centers() {
+        let orbit = frame_stick(0.7, 0.4, 1.5);
+        assert_eq!(orbit.target, [0.0, 0.0, 0.0]);
+        assert_eq!((orbit.yaw, orbit.pitch), (0.7, 0.4));
+        // Every corner projects inside both half-angles (with margin).
+        let (s, u, f) = orbit.basis();
+        for ix in [-5.0, 5.0] {
+            for iy in [-0.1, 0.1] {
+                for iz in [-0.1, 0.1] {
+                    let v = [ix, iy, iz];
+                    let depth = orbit.distance + dot(v, f);
+                    assert!(dot(v, s).abs() <= TAN_Y * 1.5 * depth + 1e-9);
+                    assert!(dot(v, u).abs() <= TAN_Y * depth + 1e-9);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn degenerate_bounds_fall_back() {
+        let mut orbit = Orbit { target: [5.0; 3], distance: 9.0, yaw: 0.0, pitch: 0.0 };
+        orbit.frame(Some(([1.0; 3], [1.0; 3])), 1.0);
+        assert_eq!(orbit.target, [1.0; 3]);
+        assert!((orbit.distance - 1.1 / (FOV_Y_DEG / 2.0).to_radians().sin()).abs() < 1e-12);
     }
 }
