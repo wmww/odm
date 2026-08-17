@@ -57,8 +57,9 @@ rewrite.
   core crates; boolean perf ~1.3× native (sphere-subtract 256 segs:
   63.8 ms wasm vs 48.7 ms native, non-parallel both sides); native and
   wasm agreed on exact f64 volume bits on a sin/cos-exercising probe —
-  promising for keeping the exported memo snapshot hash-consistent with
-  browser rebuilds (one sample, not a proof).
+  promising for native↔web output equivalence / conformance testing
+  (one sample, not a proof; no longer load-bearing since no baked data
+  ships).
   Caveats of the wasm lane: upstream calls it provisional; built with
   `-fno-exceptions` (a C++ throw traps — verify odm-kernel's error paths,
   e.g. weld NotManifold, surface as status codes, not exceptions);
@@ -76,12 +77,11 @@ rewrite.
   `pixels_per_point` (fractional DPR blurs the bitmap fonts — same rule
   as native). `SlowIdle`/winit machinery is desktop-only; eframe's web
   backend has its own loop and our repaint-on-demand style fits it.
-- **Threading: MVP is main-thread**, accepting jank during rebuilds,
-  mitigated by shipping a **pre-warmed memo cache** for the exported
-  view's defaults (store is content-addressed; near-free at export
-  time, instant first paint). Eventual: engine in a Worker (which is
-  also a natural home for the emscripten module), flattened scene
-  posted to the main thread. Don't build the worker split into the MVP.
+- **Threading: MVP is main-thread**, accepting jank during builds —
+  including the initial build on page load (no baked data ships; see
+  bundle format). Show build progress/loading state instead of a frozen
+  page. Eventual: engine in a Worker, flattened scene posted to the
+  main thread. Don't build the worker split into the MVP.
 
 ## Export bundle format
 
@@ -93,14 +93,20 @@ Static directory, no server smarts required:
 - `bundle.js` — factories for every doohickey + the framework + the
   project's API-version surfaces (the bundler must respect `//! odm <v>`
   per-file surface selection, same as snapshot install order)
-- store snapshot: the generation's source hashes + memo entries and
-  content objects for the exported view at default inputs. Purely a
-  pre-warm cache, never load-bearing: the browser build loop consults it
-  like any memo store, and a missing/mismatched entry just rebuilds — so
-  native↔wasm hash drift degrades to a cold first paint, not wrong
-  output. Droppable (or flag-gated) if size or load complexity bites.
 - manifest: exported view (path; default = `root.js`), initial
-  inputs/cascade, presets
+  inputs/cascade, presets, and export-time-extracted metas (so the web
+  runtime never needs `extract_export`)
+
+**No baked build output ships** (decided 2026-08-17): the client builds
+everything from source on load. A pre-warmed memo snapshot was
+considered and rejected — it masks a broken client build path until the
+user changes a param, so the one path that matters would go unexercised
+by default. Cold start makes client-side breakage/drift show
+consistently, and deletes snapshot serialization, loading, and
+native↔wasm hash-consistency concerns from the MVP. First paint on
+heavy projects becomes a loading-progress problem, not a correctness
+one. Revisit only as an explicit opt-in flag if load time proves
+painful in practice.
 
 ## Template build & lookup
 
@@ -108,8 +114,8 @@ The bundle splits into two halves with different lifecycles:
 
 - **Project-independent** (the *web export template*): the wasm module,
   `index.html`, viewer glue JS. Depends only on the ODM version.
-- **Project-specific**: `bundle.js`, store snapshot, manifest — all
-  produced by native code at export time; no wasm toolchain involved.
+- **Project-specific**: `bundle.js` and the manifest — produced by
+  native code at export time; no wasm toolchain involved.
 
 The template is built by a separate command (`xtask build-web-template`
 or similar), **never** as part of a normal engine build — the wasm lane
@@ -123,9 +129,9 @@ attempt to compile wasm. Releases ship the template alongside the
 binary, or embed it behind an off-by-default cargo feature CI enables.
 
 The version stamp is a **content hash** over the template's inputs (the
-wasm-side crates + framework JS), not a semver string: the exported
-snapshot's hashes and the browser's rebuilds must come from the same
-sources, so a mismatched template is the packaging-layer form of the
+wasm-side crates + framework JS), not a semver string: the template's
+build/framework semantics must match the engine that authored the
+project, so a mismatched template is the packaging-layer form of the
 drift-between-hosts risk. Export refuses on mismatch by default
 (`--force` to override); in a dev checkout the same check doubles as
 staleness detection ("rebuild the template first").
@@ -177,8 +183,6 @@ landable alone):
   (submit view, read published result/report), with the desktop app as
   the first consumer. The input panel is already a pure render of
   (report, tab values), which is the right shape.
-- Store snapshot serialization: write/read a generation + memo subset
-  as files (also independently useful for debugging).
 
 **Phase 2 — web runtime:**
 
@@ -192,8 +196,8 @@ landable alone):
   (latest-wins), last-good scene + error/console panels like desktop.
 
 **Phase 3 — the `export` command + site shell:** CLI command on the
-running engine (it has the store hot and can pre-warm the memo cache);
-writes the bundle directory. Wire the viewer core to the web host;
+running engine (it knows the current generation and that it builds
+clean); writes the bundle directory. Wire the viewer core to the web host;
 manifest/initial-view handling; a `--serve`-less README note that any
 static file server works (wasm needs correct MIME; document
 `python -m http.server` caveat if any).
@@ -229,15 +233,15 @@ isolate-terminating watchdog thread (scheduler.rs) and the
 Condvar compiles and its wait path is unreachable single-threaded. The
 web runtime likely needs only `run_build`: meta extraction
 (`extract_export`) can happen at export time, with extracted metas
-shipped in the snapshot.
+shipped in the manifest.
 
 ## Open questions
 
 - ~~Kernel module boundary~~ — resolved: one module (spike).
-- Where `export` runs: engine command (chosen above for the hot store)
-  vs. standalone CLI mode — revisit if engine-side proves awkward.
-- Memo-cache snapshot size on real projects (a big animation sweep
-  could bloat it; maybe cap to the default-inputs pass only).
+- Where `export` runs: engine command vs. standalone CLI mode. With no
+  memo pre-warm the hot-store rationale is gone; engine-side still
+  offers "current generation, known to build clean", but standalone got
+  more attractive — decide in phase 3.
 - Multiple tabs/views per export, and whether the manifest should carry
   presets as the page's "scenes" menu.
 - Mobile/touch: egui touch support exists; orbit/pinch mapping —
