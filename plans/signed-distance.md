@@ -2,9 +2,34 @@
 
 Upgrade `clearance` (both surfaces) from `{overlap, gap_lower_bound}` to a
 signed `distance`: positive = exact minimum gap, negative = penetration,
-zero = exact contact. Closes tier 1+2's blind spot (boxes touch, solids
-don't → today reads an uninformative 0) and answers "how badly do they
-collide, and which way out".
+zero = exact contact. Plus: name the offending leaf pair(s) on the CLI
+surface, so group-vs-group answers say *what* collides, not just that
+something does.
+
+## Motivation (absorbs issues/clearance-query-gaps.md)
+
+Agent feedback from a real session (2026-08), all three hit while
+assembly-checking one model:
+
+1. **`gap_lower_bound` is almost always 0.** Any pair that nests or rests
+   on another — pipe in socket, tarp on beam, cord round pipe — has
+   touching bounding boxes, so the bound reads 0 and only `overlap` says
+   anything. That's the *common case* for assembly checking. Fixed by the
+   signed distance itself.
+2. **On two groups it says *that* something overlaps, never *what*.**
+   `["roof", "beams"]` came back `overlap: true` over 3 groups × 7 beams;
+   the agent bisected by hand across four extra round trips. Fixed by
+   `between`/`overlapping` (below).
+3. **Exact tangency is a coin flip.** Resting contact lands on exact
+   tangency, where the boolean was decided by floating-point luck —
+   identical cord-on-flange arrangements flipped true on one edge, false
+   on another; the agent scattered hand-tuned 0.002' nudges through the
+   model to keep contacts unambiguous. Fixed by the continuous value: no
+   `tolerance` request field — the agent thresholds `|distance|` itself
+   (see semantics), and the docs must say so explicitly, or the next
+   agent re-invents the nudge.
+
+Keep what was praised: unknown node names list the scene's real names.
 
 ## Correction to the old premise
 
@@ -33,36 +58,69 @@ non-convex polyhedra; no kernel help). Honest-per-tier proposal:
 - Report the vector too: `separate: [x,y,z]` (move the pair's *second*
   node by this to clear the first). This replaces `closest` on the
   negative side.
-- Sign stays exact: any negative value proves real overlap (tier 2's
-  test decides the sign, not the search).
+- Any decisively negative value proves real overlap; the search only
+  affects the magnitude, never manufactures a sign.
 - Document the asymmetry: positive exact, negative an upper bound.
+
+**Contact / tangency**: the sign comes from the overlap predicate
+(surface intersection + containment ray — phase 1), and at *exact*
+tangency that predicate counts touching as intersecting while the old
+CSG-volume test said disjoint; either answer is float luck anyway. So:
+define measure-zero contact as distance 0, document that the **sign of a
+near-zero value is noise** — `|distance|` below the agent's own
+tolerance means contact, and that's the whole tolerance story. No
+`tolerance` request field. Conformance asserts `|distance| <= eps` for
+exact face contact, sign-agnostic.
 
 Rejected: min-width-of-intersection (wildly underestimates for crossing
 parts — two crossing plates read plate-thickness while separating needs a
 half-plate slide); boundary-to-boundary distance with a flipped sign
-(reads 0 for every generic partial overlap — the main use case).
+(reads 0 for every generic partial overlap — the main use case); a
+`tolerance` field (subsumed by the continuous value).
 
 Containment (A entirely inside B) needs no special case under this
 definition: the separating translation pushes A out through the thinnest
 wall, and the search handles it like any overlap.
 
+## Naming the offenders
+
+The kernel works on `(Hash, Transform)` operand lists; names live
+scene-side. So:
+
+- Kernel `Clearance` carries **operand indices**: the deciding pair
+  (argmin pair for disjoint sides; for overlap, the first offending
+  pair), and for overlap the **full list of offending operand pairs** —
+  the phase-1 surface predicate makes testing every AABB-touching pair
+  affordable, so don't early-return after the first hit.
+- `scene::collect_meshes` records each leaf's node address alongside
+  `(Hash, Transform)`; `scene.rs` maps indices → addresses.
+- CLI result gains `between: ["lacing-north", "beam-ew-0-1"]` (the
+  deciding pair, always) and, when negative, `overlapping: [[a, b], …]`
+  (every offending leaf pair). One call replaces the manual bisection.
+- **JS parity is preserved**: names are CLI-only extras, exactly the
+  raycast carve-out ("plus what JS gets free from object references" —
+  in JS you hold the two solids, there's nothing to name). JS returns
+  the numeric shape only.
+
 ## Result shape
 
-Per pair / per JS call:
+Per pair (CLI; JS same minus the name fields):
 
-- disjoint: `{"distance": 2.5, "closest": [[…], […]]}`
-- overlapping: `{"distance": -1.2, "separate": [0, 0, 1.2]}`
+- disjoint: `{"distance": 2.5, "closest": [[…], […]], "between": [a, b]}`
+- overlapping: `{"distance": -1.2, "separate": [0, 0, 1.2],
+  "between": [a, b], "overlapping": [[a, b], …]}`
 
 `overlap` and `gap_lower_bound` are dropped — the sign carries `overlap`
-exactly, and exact distance supersedes the bound. Unstable channel, no
-stamped version yet, so the break is allowed; update the conformance
-suite (unstable may be reshaped) and every doc that names the old keys.
-JS parity as with raycast: same keys, points hydrate to `Vector3`s.
+exactly (modulo the documented ±0 noise at tangency), and exact distance
+supersedes the bound. Unstable channel, no stamped version yet, so the
+break is allowed; update the conformance suite (unstable may be reshaped)
+and every doc that names the old keys. JS parity as with raycast: same
+keys, points hydrate to `Vector3`s.
 
-No new request fields: exact is the only mode (no `"exact": true` knob).
-BVH work is cached per mesh hash and pruned by AABB bounds; the negative
-search is iteration-bounded. If profiling on real assemblies says
-otherwise, revisit — don't pre-add the knob.
+No new request fields: exact is the only mode (no `"exact": true` knob,
+no `tolerance`). BVH work is cached per mesh hash and pruned by AABB
+bounds; the negative search is iteration-bounded. If profiling on real
+assemblies says otherwise, revisit — don't pre-add the knob.
 
 ## Implementation
 
@@ -79,14 +137,17 @@ everything min_gap doesn't do):
 - Queries take (Hash, Transform) operands like everything else: prune
   with transformed node AABBs (conservative under affine), transform
   triangle vertices at the leaves — no baking, no per-transform cache.
-- `closest_points(a, b) -> (dist, [p, q])`: BVH-vs-BVH branch-and-bound
-  with triangle-triangle distance; multi-operand sides via one priority
-  queue over operand pairs seeded with AABB gaps (subtree-vs-subtree
-  falls out).
+- `closest_points(a, b) -> (dist, [p, q], operand pair)`: BVH-vs-BVH
+  branch-and-bound with triangle-triangle distance; multi-operand sides
+  via one priority queue over operand pairs seeded with AABB gaps
+  (subtree-vs-subtree falls out). The winning operand pair is the
+  positive side's `between`.
 - `surfaces_intersect(a, b) -> bool`: tri-tri intersection test, plus
   one containment raycast (parity) when surfaces are disjoint. This is
   the fast overlap predicate — replaces the CSG intersection in today's
-  tier 2 and is what makes the negative search affordable.
+  tier 2 and is what makes the negative search affordable. Run it over
+  *all* AABB-touching operand pairs and collect the hits — that list is
+  `overlapping`.
 
 Phase 2 — **negative side**: separating-translation search.
 
@@ -100,10 +161,13 @@ Phase 2 — **negative side**: separating-translation search.
   whenever the loop exits with one, and the reported magnitude only ever
   overestimates depth.
 
-Phase 3 — **surface swap**: kernel `Clearance` struct, `cmd_clearance`,
-`op_clearance`, `Solid.clearance`, docs (cli.md manual + generated
-section stays as-is field-wise, `docs/api/queries.md`, both prompt
-files), conformance (`clearance.js` rewritten for the new shape),
+Phase 3 — **surface swap**: kernel `Clearance` struct (indices + the
+new fields), `collect_meshes` address recording and the index→address
+mapping in `scene::clearance`, `cmd_clearance`, `op_clearance`,
+`Solid.clearance`, docs (cli.md manual + generated section, in
+`docs/api/queries.md` add the explicit "contact = |distance| under your
+own tolerance; don't nudge geometry to disambiguate" guidance, both
+prompt files), conformance (`clearance.js` rewritten for the new shape),
 runtime + kernel + scene tests, notes/agent-surface.md's "no signed
 distance" standing decision replaced by the new contract.
 
@@ -118,11 +182,16 @@ agents demonstrably need "at least this deep" — otherwise skip.
   candidates make the upper bound tight here); identical coincident
   cubes → −(edge length); nested cubes → −(wall distance + inner
   half-extent) through the thinnest wall.
+- Exact face contact → `|distance| <= eps`, sign-agnostic (see
+  semantics).
 - Interlocked-but-clear L-shapes → *positive* exact distance (the case
   tier 1 could not answer).
 - Sphere–sphere: distance = center distance − radii within segment eps.
 - `closest` endpoints lie on the respective surfaces; `separate` applied
   via a translate must flip the sign to positive (self-verifying check).
+- `between`/`overlapping` (scene tests, not JS): a group-vs-group pair
+  with exactly one colliding leaf names that leaf pair; multiple
+  colliders all appear in `overlapping`.
 - Transforms: rotated/scaled operands agree with baked equivalents.
 
 ## Open questions

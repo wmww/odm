@@ -18,8 +18,11 @@ discussions that followed. Cross-references note where plans touch.
   refactor on its own; the viewer-core seam is done (see below).
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
-  separating translation. Corrects clearance.md's premise: manifold-csg
-  0.3.3 *does* have `min_gap`.
+  separating translation, offending leaf pairs named on the CLI surface,
+  tangency handled by thresholding the continuous value (no tolerance
+  field). Absorbs the deleted issues/clearance-query-gaps.md (2026-08
+  field report). Corrects clearance.md's premise: manifold-csg 0.3.3
+  *does* have `min_gap`.
 
 Done and deleted: `cli-diet.md` (surface cuts + the prompt-vs-docs policy —
 now `notes/agent-surface.md`); `render-workflow.md` (superseded by
