@@ -401,13 +401,5 @@ impl Viewer {
             image.paint_at(ui, rect);
         }
         theme::bevel(ui.painter(), outer, theme::Bevel::Sunken);
-        // Overlay hint.
-        ui.painter().text(
-            rect.left_top() + egui::vec2(8.0, 8.0),
-            egui::Align2::LEFT_TOP,
-            "drag orbit · shift/middle-drag pan · scroll zoom · click select (shift adds) · F frame selection",
-            egui::FontId::proportional(theme::UI_SIZE),
-            egui::Color32::from_white_alpha(60),
-        );
     }
 }
