@@ -27,7 +27,8 @@ pub const USAGE: &str = "  status                     project, files, view slots
   clearance '{…}'            geometry query: do node pairs overlap + gap lower bound
   poll    [--timeout <sec>] [--follow]
                              wait for messages the user typed in the viewer
-                             (--follow: never exit, one JSON line per batch)
+                             (--follow: never exit, one JSON line per batch,
+                             reconnects across engine restarts)
   say     <text>             send a message to the user
   say     --task <text>      set the live working status the viewer shows
   say     --done [<text>]    clear it; <text> is sent as a normal message
@@ -129,7 +130,7 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     }
 
     if follow {
-        return follow_poll(stream, &request, &mut std::io::stdout());
+        return follow_poll(stream, &sock, &request, &mut std::io::stdout());
     }
 
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -251,33 +252,67 @@ fn parse_poll(args: &[String]) -> anyhow::Result<(Option<f64>, bool)> {
 /// flushed as it lands. Each batch is acknowledged before the next poll goes
 /// out, so delivery stays the same two-phase handshake: a follower that dies
 /// mid-batch returns its messages to the queue rather than eating them.
+///
+/// The engine going away does not end the follow — exiting would silently
+/// unpark the session's one standing listener exactly when the user restarts
+/// the engine. It prints `{"engine": "down"}`, waits for the socket to accept
+/// again, prints `{"engine": "back"}`, and resumes. What does end it: a dead
+/// stdout (the watcher went away), or the engine refusing the request itself
+/// (asking again would get the same answer).
 fn follow_poll<W: Write>(
     mut stream: UnixStream,
+    sock: &Path,
     request: &Value,
     out: &mut W,
 ) -> anyhow::Result<i32> {
-    let mut reader = BufReader::new(stream.try_clone()?);
     loop {
-        send(&mut stream, request)?;
-        let value = read_response(&mut reader)?;
-        let mut line = value.to_string();
-        line.push('\n');
-        // Flushed before the ack, same as the one-shot path: until these bytes
-        // are out of our hands, the engine's copy is the only one there is. A
-        // closed stdout — the watcher went away — ends the follow instead of
-        // looping into a void.
-        if out.write_all(line.as_bytes()).and_then(|_| out.flush()).is_err() {
+        let mut reader = BufReader::new(stream.try_clone()?);
+        // One connection's worth of batches, until the engine goes away.
+        loop {
+            if send(&mut stream, request).is_err() {
+                break;
+            }
+            let Ok(value) = read_response(&mut reader) else { break };
+            let stopped = value["error"]["kind"].as_str() == Some("stopped");
+            // The shutdown announcement is not printed — the "down" notice
+            // below is its line. Flushing before the ack, same as the
+            // one-shot path: until these bytes are out of our hands, the
+            // engine's copy is the only one there is.
+            if !stopped && !emit(out, &value) {
+                return Ok(1);
+            }
+            if value.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                if stopped {
+                    break;
+                }
+                return Ok(1);
+            }
+            if delivered_messages(&value) {
+                acknowledge(&mut stream, &mut reader);
+            }
+        }
+        if !emit(out, &json!({ "engine": "down" })) {
             return Ok(1);
         }
-        if value.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-            // The engine is shutting down or refused the request: nothing here
-            // gets better by asking again.
+        stream = loop {
+            match UnixStream::connect(sock) {
+                Ok(s) => break s,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(300)),
+            }
+        };
+        if !emit(out, &json!({ "engine": "back" })) {
             return Ok(1);
-        }
-        if delivered_messages(&value) {
-            acknowledge(&mut stream, &mut reader);
         }
     }
+}
+
+/// One compact JSON line out, flushed. False means stdout is closed — the
+/// watcher went away — and the follow should end instead of looping into a
+/// void.
+fn emit<W: Write>(out: &mut W, value: &Value) -> bool {
+    let mut line = value.to_string();
+    line.push('\n');
+    out.write_all(line.as_bytes()).and_then(|_| out.flush()).is_ok()
 }
 
 fn send(stream: &mut UnixStream, request: &Value) -> anyhow::Result<()> {
@@ -455,7 +490,7 @@ pub fn project_dir(path: PathBuf) -> anyhow::Result<PathBuf> {
 }
 
 /// Three things worth pinning down here: the JSON-argument grammar, the
-/// follow loop's poll/ack handshake against a fake engine, and the
+/// follow loop's poll/ack/reconnect handshake against a fake engine, and the
 /// pretty-printer's line breaking.
 #[cfg(test)]
 mod tests {
@@ -517,12 +552,16 @@ mod tests {
         assert!(parse_poll(&args(&["--wait"])).is_err());
     }
 
-    /// A `Write` that hands each written line to the test thread.
+    /// A `Write` that hands each written line to the test thread — and fails
+    /// once the receiver is gone, the way a real stdout does, which is how
+    /// these tests end a follow that would otherwise run forever.
     struct Lines(Sender<String>);
 
     impl Write for Lines {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let _ = self.0.send(String::from_utf8_lossy(buf).into_owned());
+            self.0
+                .send(String::from_utf8_lossy(buf).into_owned())
+                .map_err(|_| std::io::ErrorKind::BrokenPipe)?;
             Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
@@ -541,34 +580,80 @@ mod tests {
     }
 
     #[test]
-    fn follow_prints_a_line_per_batch_and_acks_each() {
+    fn follow_acks_each_batch_and_survives_an_engine_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("engine.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+
         let (engine, client) = UnixStream::pair().unwrap();
         let (tx, rx) = channel();
-        let follower = std::thread::spawn(move || {
-            follow_poll(client, &json!({ "cmd": "poll" }), &mut Lines(tx)).unwrap()
-        });
+        let follower = {
+            let sock = sock.clone();
+            std::thread::spawn(move || {
+                follow_poll(client, &sock, &json!({ "cmd": "poll" }), &mut Lines(tx)).unwrap()
+            })
+        };
 
         let mut writer = engine.try_clone().unwrap();
         let mut reader = BufReader::new(engine);
-        for text in ["one", "two"] {
-            // No `follow` key: the engine only ever sees a plain poll.
-            assert_eq!(request(&mut reader), r#"{"cmd":"poll"}"#);
-            writeln!(writer, r#"{{"ok":true,"messages":[{{"text":"{text}"}}],"view":null}}"#)
-                .unwrap();
-            let line = next(&rx);
-            assert!(line.contains(text), "{line}");
-            // One line per batch, and the batch is acknowledged before the
-            // next poll goes out.
-            assert_eq!(line.matches('\n').count(), 1, "{line}");
-            assert_eq!(request(&mut reader), r#"{"cmd":"ack"}"#);
-            writeln!(writer, r#"{{"ok":true,"acked":1}}"#).unwrap();
-        }
+        // No `follow` key: the engine only ever sees a plain poll.
+        assert_eq!(request(&mut reader), r#"{"cmd":"poll"}"#);
+        writeln!(writer, r#"{{"ok":true,"messages":[{{"text":"one"}}],"view":null}}"#).unwrap();
+        let line = next(&rx);
+        assert!(line.contains("one"), "{line}");
+        // One line per batch, and the batch is acknowledged before the next
+        // poll goes out.
+        assert_eq!(line.matches('\n').count(), 1, "{line}");
+        assert_eq!(request(&mut reader), r#"{"cmd":"ack"}"#);
+        writeln!(writer, r#"{{"ok":true,"acked":1}}"#).unwrap();
 
-        // The engine going away ends the follow — with the error line printed,
-        // and a nonzero exit.
+        // The engine announces shutdown and goes away: one "down" notice
+        // (the stopped response itself is not printed), then the follower
+        // knocks on the socket.
         assert_eq!(request(&mut reader), r#"{"cmd":"poll"}"#);
         writeln!(writer, r#"{{"ok":false,"error":{{"kind":"stopped"}}}}"#).unwrap();
-        assert!(next(&rx).contains("stopped"));
+        drop(writer);
+        drop(reader);
+        assert_eq!(next(&rx).trim(), r#"{"engine":"down"}"#);
+
+        // The restarted engine accepts, and the follow resumes: a "back"
+        // notice, then batches flow again on the new connection.
+        let (engine, _) = listener.accept().unwrap();
+        assert_eq!(next(&rx).trim(), r#"{"engine":"back"}"#);
+        let mut writer = engine.try_clone().unwrap();
+        let mut reader = BufReader::new(engine);
+        assert_eq!(request(&mut reader), r#"{"cmd":"poll"}"#);
+        writeln!(writer, r#"{{"ok":true,"messages":[{{"text":"two"}}],"view":null}}"#).unwrap();
+        assert!(next(&rx).contains("two"));
+        assert_eq!(request(&mut reader), r#"{"cmd":"ack"}"#);
+        writeln!(writer, r#"{{"ok":true,"acked":1}}"#).unwrap();
+
+        // Only a dead stdout ends it: with the watcher gone, the next outage
+        // has nowhere to report and the follow exits instead of reconnecting.
+        assert_eq!(request(&mut reader), r#"{"cmd":"poll"}"#);
+        drop(rx);
+        drop(writer);
+        drop(reader);
+        assert_eq!(follower.join().unwrap(), 1);
+    }
+
+    /// A refusal of the request itself (not a shutdown) still exits: asking
+    /// again would get the same answer, so the error line is printed and the
+    /// follow ends rather than reconnecting.
+    #[test]
+    fn a_refused_follow_prints_the_error_and_exits() {
+        let (engine, client) = UnixStream::pair().unwrap();
+        let (tx, rx) = channel();
+        let follower = std::thread::spawn(move || {
+            follow_poll(client, Path::new("/nonexistent"), &json!({ "cmd": "poll" }), &mut Lines(tx))
+                .unwrap()
+        });
+        let mut writer = engine.try_clone().unwrap();
+        let mut reader = BufReader::new(engine);
+        assert_eq!(request(&mut reader), r#"{"cmd":"poll"}"#);
+        writeln!(writer, r#"{{"ok":false,"error":{{"kind":"bad_request","message":"no"}}}}"#)
+            .unwrap();
+        assert!(next(&rx).contains("bad_request"));
         assert_eq!(follower.join().unwrap(), 1);
     }
 
@@ -589,7 +674,8 @@ mod tests {
 
         let (engine, client) = UnixStream::pair().unwrap();
         let follower = std::thread::spawn(move || {
-            follow_poll(client, &json!({ "cmd": "poll" }), &mut Broken).unwrap()
+            follow_poll(client, Path::new("/nonexistent"), &json!({ "cmd": "poll" }), &mut Broken)
+                .unwrap()
         });
         let mut writer = engine.try_clone().unwrap();
         let mut reader = BufReader::new(engine);

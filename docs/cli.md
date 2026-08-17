@@ -31,7 +31,7 @@ odm raycast '{"rays": [{"origin": [0, 0, 50], "dir": [0, 0, -1]}]}'
 
 The exceptions are the commands whose arguments aren't a structured
 request: `poll` takes `--timeout <sec>`/`--follow` (they configure the
-CLI's own waiting; `--follow` never reaches the engine), `say` takes
+CLI's own waiting; the engine only ever sees poll requests), `say` takes
 free text (after an optional `--task`/`--done`), and `docs` is
 engineless and textual. `--project` stays a prefix — transport,
 resolved before a request exists.
@@ -392,6 +392,11 @@ engine until collected with `odm poll`:
   heal. Value changes only: your own ok→ok saves, redundant rebuilds
   and stale flips don't emit, and a reconnect re-reports current
   failures rather than losing them.
+- `--follow` survives the engine too: when the engine stops it prints
+  `{"engine": "down"}`, waits for the socket, reconnects, and prints
+  `{"engine": "back"}` — one launch covers the whole session, engine
+  restarts included, no retry wrapper needed. (The engine refusing the
+  request itself still exits nonzero.)
 - Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
   a message is only retired once the poll that took it has printed it,
   so anything it didn't get to goes back in the queue for the next one.

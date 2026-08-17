@@ -28,7 +28,7 @@ for the topic list, `odm docs <topic>` to read one, `odm docs search
 <pattern>` to grep it. Check it before guessing at API details.
 
 The user watches the viewer and talks to you through it: keep
-`odm poll` running in the background so their messages reach you,
+`odm poll --follow` running in the background so their messages reach you,
 answer with `odm say`, keep `odm say --task <what you're doing>`
 current while you work so the viewer shows you're alive — always
 clearing it with `odm say --done <result>` before you stop — and read

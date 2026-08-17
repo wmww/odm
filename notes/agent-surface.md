@@ -192,6 +192,15 @@ writing the values costs tokens ~nothing vs reading tiles.
   absence = user (the shape the prompt teaches).
 - `events: true` on poll (what `--follow` sets): answer on diagnostic
   value changes, compared per connection against what it last reported.
+- `--follow` reconnects (2026-08-17, from field report): engine death
+  prints `{"engine":"down"}`, then the CLI retries the socket (300ms)
+  forever and prints `{"engine":"back"}` — the standing listener must
+  survive engine restarts or the viewer says nobody is listening.
+  Shutdown's `stopped` error is swallowed (the down notice is its
+  line); other refusals still print + exit 1, as does a dead stdout.
+  Prompt leads with `--follow` and names the harness background-task
+  mechanism (Claude Code `run_in_background`/BashOutput, not `&`) —
+  agents were reaching for `--timeout` relaunch loops and shell `&`.
 
 ## Standing cuts (don't reintroduce)
 

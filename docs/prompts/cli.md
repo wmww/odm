@@ -17,7 +17,8 @@ odm inspect ['{…}']           # measure the scene / one node
 odm render  ['{…}']           # PNG → prints path
 odm raycast '{…}'             # nearest surface hit along rays
 odm clearance '{…}'           # per node pair: overlap? + gap lower bound
-odm poll [--timeout <sec>] [--follow]   # wait for messages from the user
+odm poll --follow             # stream user messages forever; park in background
+odm poll [--timeout <sec>]    # one-shot fallback: wait for messages, exit
 odm say <text>                # send a message to the user
 odm say --task <text>         # set the live "working on..." status
 odm say --done [<text>]       # clear it (+ optionally send a message)
@@ -122,9 +123,9 @@ you collect them with `odm poll`:
 - `--follow` never exits: it prints one compact JSON line per batch (the
   same object, one per line) and keeps waiting, including a line
   whenever a build or health value changes (a slot turning red, a
-  heal). For a harness that surfaces each line of a long-running
-  command, this is one standing command instead of a relaunch per
-  message.
+  heal). It survives engine restarts: on engine death it prints
+  `{"engine": "down"}`, reconnects when the engine returns, and prints
+  `{"engine": "back"}` — no retry wrapper needed.
 - Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
   a message is only retired once the poll that took it has printed it,
   so anything it didn't get to goes back in the queue for the next one.
@@ -132,16 +133,20 @@ you collect them with `odm poll`:
   make one message arrive twice — if the same text turns up again
   immediately, it is the same instruction, not a second one.
 
-**Stay reachable at all times**, including while you work: if your
-harness can watch a long-running command's output line by line, park
-`odm poll --follow` under it once at the start of the session;
-otherwise launch `odm poll --timeout <sec>` as a background task and
-relaunch it whenever it exits, acting on any messages it printed.
+**Stay reachable at all times**, including while you work: park one
+`odm poll --follow` in the background at the start of the session and
+check its new lines whenever you pause. Use your harness's managed
+background-task mechanism, which feeds output back to you line by line
+(Claude Code: Bash with `run_in_background: true`, new lines via its
+BashOutput/TaskOutput tool) — a shell `&` orphans the process and you
+never see its lines. Only if your harness has no such mechanism, fall
+back to `odm poll --timeout <sec>`, relaunched whenever it exits,
+acting on what it printed.
 Messages are never lost — anything sent while nothing was polling is
 delivered to the next poll, and the viewer shows the user which of
 their messages have reached you — but it also tells them nobody is
-listening when no poll is active, so a standing poll is what makes you
-reachable.
+listening when no poll is active, so the standing poll is what makes
+you reachable.
 
 `odm say <text>` sends a message back; it appears in the viewer next to
 the user's own messages. Use it to answer questions and report results
