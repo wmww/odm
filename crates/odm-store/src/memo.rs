@@ -45,11 +45,50 @@ pub enum InvokeOutcome {
     Failure(Hash),
 }
 
+/// Console line severity: the levels the `console` shim emits (`info` maps
+/// to `log`; unknown strings read as `Log` at the op boundary). Part of the
+/// memoized log output, hence store-side; the CLI wire keeps the lowercase
+/// strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Log,
+    Debug,
+    Warn,
+    Error,
+}
+
+impl LogLevel {
+    pub fn parse(s: &str) -> LogLevel {
+        match s {
+            "debug" => LogLevel::Debug,
+            "warn" => LogLevel::Warn,
+            "error" => LogLevel::Error,
+            _ => LogLevel::Log,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LogLevel::Log => "log",
+            LogLevel::Debug => "debug",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+        }
+    }
+}
+
+impl std::fmt::Display for LogLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One captured console line from a build. Lives here (not odm-js) so memo
 /// entries can replay logs on a hit.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LogLine {
-    pub level: String,
+    pub level: LogLevel,
     pub message: String,
 }
 

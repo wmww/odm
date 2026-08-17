@@ -49,11 +49,8 @@ const XRAY_OPACITY: f32 = 0.3;
 /// How far from a wire a click still counts, in UI points.
 const PICK_RADIUS_PT: f64 = 6.0;
 
-/// Height of the build-error pane. Fixed, so opening one does not resize the
-/// panel as the message grows.
-const ERROR_HEIGHT: f32 = 140.0;
-
-/// Height of the console pane, same deal.
+/// Height of the console pane (build logs + error). Fixed, so opening it
+/// does not resize the panel as content grows.
 const CONSOLE_HEIGHT: f32 = 140.0;
 
 /// Height of the chat transcript. The viewport is the main event, so the panel
@@ -973,43 +970,46 @@ impl ViewerApp {
             self.apply_input_events(events);
         }
 
-        if let Some(err) = &self.tab().published.error {
-            let err = err.clone();
-            let error_open = &mut self.tabs[self.active].error_open;
-            theme::collapsing(ui, "build-error", error_open, "Build error", theme::ERROR, |ui| {
-                let size = egui::vec2(ui.available_width(), ERROR_HEIGHT);
-                theme::list_box(ui, "error", size, egui::Vec2b::new(false, true), |ui| {
-                    ui.label(egui::RichText::new(err).monospace());
-                });
-            });
-        }
-
-        // Console output of the last build attempt (success or failure) —
-        // latest-attempt semantics, same as the error above.
+        // One console, browser-devtools style: the last build attempt's
+        // output in order (latest-attempt semantics), and — when the build
+        // failed — the thrown error as the final entry, which is where it
+        // fell chronologically. Presentation-only merge: `error` stays its
+        // own field everywhere else (tab badge, agent surfaces, last-good
+        // scene semantics).
         let logs = self.tab().published.logs.clone();
-        if !logs.is_empty() {
-            let header = format!("Console ({})", logs.len());
-            let header_color =
-                if logs.iter().any(|(_, l)| l.level == "warn" || l.level == "error") {
-                    theme::WARN
-                } else {
-                    theme::TEXT
-                };
+        let error = self.tab().published.error.clone();
+        if !logs.is_empty() || error.is_some() {
+            let header = format!("Console ({})", logs.len() + error.is_some() as usize);
+            let header_color = if error.is_some() {
+                theme::ERROR
+            } else if logs
+                .iter()
+                .any(|(_, l)| matches!(l.level, odm_js::LogLevel::Warn | odm_js::LogLevel::Error))
+            {
+                theme::WARN
+            } else {
+                theme::TEXT
+            };
             let console_open = &mut self.tabs[self.active].console_open;
             theme::collapsing(ui, "console", console_open, &header, header_color, |ui| {
                 let size = egui::vec2(ui.available_width(), CONSOLE_HEIGHT);
                 theme::list_box(ui, "console", size, egui::Vec2b::new(false, true), |ui| {
                     for (path, line) in logs.iter() {
-                        let color = match line.level.as_str() {
-                            "error" => theme::ERROR,
-                            "warn" => theme::WARN,
-                            "debug" => theme::WEAK_TEXT,
-                            _ => theme::TEXT,
+                        let color = match line.level {
+                            odm_js::LogLevel::Error => theme::ERROR,
+                            odm_js::LogLevel::Warn => theme::WARN,
+                            odm_js::LogLevel::Debug => theme::WEAK_TEXT,
+                            odm_js::LogLevel::Log => theme::TEXT,
                         };
                         ui.label(
                             egui::RichText::new(format!("{path}: {}", line.message))
                                 .monospace()
                                 .color(color),
+                        );
+                    }
+                    if let Some(err) = &error {
+                        ui.label(
+                            egui::RichText::new(err).monospace().color(theme::ERROR),
                         );
                     }
                 });

@@ -12,7 +12,7 @@ mod snapshot;
 mod version;
 
 pub use ir_json::node_from_json;
-pub use session::{InvokeError, Invoker, LogLine, SessionState};
+pub use session::{InvokeError, Invoker, LogLevel, LogLine, SessionState};
 pub use snapshot::JsEnv;
 pub use version::{ApiVersion, SUPPORTED, parse_doc, parse_pragma};
 

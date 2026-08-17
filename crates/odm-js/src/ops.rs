@@ -321,12 +321,12 @@ pub fn op_log(state: &mut OpState, #[string] level: &str, #[string] message: &st
     let s = sess(state);
     if s.logs.len() < MAX_LOG_LINES {
         s.logs.push(crate::session::LogLine {
-            level: level.to_string(),
+            level: crate::session::LogLevel::parse(level),
             message: message.to_string(),
         });
     } else if s.logs.len() == MAX_LOG_LINES {
         s.logs.push(crate::session::LogLine {
-            level: "warn".into(),
+            level: crate::session::LogLevel::Warn,
             message: format!("(console output truncated at {MAX_LOG_LINES} lines)"),
         });
     }

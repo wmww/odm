@@ -20,7 +20,7 @@ pub struct SessionState {
 }
 
 /// Console line; defined in odm-store so memo entries can carry logs.
-pub use odm_store::LogLine;
+pub use odm_store::{LogLevel, LogLine};
 
 /// A failed nested invoke, as `op_invoke` records and rethrows it.
 pub struct InvokeError {
