@@ -70,13 +70,55 @@ manifold-csg 0.3.3 already exposes the f64 path (`MeshGL64`,
 - Sweep remaining `as f64` casts of position data (viewer picking,
   conformance) — most simply become no-ops to delete.
 
+## Tests that fail on f32 regression
+
+The type system can't protect the seams — an `as f32; as f64` pair
+anywhere silently reintroduces quantization. Pin each seam with values
+that f32 cannot represent. Two probes cover everything:
+
+- **Value probe**: `0.1` (f64) vs `0.1f32 as f64` = `0.10000000149...`.
+  Assert exact f64 bit equality; any f32 round-trip flips the result to
+  the second value.
+- **Magnitude probe**: coordinates near `1e7`, where f32 ulp ≈ 1.0 but
+  f64 ulp ≈ 2e-9. Sub-unit geometry there is destroyed by any f32 pass.
+
+Tests (each must fail if its seam regresses):
+
+1. **Kernel intern** (odm-kernel): `cube(0.1, 0.1, 0.1)` → read the
+   stored `Mesh` → assert some position `== 0.1` exactly (bit equality,
+   not tolerance).
+2. **Store→Manifold rebuild** (odm-kernel): unit cube,
+   `transform_solid` by translation `[1e7 + 0.25, 0, 0]`, then
+   `clear_cache()` (forces rebuild from the stored mesh — the seam under
+   test), then assert `volume() ≈ 1.0` within `1e-6` and `bounds().min[0]
+   == 1e7 + 0.25` exactly. With f32 verts the bounds are off by up to
+   ~1.0 and the re-welded volume is garbage (or welding fails outright).
+3. **Canonical hashing** (odm-ir): two meshes whose positions differ
+   only below f32 precision (`0.1` vs `0.1f32 as f64`) must hash
+   differently. Catches `Canonical for Mesh` regressing to `f32s`.
+4. **JS boundary + three generators** (conformance): doohickey builds
+   `fromThreeGeometry(new THREE.BoxGeometry(0.2, 0.2, 0.2))`; engine-side,
+   assert stored positions are exactly `±0.1`. Fails if the generator
+   still emits Float32BufferAttribute, if `fromThreeGeometry` coerces to
+   Float32Array, or if `op_solid_from_mesh` takes f32 — one test pins
+   all three layers.
+5. **Render-side reads** (odm-render): `mesh_aabb` on a mesh with a
+   position of `1e7 + 0.25` returns it exactly; a `wire.rs` projection
+   test with camera and geometry near `1e7` yields the same screen-space
+   segments as the identical scene near the origin (within ~1e-3 px) —
+   fails if positions pass through f32 before the f64 clip math.
+
+Keep them all in one place per crate (e.g. a `precision` test module) so
+the intent — "these are f32-regression tripwires" — is legible.
+
 ## Order
 
-ir → kernel → js/framework → render → engine, one commit; the type
-change makes the compiler enumerate every seam. Run kernel + render +
-conformance tests; wire/render goldens shouldn't change visibly but
-pixel-exact goldens may need regenerating (vertex bits differ at f32's
-last ulp after the round-trip change).
+ir (+test 3) → kernel (+tests 1, 2) → js/framework (+test 4) → render
+(+test 5) → engine, one commit; the type change makes the compiler
+enumerate every seam. Run kernel + render + conformance tests;
+wire/render goldens shouldn't change visibly but pixel-exact goldens may
+need regenerating (vertex bits differ at f32's last ulp after the
+round-trip change).
 
 ## Out of scope (noted for later)
 
