@@ -257,9 +257,6 @@ pub fn button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> Response {
     r
 }
 
-/// Gap between the expander box and the label beside it.
-const LABEL_GAP: f32 = 5.0;
-
 /// The era's checkmark, pixel for pixel: a short stroke down into a long one
 /// back up, both two pixels thick. Painted rather than left to egui, whose
 /// tick is an anti-aliased polyline — the wrong side of the pixel grid
@@ -272,40 +269,6 @@ const CHECK: [&str; 6] = [
     " ###   ", //
     "  #    ", //
 ];
-
-/// A section that folds away under a clickable header, marked with the same
-/// boxed +/- the scene tree uses rather than a twisty.
-///
-/// The body is drawn according to `open` as it was on entry, so a click takes
-/// effect on the next frame: a caller sizing a panel around the body then has
-/// the two agree every frame.
-pub fn collapsing<R>(
-    ui: &mut Ui,
-    id_salt: &str,
-    open: &mut bool,
-    header: &str,
-    color: Color32,
-    add: impl FnOnce(&mut Ui) -> R,
-) -> Option<R> {
-    let was_open = *open;
-    let galley = ui.painter().layout_no_wrap(header.to_owned(), FontId::proportional(UI_SIZE), color);
-    let height = galley.size().y.max(EXPANDER).max(ui.spacing().interact_size.y);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
-
-    let mid = snap(ui, rect.center()).y;
-    let center = pos2(snap(ui, pos2(rect.left() + EXPANDER / 2.0, 0.0)).x, mid);
-    let box_rect = expander_box(ui.painter(), center, *open);
-    let text_pos = pos2(box_rect.right() + LABEL_GAP, mid - galley.size().y / 2.0);
-    let width = galley.size().x;
-    ui.painter().galley(snap(ui, text_pos), galley, color);
-
-    // The header is one click target, but no wider than what it draws.
-    let hit = Rect::from_min_max(rect.min, pos2(text_pos.x + width, rect.max.y));
-    if ui.interact(hit, ui.id().with(id_salt), egui::Sense::click()).clicked() {
-        *open = !*open;
-    }
-    was_open.then(|| add(ui))
-}
 
 /// Paint a pixel-art glyph — rows of `#` — with its top-left at `pos`.
 ///
@@ -530,6 +493,74 @@ pub fn tab_edge(p: &egui::Painter, y: f32, x0: f32, x1: f32) {
         HILIGHT,
     );
     p.add(mesh);
+}
+
+/// A plain row of notebook tabs at the top of a panel, opening into the page
+/// below it. The fixed set a dock switches between: no close boxes, no +, no
+/// squeezing — [`crate::viewer`]'s view tabs paint their own strip for those.
+/// Returns the tab clicked this frame, if any.
+pub fn tab_strip(
+    ui: &mut Ui,
+    id_salt: &str,
+    tabs: &[(String, Color32)],
+    selected: usize,
+) -> Option<usize> {
+    /// Face left and right of a tab's label.
+    const PAD: f32 = 8.0;
+
+    let height = TAB_HEIGHT + TAB_GROW * 2.0;
+    let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
+    let origin = snap(ui, strip.left_top());
+    // The selected tab starts `TAB_GROW` higher than the rest and crosses the
+    // page edge they stop at; both end their text on the same line.
+    let edge_y = origin.y + TAB_GROW + TAB_HEIGHT;
+
+    let galleys: Vec<_> = tabs
+        .iter()
+        .map(|(text, color)| {
+            ui.painter().layout_no_wrap(text.clone(), FontId::proportional(UI_SIZE), *color)
+        })
+        .collect();
+    let mut x = origin.x;
+    let rects: Vec<Rect> = galleys
+        .iter()
+        .enumerate()
+        .map(|(i, galley)| {
+            let width = (galley.size().x + PAD * 2.0).round();
+            let out = if i == selected { TAB_GROW } else { 0.0 };
+            let rect = Rect::from_min_max(
+                pos2(x - out, origin.y + TAB_GROW - out),
+                pos2(x + width + out, edge_y + out),
+            );
+            x += width;
+            rect
+        })
+        .collect();
+
+    // Unselected tabs, then the page edge cutting them off, then the selected
+    // tab cutting the edge: the order the shapes overlap in.
+    for (i, rect) in rects.iter().enumerate() {
+        if i != selected {
+            tab(ui.painter(), *rect);
+        }
+    }
+    tab_edge(ui.painter(), edge_y, strip.left(), strip.right());
+    if let Some(rect) = rects.get(selected) {
+        tab(ui.painter(), *rect);
+    }
+
+    let mut clicked = None;
+    for (i, (rect, galley)) in rects.iter().zip(&galleys).enumerate() {
+        let out = if i == selected { TAB_GROW } else { 0.0 };
+        let mid = ((rect.top() + out + edge_y) / 2.0).round();
+        let pos = pos2(rect.left() + out + PAD, mid - galley.size().y / 2.0);
+        // The color is baked into the galley by `layout_no_wrap`.
+        ui.painter().galley(snap(ui, pos), galley.clone(), TEXT);
+        if ui.interact(*rect, ui.id().with((id_salt, i)), egui::Sense::click()).clicked() {
+            clicked = Some(i);
+        }
+    }
+    clicked
 }
 
 /// A status-bar cell: thin sunken box around a label.

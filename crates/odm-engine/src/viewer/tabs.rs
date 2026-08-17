@@ -23,7 +23,6 @@ pub struct Tab {
     pub framed: bool,
     pub selected: Vec<(String, Option<String>)>,
     pub tree: TreeState,
-    pub console_open: bool,
     pub published: Published,
     pub scene: Option<SceneCache>,
     /// The `t` transport is playing (1 unit/sec, looping over the range).
@@ -47,7 +46,6 @@ impl Tab {
             framed: false,
             selected: Vec::new(),
             tree: TreeState::default(),
-            console_open: true,
             published: Published::default(),
             scene: None,
             playing: false,

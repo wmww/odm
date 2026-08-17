@@ -49,11 +49,6 @@ const XRAY_OPACITY: f32 = 0.3;
 /// How far from a wire a click still counts, in UI points.
 const PICK_RADIUS_PT: f64 = 6.0;
 
-/// Height the console panel opens at, and the least it can be dragged to.
-/// Its box then follows the panel rather than the content, so opening it does
-/// not resize the panel as logs come in.
-const CONSOLE_HEIGHT: f32 = 170.0;
-const CONSOLE_MIN: f32 = 70.0;
 
 /// Most of the space a draggable panel may take from what is left when it is
 /// shown, so that dragging one out never leaves the viewport (or the panels
@@ -63,10 +58,18 @@ const PANEL_SHARE: f32 = 0.6;
 /// What [`theme::text_edit`] pads its text with, top and bottom.
 const INPUT_MARGIN: f32 = 6.0;
 
-/// Height the chat panel starts at, and the least it can be dragged to. The
-/// viewport is the main event, so it starts modest.
-const CHAT_HEIGHT: f32 = 125.0;
-const CHAT_MIN: f32 = 76.0;
+/// Height the bottom dock (chat/console) starts at, and the least it can be
+/// dragged to — a tab strip plus, at the minimum, the chat input and a line
+/// above it. The viewport is the main event, so the dock starts modest.
+const DOCK_HEIGHT: f32 = 150.0;
+const DOCK_MIN: f32 = 100.0;
+
+/// The two tabs of the bottom dock.
+#[derive(Clone, Copy, PartialEq)]
+enum Dock {
+    Chat,
+    Console,
+}
 
 impl Orbit {
     pub(crate) fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
@@ -166,6 +169,9 @@ pub struct ViewerApp {
     needs_render: bool,
     /// The chat input line. The transcript itself lives in `EngineState`.
     chat_input: String,
+    /// Which tab of the bottom dock is showing. One dock for the window, not
+    /// one per view: the console it shows is the active tab's.
+    dock: Dock,
     /// File ▸ Open / File ▸ New Project / the agent-file question, when one
     /// of them is up.
     dialog: Option<Dialog>,
@@ -199,6 +205,7 @@ impl ViewerApp {
             activity: ActivityView::default(),
             needs_render: true,
             chat_input: String::new(),
+            dock: Dock::Chat,
             dialog: None,
             agent_questions: Vec::new(),
             add_tab: None,
@@ -1027,22 +1034,17 @@ impl ViewerApp {
         }
     }
 
-    /// One console, browser-devtools style: the last build attempt's output in
-    /// order (latest-attempt semantics), and — when the build failed — the
-    /// thrown error as the final entry, which is where it fell
-    /// chronologically. Presentation-only merge: `error` stays its own field
-    /// everywhere else (tab badge, agent surfaces, last-good scene semantics).
-    ///
-    /// Its own panel, so its edge can be dragged. `None` — and no panel — when
-    /// the build had nothing to say.
-    fn console_ui(&mut self, ui: &mut egui::Ui) -> Option<egui::Rect> {
-        let logs = self.tab().published.logs.clone();
-        let error = self.tab().published.error.clone();
-        if logs.is_empty() && error.is_none() {
-            return None;
-        }
-        let header = format!("Console ({})", logs.len() + error.is_some() as usize);
-        let header_color = if error.is_some() {
+    /// The bottom dock: chat and console as two tabs of one panel, sitting
+    /// above the status band. Two views of the same conversation with the
+    /// project — what the agent said, and what the build said — so they share
+    /// the space rather than stacking and squeezing the viewport.
+    fn dock_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let logs = &self.tab().published.logs;
+        let error = self.tab().published.error.is_some();
+        let count = logs.len() + error as usize;
+        // The console's state is on its tab: red for a thrown error, amber
+        // for a warning logged, so a build that failed says so from the chat.
+        let console_color = if error {
             theme::ERROR
         } else if logs
             .iter()
@@ -1052,43 +1054,59 @@ impl ViewerApp {
         } else {
             theme::TEXT
         };
-        // Open and closed are separate panels: sharing one id would persist
-        // the collapsed height and reopen the console flat.
-        let panel = match self.tab().console_open {
-            true => egui::Panel::bottom("console")
-                .resizable(true)
-                .default_size(CONSOLE_HEIGHT)
-                .min_size(CONSOLE_MIN)
-                .max_size((ui.available_height() * PANEL_SHARE).max(CONSOLE_HEIGHT)),
-            false => egui::Panel::bottom("console-closed").resizable(false),
+        let console = match count {
+            0 => "Console".to_owned(),
+            n => format!("Console ({n})"),
         };
-        let panel = panel.frame(theme::panel_frame()).show(ui, |ui| {
-            let console_open = &mut self.tabs[self.active].console_open;
-            theme::collapsing(ui, "console", console_open, &header, header_color, |ui| {
-                let size = egui::vec2(ui.available_width(), ui.available_height().max(24.0));
-                theme::list_box(ui, "console", size, egui::Vec2b::new(false, true), |ui| {
-                    for (path, line) in logs.iter() {
-                        let color = match line.level {
-                            odm_js::LogLevel::Error => theme::ERROR,
-                            odm_js::LogLevel::Warn => theme::WARN,
-                            odm_js::LogLevel::Debug => theme::WEAK_TEXT,
-                            odm_js::LogLevel::Log => theme::TEXT,
-                        };
-                        ui.label(
-                            egui::RichText::new(format!("{path}: {}", line.message))
-                                .monospace()
-                                .color(color),
-                        );
-                    }
-                    if let Some(err) = &error {
-                        ui.label(
-                            egui::RichText::new(err).monospace().color(theme::ERROR),
-                        );
-                    }
-                });
-            });
+        let tabs = [("Chat".to_owned(), theme::TEXT), (console, console_color)];
+        let selected = match self.dock {
+            Dock::Chat => 0,
+            Dock::Console => 1,
+        };
+        let clicked = theme::tab_strip(ui, "dock", &tabs, selected);
+        // The click lands after the body, so the strip and what is under it
+        // never disagree within a frame.
+        match self.dock {
+            Dock::Chat => self.chat_ui(ui, frame),
+            Dock::Console => self.console_ui(ui),
+        }
+        if let Some(i) = clicked {
+            self.dock = if i == 0 { Dock::Chat } else { Dock::Console };
+        }
+    }
+
+    /// One console, browser-devtools style: the last build attempt's output in
+    /// order (latest-attempt semantics), and — when the build failed — the
+    /// thrown error as the final entry, which is where it fell
+    /// chronologically. Presentation-only merge: `error` stays its own field
+    /// everywhere else (tab badge, agent surfaces, last-good scene semantics).
+    fn console_ui(&mut self, ui: &mut egui::Ui) {
+        let logs = self.tab().published.logs.clone();
+        let error = self.tab().published.error.clone();
+        let size = egui::vec2(ui.available_width(), ui.available_height().max(24.0));
+        theme::list_box(ui, "console", size, egui::Vec2b::new(false, true), |ui| {
+            if logs.is_empty() && error.is_none() {
+                ui.label(
+                    egui::RichText::new("The build had nothing to say.").color(theme::WEAK_TEXT),
+                );
+            }
+            for (path, line) in logs.iter() {
+                let color = match line.level {
+                    odm_js::LogLevel::Error => theme::ERROR,
+                    odm_js::LogLevel::Warn => theme::WARN,
+                    odm_js::LogLevel::Debug => theme::WEAK_TEXT,
+                    odm_js::LogLevel::Log => theme::TEXT,
+                };
+                ui.label(
+                    egui::RichText::new(format!("{path}: {}", line.message))
+                        .monospace()
+                        .color(color),
+                );
+            }
+            if let Some(err) = &error {
+                ui.label(egui::RichText::new(err).monospace().color(theme::ERROR));
+            }
         });
-        Some(panel.response.rect)
     }
 
     /// The whole window when no project is open: the menu bar, and the reason
@@ -1213,23 +1231,20 @@ impl eframe::App for ViewerApp {
                 self.apply_input_events(events);
             });
         theme::band(ui, right.response.rect);
-        // Below the status band, as the last thing the window pushed down.
-        if let Some(console) = self.console_ui(ui) {
-            theme::band(ui, console);
-        }
+        // The status band is the last thing the window pushed down.
         let bottom = egui::Panel::bottom("timeline")
             .frame(theme::panel_frame())
             .show(ui, |ui| self.bottom_ui(ui));
         theme::band(ui, bottom.response.rect);
         // Above the status band, below the viewport.
-        let chat = egui::Panel::bottom("chat")
+        let dock = egui::Panel::bottom("dock")
             .resizable(true)
-            .default_size(CHAT_HEIGHT)
-            .min_size(CHAT_MIN)
-            .max_size((ui.available_height() * PANEL_SHARE).max(CHAT_HEIGHT))
+            .default_size(DOCK_HEIGHT)
+            .min_size(DOCK_MIN)
+            .max_size((ui.available_height() * PANEL_SHARE).max(DOCK_HEIGHT))
             .frame(theme::panel_frame())
-            .show(ui, |ui| self.chat_ui(ui, frame));
-        theme::band(ui, chat.response.rect);
+            .show(ui, |ui| self.dock_ui(ui, frame));
+        theme::band(ui, dock.response.rect);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| self.viewport_ui(ui, frame));

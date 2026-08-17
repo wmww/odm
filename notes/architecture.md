@@ -216,11 +216,12 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (right side; controls from the tab's fall-through report: trackbars for
   ranged numbers, toggles, choice buttons, JSON-ish text fields, presets), a
   `t` transport when a ranged cascade number named t falls through
-  (scrub + play at 1 unit/sec looping), one devtools-style console panel
-  (its own resizable bottom panel; open and collapsed use separate panel ids
-  so egui does not persist the collapsed height and reopen flat, and
-  `theme::collapsing` draws its body from the pre-click `open` so the panel
-  and its contents agree every frame)
+  (scrub + play at 1 unit/sec looping), one resizable bottom dock above the
+  status band holding **Chat** and a devtools-style **Console** as two tabs
+  (`theme::tab_strip`, the plain version of the view strip; one dock per
+  window, showing the active tab's console; the Console label carries the
+  entry count and goes amber/red for a warning/error, so a failed build says
+  so from the Chat tab)
   with last-good scene (`Published.logs` is latest-attempt: success or
   failure, colored by `LogLevel`; a failed build's error is the final
   red entry — presentation-only merge, `Published.error` stays its own
