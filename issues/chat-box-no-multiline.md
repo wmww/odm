@@ -6,4 +6,4 @@ Enter sent it instead, so it arrived truncated and they retyped the whole
 thing on one line. Anything list-shaped — a spec, a bill of materials, a set
 of dimensions — is awkward to send.
 
-Wanted: shift+Enter (or similar) for a newline, with Enter still sending.
+Wanted: shift+Enter for a newline, with Enter still sending. box should visually grow to fix message. Ctrl+J should also insert newline (to match terminals)
