@@ -291,10 +291,28 @@ pub fn op_invoke(
     s.invoker = Some(invoker);
     match result {
         Ok(output) => {
-            s.deps.push(Dep::Invoke { path, args, cascade, output });
+            s.deps.push(Dep::Invoke {
+                path,
+                args,
+                cascade,
+                outcome: odm_store::InvokeOutcome::Output(output),
+            });
             Ok(output.to_hex())
         }
-        Err(msg) => Err(JsErrorBox::generic(format!("invoke({path:?}) failed: {msg}"))),
+        Err(e) => {
+            // The failure is part of this build's inputs even when the throw
+            // below is caught: without the dep, a memoized fallback output
+            // would keep validating after the child is fixed.
+            if let Some(identity) = e.identity {
+                s.deps.push(Dep::Invoke {
+                    path: path.clone(),
+                    args,
+                    cascade,
+                    outcome: odm_store::InvokeOutcome::Failure(identity),
+                });
+            }
+            Err(JsErrorBox::generic(format!("invoke({path:?}) failed: {}", e.message)))
+        }
     }
 }
 

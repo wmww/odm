@@ -22,6 +22,23 @@ pub struct SessionState {
 /// Console line; defined in odm-store so memo entries can carry logs.
 pub use odm_store::LogLine;
 
+/// A failed nested invoke, as `op_invoke` records and rethrows it.
+pub struct InvokeError {
+    /// Agent-readable message; becomes the thrown JS error's text.
+    pub message: String,
+    /// Identity hash of the child's failure value ((kind, message), computed
+    /// by the scheduler) — recorded as a failed-invoke dep so a parent that
+    /// catches the throw still depends on the broken child. `None` when the
+    /// failure is not a value (cancellation): nothing is recorded.
+    pub identity: Option<Hash>,
+}
+
+impl From<String> for InvokeError {
+    fn from(message: String) -> InvokeError {
+        InvokeError { message, identity: None }
+    }
+}
+
 /// Nested-build callback, provided by the scheduler. Runs on the calling
 /// worker thread; may create its own (LIFO-nested) isolate. Returns the hash
 /// of the invoked doohickey's output Node in the store.
@@ -31,5 +48,5 @@ pub trait Invoker {
         path: &str,
         args: &Value,
         cascade: &serde_json::Map<String, Value>,
-    ) -> Result<Hash, String>;
+    ) -> Result<Hash, InvokeError>;
 }

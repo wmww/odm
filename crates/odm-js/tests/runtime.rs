@@ -354,10 +354,13 @@ impl Invoker for NestedInvoker {
         path: &str,
         args: &Value,
         cascade: &serde_json::Map<String, Value>,
-    ) -> Result<Hash, String> {
+    ) -> Result<Hash, odm_js::InvokeError> {
         self.calls.push((path.to_string(), args.clone()));
-        let (code, decls) =
-            self.codes.get(path).ok_or_else(|| format!("no doohickey at {path}"))?.clone();
+        let (code, decls) = self
+            .codes
+            .get(path)
+            .ok_or_else(|| odm_js::InvokeError::from(format!("no doohickey at {path}")))?
+            .clone();
         // The invoke's cascade values become the nested build's environment
         // (the scheduler additionally overlays declaration defaults).
         let child_env: HashMap<String, Value> =
@@ -378,7 +381,7 @@ impl Invoker for NestedInvoker {
                 on_isolate: None,
             },
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| odm_js::InvokeError::from(e.to_string()))?;
         Ok(out.output)
     }
 }

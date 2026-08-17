@@ -392,6 +392,56 @@ fn consistency_incremental_equals_scratch() {
     }
 }
 
+/// A failed invoke is a dependency too: a parent that catches the failure
+/// and returns a fallback must rebuild when the child changes outcome —
+/// in both directions — or the incremental result diverges from scratch.
+#[test]
+fn caught_failing_invoke_is_a_dep() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "root.js",
+        r#"
+        export default function build(ctx) {
+            try { return ctx.invoke('parts/maybe.js', {}); }
+            catch (e) { return odm.box(1); }
+        }
+        "#,
+    );
+    const BROKEN: &str = "export default () => { throw new Error('not yet'); }";
+    const FIXED: &str = "export default () => odm.sphere(2);";
+
+    let e = engine(dir.path());
+    let against_scratch = |e: &Arc<BuildEngine>| {
+        let sync = e.sync().unwrap();
+        let inc = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
+        let fresh = engine(dir.path());
+        let fsync = fresh.sync().unwrap();
+        let scratch = fresh.build_view(&fresh.start_pass(&fsync, View::of("root.js"))).unwrap();
+        assert_eq!(inc.root, scratch.root, "incremental != scratch");
+        inc.root
+    };
+
+    write(dir.path(), "parts/maybe.js", BROKEN);
+    let fallback = against_scratch(&e);
+    // Child fixed: the fallback entry's failed-invoke dep must invalidate.
+    write(dir.path(), "parts/maybe.js", FIXED);
+    let real = against_scratch(&e);
+    assert_ne!(fallback, real, "fixing the child must change the root");
+    // Mirror: the child breaks again — back to the fallback.
+    write(dir.path(), "parts/maybe.js", BROKEN);
+    assert_eq!(against_scratch(&e), fallback);
+    // A *different* failure with the same fallback output still revalidates
+    // (identity covers the message): no divergence either way, but the entry
+    // must not validate against the old failure's identity.
+    write(
+        dir.path(),
+        "parts/maybe.js",
+        "export default () => { throw new Error('still not yet'); }",
+    );
+    assert_eq!(against_scratch(&e), fallback);
+}
+
 #[test]
 fn concurrent_same_pass_dedups() {
     let dir = tempfile::tempdir().unwrap();

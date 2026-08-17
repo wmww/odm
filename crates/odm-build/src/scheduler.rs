@@ -4,7 +4,7 @@ use crate::sources::{ProjectSnapshot, ScanError, Source, scan_project};
 use odm_ir::{Hash, Hasher, hash_json};
 use odm_js::{ApiVersion, BuildError, BuildInput, Invoker, JsEnv, LogLine, run_build};
 use odm_kernel::{CancelToken, Kernel};
-use odm_store::{Dep, GenerationId, MemoEntry, MemoKey, Store};
+use odm_store::{Dep, GenerationId, InvokeOutcome, MemoEntry, MemoKey, Store};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -124,6 +124,19 @@ pub enum FailureKind {
     /// missing required input, schema mismatch).
     Input,
     Internal,
+}
+
+impl BuildFailure {
+    /// Identity of this failure as a value: same (kind, message) ⇔ same
+    /// hash. Recorded in failed-invoke deps ([`odm_store::InvokeOutcome`]);
+    /// a memo entry whose build caught this failure revalidates only while
+    /// the child still fails identically.
+    fn identity(&self) -> Hash {
+        let mut h = Hasher::new();
+        h.str(&format!("{:?}", self.kind));
+        h.str(&self.message);
+        h.finish()
+    }
 }
 
 impl std::fmt::Display for BuildFailure {
@@ -631,7 +644,7 @@ impl BuildEngine {
                         return false;
                     }
                 }
-                Dep::Invoke { path: dep_path, args, cascade, output } => {
+                Dep::Invoke { path: dep_path, args, cascade, outcome } => {
                     let mut chain2: Vec<ChainLink> = chain.to_vec();
                     chain2.push(ChainLink {
                         path: path.to_string(),
@@ -639,9 +652,18 @@ impl BuildEngine {
                         env: env.hash,
                     });
                     let child_env = env.with_cascade(cascade);
-                    match self.get_or_build(pass, &chain2, dep_path, args, &child_env) {
-                        Ok(out) if out == *output => {}
-                        _ => return false,
+                    let result = self.get_or_build(pass, &chain2, dep_path, args, &child_env);
+                    let matches = match (outcome, &result) {
+                        (InvokeOutcome::Output(h), Ok(out)) => out == h,
+                        // Cancellation is not a value: conservatively
+                        // invalidate, the entry revalidates next pass.
+                        (InvokeOutcome::Failure(id), Err(f)) => {
+                            f.kind != FailureKind::Cancelled && f.identity() == *id
+                        }
+                        _ => false,
+                    };
+                    if !matches {
+                        return false;
                     }
                 }
             }
@@ -741,11 +763,14 @@ impl Invoker for EngineInvoker {
         path: &str,
         args: &Value,
         cascade: &Map<String, Value>,
-    ) -> Result<Hash, String> {
+    ) -> Result<Hash, odm_js::InvokeError> {
         let child_env = self.env.with_cascade(cascade);
-        self.engine
-            .get_or_build(&self.pass, &self.chain, path, args, &child_env)
-            .map_err(|f| f.message)
+        self.engine.get_or_build(&self.pass, &self.chain, path, args, &child_env).map_err(|f| {
+            odm_js::InvokeError {
+                identity: (f.kind != FailureKind::Cancelled).then(|| f.identity()),
+                message: f.message,
+            }
+        })
     }
 }
 

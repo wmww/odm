@@ -23,15 +23,26 @@ pub enum Dep {
     /// value in the reader's environment hashes the same.
     Cascade { key: String, value: Hash },
     /// A nested `invoke(path, args, cascade)`. Valid while `path` resolves
-    /// to the same build output; validated recursively by the scheduler
+    /// to the same outcome; validated recursively by the scheduler
     /// (which needs the actual args/cascade values to re-run the invoked
     /// build if its memo is stale).
     Invoke {
         path: String,
         args: serde_json::Value,
         cascade: serde_json::Map<String, serde_json::Value>,
-        output: Hash,
+        outcome: InvokeOutcome,
     },
+}
+
+/// How a recorded invoke ended. `Failure` carries the identity hash of the
+/// child's failure (kind + message) — recorded even when the caller catches
+/// the thrown error, so a parent memoized with a fallback output revalidates
+/// only while the child still fails identically, and rebuilds when the child
+/// is fixed.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum InvokeOutcome {
+    Output(Hash),
+    Failure(Hash),
 }
 
 /// One captured console line from a build. Lives here (not odm-js) so memo

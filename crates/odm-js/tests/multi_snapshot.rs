@@ -95,8 +95,9 @@ fn snapshot_creation_inside_invoke() {
             _path: &str,
             _args: &Value,
             _cascade: &serde_json::Map<String, Value>,
-        ) -> Result<odm_ir::Hash, String> {
-            let env2 = JsEnv::new().map_err(|e| format!("nested snapshot: {e}"))?;
+        ) -> Result<odm_ir::Hash, odm_js::InvokeError> {
+            let env2 = JsEnv::new()
+                .map_err(|e| odm_js::InvokeError::from(format!("nested snapshot: {e}")))?;
             let store = odm_store::Store::new();
             let kernel = odm_kernel::Kernel::new(store.clone());
             let out = run_build(
@@ -115,7 +116,7 @@ fn snapshot_creation_inside_invoke() {
                     on_isolate: None,
                 },
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| odm_js::InvokeError::from(e.to_string()))?;
             Ok(out.output)
         }
     }
