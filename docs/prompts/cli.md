@@ -16,7 +16,7 @@ odm status                    # files, view slots and their build state
 odm inspect ['{…}']           # measure the scene / one node
 odm render  ['{…}']           # PNG → prints path
 odm raycast '{…}'             # nearest surface hit along rays
-odm clearance '{…}'           # per node pair: overlap? + gap lower bound
+odm clearance '{…}'           # per node pair: signed distance (gap/penetration)
 odm poll --follow             # stream user messages forever; park in background
 odm poll [--timeout <sec>]    # one-shot fallback: wait for messages, exit
 odm say <text>                # send a message to the user
@@ -69,9 +69,11 @@ expands the repeats; `"fields"` picks exactly the columns you want.
 
 A misplaced part can look right from one camera angle. After assembly
 edits, `odm clearance '{"pairs": [["seat", "frame"]]}'` checks that
-parts actually meet: per pair, exact `overlap` and `gap_lower_bound`
-(a positive bound means they are at least that far apart; 0 only means
-their boxes touch). Details: `odm docs cli`.
+parts actually meet: per pair a signed `distance` (positive = exact
+gap + the closest points, negative = penetration + a translation that
+clears it), `between`/`overlapping` naming the colliding leaves. The
+sign of a near-zero distance is float noise — threshold `|distance|`
+for contact instead of nudging geometry. Details: `odm docs cli`.
 
 ## Rendering
 

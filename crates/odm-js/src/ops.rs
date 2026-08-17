@@ -223,8 +223,11 @@ pub fn op_raycast(
 
 #[derive(Serialize)]
 struct ClearanceJson {
-    overlap: bool,
-    gap_lower_bound: f64,
+    distance: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    closest: Option<[[f64; 3]; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    separate: Option<[f64; 3]>,
 }
 
 #[op2]
@@ -240,7 +243,7 @@ pub fn op_clearance(
         .kernel
         .clearance(&[(a, Transform::IDENTITY)], &[(b, Transform::IDENTITY)], s.cancel.as_ref())
         .map_err(kerr)?;
-    Ok(ClearanceJson { overlap: c.overlap, gap_lower_bound: c.gap_lower_bound })
+    Ok(ClearanceJson { distance: c.distance, closest: c.closest, separate: c.separate })
 }
 
 // ---------- cascade / invoke / log ----------

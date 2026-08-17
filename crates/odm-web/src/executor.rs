@@ -349,8 +349,15 @@ pub fn op_clearance(a: &str, b: &str) -> Result<String, JsError> {
             .kernel
             .clearance(&[(a, Transform::IDENTITY)], &[(b, Transform::IDENTITY)], None)
             .map_err(|e| e.to_string())?;
-        Ok(serde_json::json!({ "overlap": c.overlap, "gap_lower_bound": c.gap_lower_bound })
-            .to_string())
+        let mut o = serde_json::Map::new();
+        o.insert("distance".into(), serde_json::json!(c.distance));
+        if let Some(closest) = c.closest {
+            o.insert("closest".into(), serde_json::json!(closest));
+        }
+        if let Some(separate) = c.separate {
+            o.insert("separate".into(), serde_json::json!(separate));
+        }
+        Ok(Value::Object(o).to_string())
     })
 }
 

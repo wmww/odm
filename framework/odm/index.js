@@ -260,10 +260,14 @@ export class Solid extends transformable(SceneValue) {
   }
 
   /**
-   * Assembly check against another Solid: `{ overlap, gap_lower_bound }`.
-   * `overlap` is exact (shared volume); `gap_lower_bound` only bounds the
-   * gap from below (from bounding boxes), so 0 means "close or touching",
-   * not necessarily contact. Both solids in their current frames.
+   * Signed distance to another Solid (both in their current frames).
+   * Positive: the exact minimum gap, with `closest: [Vector3, Vector3]`
+   * (points on this solid and on `other`). Negative: the solids overlap;
+   * `-distance` is the length of `separate: Vector3` — translate `other`
+   * by it to clear this solid (a guaranteed separation, an upper bound on
+   * true penetration depth). The sign of a near-zero value is float noise
+   * (exact tangency): treat `|distance|` below your own tolerance as
+   * contact — don't nudge geometry to disambiguate.
    */
   clearance(other) {
     if (!(other instanceof Solid)) {
@@ -271,7 +275,11 @@ export class Solid extends transformable(SceneValue) {
         `clearance takes a Solid (got ${other?.constructor?.name ?? typeof other})`,
       );
     }
-    return ops().op_clearance(this._baked(), other._baked());
+    const c = ops().op_clearance(this._baked(), other._baked());
+    const out = { distance: c.distance };
+    if (c.closest) out.closest = c.closest.map((p) => new THREE.Vector3(...p));
+    if (c.separate) out.separate = new THREE.Vector3(...c.separate);
+    return out;
   }
 
   _toIR() {

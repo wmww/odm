@@ -6,8 +6,8 @@ license.workspace = true
 
 [lib]
 doctest = false
-# no unit tests in src/; set true if you add #[cfg(test)] modules
-test = false
+# unit tests live in src/dist.rs
+test = true
 
 [features]
 # parallel is the native default; wasm-uu builds Manifold for
@@ -22,3 +22,7 @@ odm-ir = { path = "../odm-ir" }
 odm-store = { path = "../odm-store" }
 manifold-csg = { version = "=0.3.3", default-features = false }
 thiserror.workspace = true
+
+[dev-dependencies]
+# tests cross-check clearance against Manifold's own min_gap
+manifold-csg = { version = "=0.3.3", default-features = false }

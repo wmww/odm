@@ -24,7 +24,7 @@ pub const USAGE: &str = "  status                     project, files, view slots
   inspect ['{…}']            the scene tree: names, bounds, exact measurements
   render  ['{…}']            render a PNG; prints its path
   raycast '{…}'              geometry query: nearest surface hit along rays
-  clearance '{…}'            geometry query: do node pairs overlap + gap lower bound
+  clearance '{…}'            geometry query: signed distance per node pair (gap/penetration)
   poll    [--timeout <sec>] [--follow]
                              wait for messages the user typed in the viewer
                              (--follow: never exit, one JSON line per batch,

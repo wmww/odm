@@ -887,7 +887,19 @@ impl EngineState {
             .map(|[a, b]| {
                 let c = scene::clearance(&engine.store, &engine.kernel, &root, a, b)
                     .map_err(CmdError::bad_request)?;
-                Ok(json!({ "overlap": c.overlap, "gap_lower_bound": c.gap_lower_bound }))
+                let mut o = Map::new();
+                o.insert("distance".into(), json!(c.distance));
+                if let Some(closest) = c.closest {
+                    o.insert("closest".into(), json!(closest));
+                }
+                if let Some(separate) = c.separate {
+                    o.insert("separate".into(), json!(separate));
+                }
+                o.insert("between".into(), json!(c.between));
+                if !c.overlapping.is_empty() {
+                    o.insert("overlapping".into(), json!(c.overlapping));
+                }
+                Ok(Value::Object(o))
             })
             .collect::<Result<_, CmdError>>()?;
         let mut o = Map::new();

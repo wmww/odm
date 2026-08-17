@@ -558,23 +558,41 @@ fn decompose(m: &Mat4) -> ([f64; 3], [f64; 3], [f64; 3]) {
 
 // --- clearance ----------------------------------------------------------
 
-/// Mesh instances (hash + world transform) of a whole subtree. None if a
-/// child hash is missing from the store.
+/// Mesh instances (hash + world transform) of a whole subtree, each with an
+/// agent-facing label: the leaf's own name, else the nearest named ancestor
+/// within the queried subtree, else the leaf's full id from the scene root.
+/// None if a child hash is missing from the store.
 fn collect_meshes(
     store: &Store,
     node: &Node,
+    id: &str,
     parent: &Mat4,
-    out: &mut Vec<(Hash, Transform)>,
+    inherited: Option<&str>,
+    out: &mut Vec<(Hash, Transform, String)>,
 ) -> Option<()> {
     let world = world_of(node, parent);
+    let name = node.name.as_deref().or(inherited);
     if let Some(h) = node.mesh {
-        out.push((h, Transform(world)));
+        out.push((h, Transform(world), name.unwrap_or(id).to_string()));
     }
-    for &c in &node.children {
+    for (i, &c) in node.children.iter().enumerate() {
         let child = child_node(store, c)?;
-        collect_meshes(store, &child, &world, out)?;
+        collect_meshes(store, &child, &node_id(id, i), &world, name, out)?;
     }
     Some(())
+}
+
+/// One `clearance` pair, with kernel operand indices mapped back to labels.
+#[derive(Debug)]
+pub struct Clearance {
+    pub distance: f64,
+    pub closest: Option<[[f64; 3]; 2]>,
+    pub separate: Option<[f64; 3]>,
+    /// The deciding leaf pair (argmin when disjoint, first offender when
+    /// overlapping).
+    pub between: [String; 2],
+    /// Overlapping only: every offending leaf pair, deduped by label.
+    pub overlapping: Vec<[String; 2]>,
 }
 
 /// One `clearance` pair: both addresses resolved the way `inspect` resolves
@@ -585,7 +603,7 @@ pub fn clearance(
     root: &Node,
     a: &str,
     b: &str,
-) -> Result<odm_kernel::Clearance, String> {
+) -> Result<Clearance, String> {
     let (id_a, node_a, parent_a) = locate(store, root, a)?;
     let (id_b, node_b, parent_b) = locate(store, root, b)?;
     if id_a == id_b {
@@ -601,18 +619,36 @@ pub fn clearance(
     if contains(&id_b, &id_a) {
         return Err(format!("{b:?} contains {a:?} — clearance needs disjoint nodes"));
     }
-    let meshes = |node: &Node, parent: &Mat4, addr: &str| -> Result<Vec<(Hash, Transform)>, String> {
+    let meshes = |node: &Node, id: &str, parent: &Mat4, addr: &str| -> Result<Vec<(Hash, Transform, String)>, String> {
         let mut out = Vec::new();
-        collect_meshes(store, node, parent, &mut out)
+        collect_meshes(store, node, id, parent, None, &mut out)
             .ok_or_else(|| "scene node missing from store".to_string())?;
         if out.is_empty() {
             return Err(format!("{addr:?} has no geometry"));
         }
         Ok(out)
     };
-    let ma = meshes(&node_a, &parent_a, a)?;
-    let mb = meshes(&node_b, &parent_b, b)?;
-    kernel.clearance(&ma, &mb, None).map_err(|e| e.to_string())
+    let ma = meshes(&node_a, &id_a, &parent_a, a)?;
+    let mb = meshes(&node_b, &id_b, &parent_b, b)?;
+    let ops = |m: &[(Hash, Transform, String)]| -> Vec<(Hash, Transform)> {
+        m.iter().map(|(h, t, _)| (*h, *t)).collect()
+    };
+    let c = kernel.clearance(&ops(&ma), &ops(&mb), None).map_err(|e| e.to_string())?;
+    let pair = |(i, j): (usize, usize)| [ma[i].2.clone(), mb[j].2.clone()];
+    let mut overlapping: Vec<[String; 2]> = Vec::new();
+    for &p in &c.overlapping {
+        let p = pair(p);
+        if !overlapping.contains(&p) {
+            overlapping.push(p);
+        }
+    }
+    Ok(Clearance {
+        distance: c.distance,
+        closest: c.closest,
+        separate: c.separate,
+        between: pair(c.between),
+        overlapping,
+    })
 }
 
 // --- raycast ------------------------------------------------------------
@@ -828,10 +864,11 @@ mod tests {
             Node { children: vec![part("seat", 0.0), chain, empty], ..Node::default() };
 
         let c = clearance(&store, &kernel, &root, "seat", "chain").unwrap();
-        assert!(!c.overlap);
-        assert!((c.gap_lower_bound - 5.0).abs() < 1e-9, "{c:?}");
+        assert!((c.distance - 5.0).abs() < 1e-9, "{c:?}");
+        assert_eq!(c.between, ["seat".to_string(), "link".to_string()]);
+        assert!(c.closest.is_some() && c.overlapping.is_empty(), "{c:?}");
         let c = clearance(&store, &kernel, &root, "seat", "1/0").unwrap();
-        assert!((c.gap_lower_bound - 5.0).abs() < 1e-9, "index paths address too: {c:?}");
+        assert!((c.distance - 5.0).abs() < 1e-9, "index paths address too: {c:?}");
 
         let e = clearance(&store, &kernel, &root, "seat", "seat").unwrap_err();
         assert!(e.contains("same node"), "{e}");
@@ -843,6 +880,41 @@ mod tests {
         assert!(e.contains("no geometry"), "{e}");
         let e = clearance(&store, &kernel, &root, "seat", "nope").unwrap_err();
         assert!(e.contains("no node named"), "{e}");
+    }
+
+    #[test]
+    fn clearance_names_colliding_leaves() {
+        let store = Store::new();
+        let kernel = Kernel::new(store.clone());
+        let cube = kernel.cube(2.0, 2.0, 2.0, true).unwrap();
+        let leaf = |name: Option<&str>, x: f64| {
+            store.put(Object::Node(Node {
+                name: name.map(Into::into),
+                transform: moved(x),
+                mesh: Some(cube),
+                ..Node::default()
+            }))
+        };
+        let group = |name: &str, children: Vec<Hash>| {
+            store.put(Object::Node(Node {
+                name: Some(name.into()),
+                children,
+                ..Node::default()
+            }))
+        };
+        // "left" holds a named cube and an unnamed one (label falls back to
+        // the group's name); "right"'s cubes collide with both.
+        let left = group("left", vec![leaf(Some("a1"), 0.0), leaf(None, 3.0)]);
+        let right = group("right", vec![leaf(Some("b1"), 0.5), leaf(Some("b2"), 3.5)]);
+        let root = Node { children: vec![left, right], ..Node::default() };
+
+        let c = clearance(&store, &kernel, &root, "left", "right").unwrap();
+        assert!(c.distance < 0.0, "{c:?}");
+        assert_eq!(c.between, ["a1".to_string(), "b1".to_string()]);
+        assert_eq!(
+            c.overlapping,
+            vec![["a1".to_string(), "b1".to_string()], ["left".to_string(), "b2".to_string()]]
+        );
     }
 
     #[test]

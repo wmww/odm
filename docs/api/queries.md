@@ -33,34 +33,38 @@ const onTop = other.translate(0, 0, b.max.z - other.bounds().min.z);
 
 ## s.clearance(other)
 
-Assembly check against another Solid — "are these attached / colliding":
+Signed distance to another Solid — "are these attached / colliding, and
+by how much":
 
 ```js
 export default function build(ctx) {
   const seat = odm.box([30, 20, 4]).translate(0, 0, 20); // underside at z=18
   const post = odm.cylinder(2, 18, { center: false }); // reaches z=18
   const c = seat.clearance(post);
-  // → { overlap: false, gap_lower_bound: 0 }
-  if (!c.overlap && c.gap_lower_bound > 0) {
-    throw new Error(`seat is floating ${c.gap_lower_bound} away from its post`);
+  // → { distance: 0, closest: [Vector3, Vector3] }
+  if (c.distance > 0.001) {
+    throw new Error(`seat is floating ${c.distance} above its post`);
   }
   return [seat, post];
 }
 ```
 
-- `overlap` is exact: `true` iff the two solids share volume
-  (interpenetrate). Exact surface contact is not overlap.
-- `gap_lower_bound` only bounds the gap from below — it comes from
-  bounding boxes, so it is 0 whenever the boxes touch: contact,
-  interpenetration, *and* interlocking parts with real clearance all
-  read 0. A **positive** value is a guarantee: the parts are at least
-  that far apart — the "seat drifted 15 cm off its mounts" answer.
-- There is no signed distance: overlap depth is a different, harder
-  query than gap.
+- **Positive** `distance`: the exact minimum gap. `closest` is the pair
+  of nearest points (`Vector3`s, on `s` and on `other`) — where the gap
+  is, not just how big.
+- **Negative** `distance`: the solids overlap. `separate` is a
+  `Vector3`: translate `other` by it and the solids no longer overlap.
+  Its length is `-distance` — a guaranteed separation, an upper bound
+  on the true penetration depth ("~2.1 deep; +z by 2.1 clears it").
+- **Contact**: at exact tangency the *sign* is floating-point noise, so
+  resting contact reads `distance ≈ 0` of either sign. Threshold
+  `Math.abs(c.distance)` with your own tolerance for "touching" — do
+  not nudge parts apart just to stabilize the sign.
 
 Throwing on a failed fit (as above) makes a doohickey assert its own
-assembly. The CLI twin is `odm clearance` — same result shape, node
-pairs by name, whole subtrees per node (`odm docs cli`).
+assembly. The CLI twin is `odm clearance` — same numeric fields, node
+pairs by name, whole subtrees per node, plus `between`/`overlapping`
+naming the colliding leaves (`odm docs cli`).
 
 ## s.raycast(origin, dir, maxDist?)
 

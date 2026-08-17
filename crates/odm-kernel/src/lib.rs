@@ -11,7 +11,9 @@
 //! function of arguments.
 
 mod diagnose;
+mod dist;
 
+use dist::{Operand, TriBvh};
 use manifold_csg::{CrossSection, ExecutionContext, Manifold, MeshGL64, OpType};
 use odm_ir::{Hash, Mesh, Transform};
 use odm_store::{Object, Store};
@@ -95,24 +97,39 @@ pub struct Bounds {
     pub max: [f64; 3],
 }
 
-/// The `clearance` answer. `overlap` is exact (shared volume); the gap is
-/// only bounded from below, from bounding boxes — 0 means "boxes touch",
-/// which covers contact, interpenetration *and* interlocking parts with
-/// real clearance between them.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// The `clearance` answer: a signed distance. Positive = the exact minimum
+/// gap between the sides (with the closest points); negative = the sides
+/// overlap, and `-distance` is the magnitude of a found separating
+/// translation — an upper bound on true penetration depth, but a guarantee:
+/// applying `separate` to the second side clears the first. The sign of a
+/// near-zero value is float noise (exact tangency); threshold `|distance|`.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Clearance {
-    pub overlap: bool,
-    pub gap_lower_bound: f64,
+    pub distance: f64,
+    /// Disjoint only: closest points, on the `a` and `b` surfaces.
+    pub closest: Option<[[f64; 3]; 2]>,
+    /// Overlapping only: translate the `b` side by this to separate.
+    pub separate: Option<[f64; 3]>,
+    /// The deciding operand pair (indices into `a` and `b`): the argmin
+    /// pair when disjoint, the first offending pair when overlapping.
+    pub between: (usize, usize),
+    /// Overlapping only: every offending operand pair.
+    pub overlapping: Vec<(usize, usize)>,
 }
 
 pub struct Kernel {
     store: Arc<Store>,
     cache: Mutex<HashMap<Hash, Arc<Manifold>>>,
+    bvhs: Mutex<HashMap<Hash, Arc<TriBvh>>>,
 }
 
 impl Kernel {
     pub fn new(store: Arc<Store>) -> Arc<Kernel> {
-        Arc::new(Kernel { store, cache: Mutex::new(HashMap::new()) })
+        Arc::new(Kernel {
+            store,
+            cache: Mutex::new(HashMap::new()),
+            bvhs: Mutex::new(HashMap::new()),
+        })
     }
 
     // --- primitives ---
@@ -256,57 +273,45 @@ impl Kernel {
         Ok(self.manifold(h)?.surface_area())
     }
 
-    /// Clearance between two sets of (transformed) solids: do they share
-    /// volume, and a lower bound on the gap between them. The bound comes
-    /// from world AABBs, so it is cheap and safe but weak: 0 only means the
-    /// boxes touch. `overlap` is exact — decided pairwise on the operands
-    /// whose boxes touch (intersection distributes over each side's union),
-    /// so far-apart sides never pay for CSG.
+    /// Signed clearance between two sets of (transformed) solids. Disjoint:
+    /// the exact minimum distance, with closest points (BVH branch-and-
+    /// bound). Overlapping: `-s` where `s` is the magnitude of a found
+    /// separating translation for the `b` side — a guaranteed separation,
+    /// an upper bound on true penetration depth. See `Clearance`.
     pub fn clearance(
         &self,
         a: &[(Hash, Transform)],
         b: &[(Hash, Transform)],
         cancel: Option<&CancelToken>,
     ) -> Result<Clearance> {
-        let boxes = |ops: &[(Hash, Transform)]| -> Result<Vec<Option<Bounds>>> {
-            ops.iter().map(|(h, t)| Ok(self.bounds(*h)?.map(|b| transformed_aabb(&b, t)))).collect()
+        let side = |ops: &[(Hash, Transform)]| -> Result<Vec<Operand>> {
+            ops.iter()
+                .map(|(h, t)| Ok(Operand { bvh: self.tri_bvh(*h)?, t: *t }))
+                .collect()
         };
-        let (ba, bb) = (boxes(a)?, boxes(b)?);
-        let merge = |bs: &[Option<Bounds>]| -> Option<Bounds> {
-            bs.iter().flatten().copied().reduce(|mut acc, b| {
-                for k in 0..3 {
-                    acc.min[k] = acc.min[k].min(b.min[k]);
-                    acc.max[k] = acc.max[k].max(b.max[k]);
-                }
-                acc
-            })
-        };
-        let (Some(abox), Some(bbox)) = (merge(&ba), merge(&bb)) else {
+        let (oa, ob) = (side(a)?, side(b)?);
+        if oa.iter().all(|o| o.bvh.is_empty()) || ob.iter().all(|o| o.bvh.is_empty()) {
             return Err(KernelError::Other("clearance needs non-empty solids on both sides".into()));
-        };
-        let gap = aabb_gap(&abox, &bbox);
-        if gap > 0.0 {
-            return Ok(Clearance { overlap: false, gap_lower_bound: gap });
         }
-        for (i, (ha, ta)) in a.iter().enumerate() {
-            let Some(ka) = ba[i] else { continue };
-            let touching: Vec<usize> = (0..b.len())
-                .filter(|&j| bb[j].is_some_and(|kb| aabb_gap(&ka, &kb) == 0.0))
-                .collect();
-            if touching.is_empty() {
-                continue;
-            }
-            let ma = self.transformed_manifold(*ha, *ta)?;
-            for j in touching {
-                let (hb, tb) = b[j];
-                let mb = self.transformed_manifold(hb, tb)?;
-                let inter = self.evaluated(ma.boolean(&mb, OpType::Intersect), cancel)?;
-                if inter.volume() > 0.0 {
-                    return Ok(Clearance { overlap: true, gap_lower_bound: 0.0 });
-                }
-            }
+        let ov = dist::overlaps(&oa, &ob);
+        if ov.pairs.is_empty() {
+            let (distance, closest, between) = dist::closest_points(&oa, &ob);
+            return Ok(Clearance {
+                distance,
+                closest: Some(closest),
+                separate: None,
+                between,
+                overlapping: Vec::new(),
+            });
         }
-        Ok(Clearance { overlap: false, gap_lower_bound: 0.0 })
+        let (separate, s) = dist::separating_translation(&oa, &ob, &ov.normals, cancel)?;
+        Ok(Clearance {
+            distance: -s,
+            closest: None,
+            separate: Some(separate),
+            between: ov.pairs[0],
+            overlapping: ov.pairs,
+        })
     }
 
     /// Nearest hit of the ray `origin + t*dir` for `t in [0, max_dist]`, in
@@ -413,6 +418,20 @@ impl Kernel {
         Ok(arc)
     }
 
+    /// Triangle BVH for a stored mesh (local space): cache hit or build.
+    fn tri_bvh(&self, h: Hash) -> Result<Arc<TriBvh>> {
+        if let Some(b) = self.bvhs.lock().unwrap().get(&h) {
+            return Ok(b.clone());
+        }
+        let obj = self.store.get(h).ok_or(KernelError::UnknownGeometry(h))?;
+        let Object::Mesh(mesh) = &*obj else {
+            return Err(KernelError::UnknownGeometry(h));
+        };
+        let bvh = Arc::new(TriBvh::build(&mesh.positions, &mesh.indices));
+        self.bvhs.lock().unwrap().insert(h, bvh.clone());
+        Ok(bvh)
+    }
+
     fn transformed_manifold(&self, h: Hash, t: Transform) -> Result<Manifold> {
         let m = self.manifold(h)?;
         if t.is_identity() {
@@ -421,16 +440,20 @@ impl Kernel {
         Ok(m.transform(&affine_3x4(&t)?))
     }
 
-    /// Drop cached Manifold objects (e.g. alongside a store GC). Stored
-    /// meshes can always be re-welded on demand.
+    /// Drop cached Manifold objects and BVHs (e.g. alongside a store GC).
+    /// Stored meshes can always be re-welded / re-indexed on demand.
     pub fn clear_cache(&self) {
         self.cache.lock().unwrap().clear();
+        self.bvhs.lock().unwrap().clear();
     }
 
-    /// Drop cached Manifolds whose meshes no longer exist in the store.
+    /// Drop cached Manifolds/BVHs whose meshes no longer exist in the store.
     pub fn prune_cache(&self) {
         let mut cache = self.cache.lock().unwrap();
         cache.retain(|h, _| self.store.contains(*h));
+        drop(cache);
+        let mut bvhs = self.bvhs.lock().unwrap();
+        bvhs.retain(|h, _| self.store.contains(*h));
     }
 }
 

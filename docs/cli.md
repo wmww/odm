@@ -117,11 +117,11 @@ JS twin: `s.raycast(origin, dir, maxDist?)` — same query, same result shape; t
 
 ### clearance
 
-assembly check: per pair of nodes, do they overlap, and at least how far apart are they.
+assembly check: per pair of nodes, the signed distance between them (positive = exact gap, negative = penetration).
 
-- `pairs` (array) — node pairs to check, each `["a", "b"]` (names or index paths, as `inspect` addresses them; each node stands for its whole subtree); all against the request's one view, answered in order — `clearances` holds `{overlap, gap_lower_bound}` per pair. `overlap` is exact (shared volume); `gap_lower_bound` is from bounding boxes, so 0 means "close or touching", not necessarily contact
+- `pairs` (array) — node pairs to check, each `["a", "b"]` (names or index paths, as `inspect` addresses them; each node stands for its whole subtree); all against the request's one view, answered in order. Per pair, `clearances` holds a signed `distance` — positive: the exact minimum gap, with `closest` (the two nearest points) — negative: the parts overlap, and `separate` is a translation of the pair's second node that clears the first (its length is `-distance`, an upper bound on true penetration depth). `between` names the deciding leaf pair, and a negative result adds `overlapping`: every colliding leaf pair. The sign of a near-zero distance is float noise (exact tangency): treat `|distance|` below your own tolerance as contact — don't nudge geometry to disambiguate
 
-JS twin: `a.clearance(b)` on Solids — same result shape; the CLI addresses nodes and maps over `pairs`.
+JS twin: `a.clearance(b)` on Solids — same query; the numeric fields only (in JS you hold the two solids, so there is nothing to name), points as Vector3s; the CLI addresses nodes and maps over `pairs`.
 
 ### poll
 
@@ -343,13 +343,33 @@ order:
 odm clearance '{"pairs": [["seat", "chainL"], ["seat", "chainR"]], "inputs": {"t": 1.5}}'
 ```
 
-Per pair: `{"overlap": bool, "gap_lower_bound": n}`. `overlap` is exact
-(the solids share volume — exact surface contact is not overlap).
-`gap_lower_bound` only bounds the gap from below (bounding boxes): a
-**positive** value guarantees the parts are at least that far apart —
-misplaced-part bugs read as a surprising gap here — while 0 just means
-the boxes touch (contact, interpenetration, and interlocking parts with
-real clearance all read 0). There is no signed distance.
+Per pair, a signed `distance`:
+
+- **Positive** — the parts are clear, `distance` is the exact minimum
+  gap, and `closest` gives the two nearest points (`[[x,y,z],[x,y,z]]`,
+  on the first and second node): where the gap is, not just how big.
+- **Negative** — the parts overlap. `separate` is a translation for the
+  pair's *second* node that clears the first; its length is
+  `-distance`. It is a guarantee (applying it separates the parts) and
+  an upper bound on the true penetration depth — "chainL is ~2.1 into
+  the seat; move +z by 2.1" is the intended reading.
+
+```json
+{"distance": 2.5, "closest": [[…], […]], "between": ["seat", "chainL"]}
+{"distance": -1.2, "separate": [0, 0, 1.2], "between": ["roof-panel", "beam-ew-1"],
+ "overlapping": [["roof-panel", "beam-ew-1"], ["lacing-north", "beam-ew-2"]]}
+```
+
+`between` names the deciding leaf pair (nearest when clear, first
+collider when not) and `overlapping` lists *every* colliding leaf pair,
+so a group-vs-group check says what collides without bisecting by hand.
+Leaves are named by their own or nearest named ancestor's name (else
+index path).
+
+**Contact:** at exact tangency the *sign* is floating-point noise, so
+resting/touching parts read as `distance ≈ 0` of either sign. Treat
+`|distance|` below your own tolerance as contact; do not nudge geometry
+apart just to make the sign stable.
 
 One command checks a whole assembly's contact pairs after an edit, and
 `inputs` lets you check at animation extremes.

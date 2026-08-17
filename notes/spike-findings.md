@@ -119,3 +119,21 @@ run instructions). Facts:
   f64 bits matched exactly (`0x401c0031e9de621a`) — one-sample evidence
   that native-exported memo snapshots stay hash-consistent with browser
   rebuilds despite different C++ toolchains/libm.
+
+## Manifold min_gap (spike, 2026-08-17, for signed-distance clearance)
+
+On pinned manifold-csg 0.3.3, debug build, 24 cores:
+
+- Disjoint → exact gap (3, 5, 1.5 on analytic cube/sphere cases).
+- Gap > `search_length` → returns `search_length` itself; an *empty*
+  manifold also returns `search_length`. Detect "capped" by equality.
+- Overlap, exact touch, containment → all 0. No sign, no closest points.
+- **Pathological cost**: it collects every triangle pair within
+  `search_length` (collider with inflated boxes), so a loose search
+  radius goes quadratic — two 125k-tri spheres with search 10 (model
+  scale ~2) ran >60 s before being killed; tight searches are ms-scale.
+
+Consequence: the clearance query uses its own triangle BVH for
+everything (dist.rs — exact distance + closest points + intersection
+predicate); min_gap survives only as a kernel-test cross-check with a
+tight search_length.

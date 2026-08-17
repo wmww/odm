@@ -21,13 +21,6 @@ discussions that followed. Cross-references note where plans touch.
   `bounds`/`tris`; the short prompt's false "reports a file's
   description" example fixed + a `//!`-block hint in the unknown-meta-key
   error.
-- `signed-distance.md` — `clearance` upgraded to signed `distance`:
-  exact positive gap (+closest points), penetration as a guaranteed
-  separating translation, offending leaf pairs named on the CLI surface,
-  tangency handled by thresholding the continuous value (no tolerance
-  field). Absorbs the deleted issues/clearance-query-gaps.md (2026-08
-  field report). Corrects clearance.md's premise: manifold-csg 0.3.3
-  *does* have `min_gap`.
 
 Done and deleted: `cli-diet.md` (surface cuts + the prompt-vs-docs policy —
 now `notes/agent-surface.md`); `render-workflow.md` (superseded by
@@ -61,4 +54,9 @@ behavior-preserving; see notes/architecture.md's odm-viewer-core entry);
 `web-export.md` (executed 2026-08-17 — `odm export --web`: executor seam
 in odm-build, odm-export bundler, odm-web wasm host, template xtask;
 verified interactive in Chromium/WebGPU. Everything standing is in
-`notes/web-export.md`).
+`notes/web-export.md`);
+`signed-distance.md` (executed 2026-08-17 — `clearance` is a signed
+`distance` with closest points / separating translation and CLI-side
+`between`/`overlapping` leaf naming; the standing contract and the
+min_gap verdict are in notes/agent-surface.md's clearance bullet and
+notes/spike-findings.md).

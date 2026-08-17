@@ -611,10 +611,13 @@ fn queries_work_inside_build() {
             const miss = s.translate(10, 0, 0).raycast([0, 0, 5], [0, 0, -1]);
             if (miss !== null) throw new Error('expected miss');
             const c = s.clearance(s.translate(5, 0, 0));
-            if (c.overlap || Math.abs(c.gap_lower_bound - 3) > 1e-9) {
+            if (Math.abs(c.distance - 3) > 1e-9 || Math.abs(c.closest[1].x - 4) > 1e-9) {
                 throw new Error('clearance ' + JSON.stringify(c));
             }
-            if (!s.clearance(s.translate(1, 0, 0)).overlap) throw new Error('expected overlap');
+            const o = s.clearance(s.translate(1, 0, 0));
+            if (!(o.distance < 0) || Math.abs(o.separate.length() + o.distance) > 1e-9) {
+                throw new Error('expected overlap ' + JSON.stringify(o));
+            }
             return s;
         }
         "#,

@@ -389,22 +389,27 @@ const SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "clearance",
-        summary: "assembly check: per pair of nodes, do they overlap, and at least how far \
-                  apart are they",
+        summary: "assembly check: per pair of nodes, the signed distance between them \
+                  (positive = exact gap, negative = penetration)",
         view: true,
         fields: &[f(
             "pairs",
             "array",
             "node pairs to check, each `[\"a\", \"b\"]` (names or index paths, as `inspect` \
              addresses them; each node stands for its whole subtree); all against the \
-             request's one view, answered in order — `clearances` holds `{overlap, \
-             gap_lower_bound}` per pair. `overlap` is exact (shared volume); \
-             `gap_lower_bound` is from bounding boxes, so 0 means \"close or touching\", not \
-             necessarily contact",
+             request's one view, answered in order. Per pair, `clearances` holds a signed \
+             `distance` — positive: the exact minimum gap, with `closest` (the two nearest \
+             points) — negative: the parts overlap, and `separate` is a translation of the \
+             pair's second node that clears the first (its length is `-distance`, an upper \
+             bound on true penetration depth). `between` names the deciding leaf pair, and \
+             a negative result adds `overlapping`: every colliding leaf pair. The sign of \
+             a near-zero distance is float noise (exact tangency): treat `|distance|` \
+             below your own tolerance as contact — don't nudge geometry to disambiguate",
         )],
         js_twin: Some(
-            "`a.clearance(b)` on Solids — same result shape; the CLI addresses nodes and \
-             maps over `pairs`",
+            "`a.clearance(b)` on Solids — same query; the numeric fields only (in JS you \
+             hold the two solids, so there is nothing to name), points as Vector3s; the \
+             CLI addresses nodes and maps over `pairs`",
         ),
         hidden: false,
     },

@@ -68,24 +68,43 @@ grammar. Standing decisions:
   memoized build makes the second nearly free.
 - `inspect` is not in the parity set — no JS twin (in JS you hold the
   object graph); simply absent from the JS-twin table.
-- **`clearance` is honest per tier** (2026-08, from plans/clearance.md;
-  motivated by the live-test bug where a seat sat 15 cm from its chains
-  and rendered fine from the default angle): per pair `{overlap,
-  gap_lower_bound}` — overlap exact (Manifold intersection volume,
-  pairwise over the operands whose AABBs touch), the gap only bounded
-  from below by AABB distance (0 = boxes touch, NOT contact — think
-  interlocking L-shapes). Deliberately no signed distance and no exact
-  min distance yet — plans/signed-distance.md is the upgrade path
-  (note: manifold-csg 0.3.3 *does* have `min_gap`, contrary to the
-  original clearance plan; what's missing is closest points and any
-  penetration depth, which is the hard part — exact MTD for non-convex
-  meshes is intractable). Result keys are `gap_lower_bound` in *both*
-  surfaces — parity of result shape beats JS camelCase. CLI errors on a
-  pair where one node contains the other, and on nodes with no
-  geometry. A weaker complementary idea (build-report lint flagging
-  subtrees whose bounds touch nothing — "floating part") was left
-  unbuilt: heuristic, false-positives on grounded/intentionally-gapped
-  parts.
+- **`clearance` is a signed distance** (2026-08-17, from
+  plans/signed-distance.md; the 2026-08 field report killed the old
+  `{overlap, gap_lower_bound}` tiers — the bound read 0 for every
+  nesting/resting pair, groups couldn't say *what* collided, and exact
+  tangency made the boolean a coin flip the agent "fixed" with 0.002'
+  nudges). The contract, deliberately asymmetric:
+  - **Positive = exact** minimum gap (triangle-BVH branch-and-bound in
+    `odm-kernel/src/dist.rs`; per-mesh BVHs cached by content hash
+    beside the Manifold cache, transforms applied at query time) plus
+    `closest` points.
+  - **Negative = upper bound**: `-s` where `s` is the best found
+    separating translation (`separate`, applied to the pair's *second*
+    node) — bisection on a fast overlap predicate (tri-tri intersection
+    + containment ray parity) over candidate directions (harvested
+    face normals, centroid line, axes), hill-climbed, padded ~1e-9
+    relative past the boundary so applying `separate` robustly
+    separates. A guarantee, not a minimum; exact MTD for non-convex
+    meshes is intractable and NOT promised.
+  - **Tangency**: the sign of a near-zero distance is float noise;
+    docs everywhere say threshold `|distance|`, never nudge geometry.
+    No `tolerance` request field — the continuous value subsumes it.
+  - **CLI names offenders**: `between` (deciding leaf pair; argmin or
+    first collider) and, when negative, `overlapping` (every colliding
+    leaf pair, deduped by label). Labels = leaf's own name, else
+    nearest named ancestor within the queried subtree, else index
+    path. JS parity carve-out as with raycast: JS gets the numeric
+    fields only (`closest`/`separate` hydrate to Vector3s).
+  - manifold-csg's `min_gap` exists but is only a test cross-check:
+    it goes quadratic when `search_length` is loose (measured: >60 s
+    on two 125k-tri spheres, see spike-findings), and gives no points
+    and no negative side.
+  Result keys are snake_case in *both* surfaces — parity of result
+  shape beats JS camelCase. CLI errors on a pair where one node
+  contains the other, and on nodes with no geometry. A weaker
+  complementary idea (build-report lint flagging subtrees whose bounds
+  touch nothing — "floating part") was left unbuilt: heuristic,
+  false-positives on grounded/intentionally-gapped parts.
 
 ## Render camera: one parameter set (landed 2026-08-17)
 

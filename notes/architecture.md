@@ -91,8 +91,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   extrude/revolve (around Z), booleans/hull with per-operand transforms,
   weld with boundary-edge diagnosis (Manifold's own error is bare
   NotManifold), raycast (Manifold returns distance as a *fraction* of the
-  segment; kernel converts), clearance (exact overlap + AABB gap lower
-  bound; see notes/agent-surface.md), volume/area/bounds, CancelToken
+  segment; kernel converts), clearance (signed distance via the dist.rs
+  triangle BVH; see notes/agent-surface.md), volume/area/bounds, CancelToken
   (ExecutionContext), Hash→Manifold cache with rebuild-from-store fallback.
   Segments are always explicit — kernel rejects <3; framework defaults:
   cylinder 64, sphere 48, revolve 64.
