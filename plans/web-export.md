@@ -94,9 +94,41 @@ Static directory, no server smarts required:
   project's API-version surfaces (the bundler must respect `//! odm <v>`
   per-file surface selection, same as snapshot install order)
 - store snapshot: the generation's source hashes + memo entries and
-  content objects for the exported view at default inputs
+  content objects for the exported view at default inputs. Purely a
+  pre-warm cache, never load-bearing: the browser build loop consults it
+  like any memo store, and a missing/mismatched entry just rebuilds — so
+  native↔wasm hash drift degrades to a cold first paint, not wrong
+  output. Droppable (or flag-gated) if size or load complexity bites.
 - manifest: exported view (path; default = `root.js`), initial
   inputs/cascade, presets
+
+## Template build & lookup
+
+The bundle splits into two halves with different lifecycles:
+
+- **Project-independent** (the *web export template*): the wasm module,
+  `index.html`, viewer glue JS. Depends only on the ODM version.
+- **Project-specific**: `bundle.js`, store snapshot, manifest — all
+  produced by native code at export time; no wasm toolchain involved.
+
+The template is built by a separate command (`xtask build-web-template`
+or similar), **never** as part of a normal engine build — the wasm lane
+needs the exotic clang + wasm-ld + wasm-cxx-shim toolchain and would
+break every build that doesn't care about web export. Lookup at export
+time: explicit `--template <dir>`/env override → `target/web-template/`
+in a dev checkout → `~/.local/share/odm/web-template/<version>/` for
+installed ODM. Missing template = a clear error naming the command that
+builds it (or where to fetch the release artifact) — never a silent
+attempt to compile wasm. Releases ship the template alongside the
+binary, or embed it behind an off-by-default cargo feature CI enables.
+
+The version stamp is a **content hash** over the template's inputs (the
+wasm-side crates + framework JS), not a semver string: the exported
+snapshot's hashes and the browser's rebuilds must come from the same
+sources, so a mismatched template is the packaging-layer form of the
+drift-between-hosts risk. Export refuses on mismatch by default
+(`--force` to override); in a dev checkout the same check doubles as
+staleness detection ("rebuild the template first").
 
 Exported page behavior = one viewer tab: input panel from the
 fall-through report, `t` transport when a ranged `t` falls through,
