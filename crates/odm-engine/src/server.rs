@@ -202,19 +202,15 @@ mod tests {
     use std::io::BufRead;
     use std::time::{Duration, Instant};
 
-    /// Serve one project on a throwaway socket. Returns its path.
-    fn serving(state: &Arc<EngineState>) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "odm-server-test-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let sock = dir.join("engine.sock");
+    /// Serve one project on a throwaway socket. The returned dir cleans itself
+    /// up when dropped, so hold it for as long as the socket is wanted.
+    fn serving(state: &Arc<EngineState>) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("engine.sock");
         let listener = bind(&sock).unwrap();
         let (state, path) = (state.clone(), sock.clone());
         std::thread::spawn(move || serve_on(state, listener, &path));
-        sock
+        (dir, sock)
     }
 
     /// Where the transcript's one message has got to.
@@ -236,7 +232,7 @@ mod tests {
     #[test]
     fn a_killed_poll_frees_the_listener_and_keeps_the_message() {
         let state = engine();
-        let sock = serving(&state);
+        let (_dir, sock) = serving(&state);
 
         let mut client = UnixStream::connect(&sock).unwrap();
         client.write_all(b"{\"cmd\":\"poll\"}\n").unwrap();
@@ -268,7 +264,7 @@ mod tests {
     #[test]
     fn a_follower_polls_again_on_the_same_connection() {
         let state = engine();
-        let sock = serving(&state);
+        let (_dir, sock) = serving(&state);
         let mut client = UnixStream::connect(&sock).unwrap();
         let mut reader = BufReader::new(client.try_clone().unwrap());
 
@@ -297,7 +293,7 @@ mod tests {
     #[test]
     fn an_acknowledged_message_is_retired() {
         let state = engine();
-        let sock = serving(&state);
+        let (_dir, sock) = serving(&state);
         state.send_message("hello".into());
 
         let mut client = UnixStream::connect(&sock).unwrap();
