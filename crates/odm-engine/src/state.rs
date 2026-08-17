@@ -167,6 +167,11 @@ struct Chat {
     cv: Condvar,
     /// Polls currently blocked. The viewer tells the user when it is 0.
     listeners: AtomicUsize,
+    /// The agent's one working status (`odm say --task`), shown live in the
+    /// viewer until replaced or cleared (`--done`). Never expires on its
+    /// own — a wrong task is corrected by the agent, which sees it echoed
+    /// in every say/poll/status response, or by the user asking.
+    task: Mutex<Option<String>>,
 }
 
 /// Pending health-sweep work: the generation the items evaluate against
@@ -480,6 +485,23 @@ impl EngineState {
         let entry = TranscriptEntry { who: Who::Agent, text, delivery: Delivery::Done, view: None };
         self.chat.lines.lock().unwrap().push(entry);
         self.wake();
+    }
+
+    /// Set/replace the working status (`odm say --task`).
+    pub fn set_task(&self, text: String) {
+        *self.chat.task.lock().unwrap() = Some(text);
+        self.wake();
+    }
+
+    /// Clear the working status (`odm say --done`).
+    pub fn clear_task(&self) {
+        *self.chat.task.lock().unwrap() = None;
+        self.wake();
+    }
+
+    /// The current working status, if the agent set one.
+    pub fn task(&self) -> Option<String> {
+        self.chat.task.lock().unwrap().clone()
     }
 
     /// A host warning, queued for the next poll like a user message (same
@@ -1062,6 +1084,50 @@ pub(crate) mod tests {
         assert_eq!(replies.0["health"], json!([]));
         assert_eq!(replies.1, json!({"ok": true}));
         state.with_transcript(|t| assert_eq!(t.len(), 2));
+    }
+
+    /// The working status: `--task` sets/replaces the one value, `--done`
+    /// clears it (posting any text as a message), and say/poll responses
+    /// echo it — the echo, not a timeout, corrects a forgotten task.
+    #[test]
+    fn task_lifecycle() {
+        let state = engine();
+        let mut conn = Conn::new(state.clone());
+        let set = state.handle(json!({"cmd": "say", "task": "resizing connectors"}), &mut conn);
+        assert_eq!(set, json!({"ok": true, "task": "resizing connectors"}));
+        assert_eq!(state.task().as_deref(), Some("resizing connectors"));
+
+        // One at a time: setting another replaces it.
+        state.handle(json!({"cmd": "say", "task": "rebuilding hinge"}), &mut conn);
+        assert_eq!(state.task().as_deref(), Some("rebuilding hinge"));
+
+        // A plain message leaves the task standing and echoes it back.
+        let said = state.handle(json!({"cmd": "say", "text": "answer"}), &mut conn);
+        assert_eq!(said["task"], json!("rebuilding hinge"));
+
+        // Poll responses carry it too (a successor agent's first sight of it).
+        let polled = state.handle(json!({"cmd": "poll", "timeout": 0.0}), &mut conn);
+        assert_eq!(polled["task"], json!("rebuilding hinge"));
+
+        // --done: message posts normally, task clears, nothing echoed.
+        let done = state.handle(json!({"cmd": "say", "done": true, "text": "hinge works"}), &mut conn);
+        assert_eq!(done, json!({"ok": true}));
+        assert_eq!(state.task(), None);
+        state.with_transcript(|t| {
+            assert_eq!(t.last().map(|e| e.text.as_str()), Some("hinge works"));
+        });
+        // Bare --done (no message) is a plain clear, and is idempotent.
+        assert_eq!(state.handle(json!({"cmd": "say", "done": true}), &mut conn), json!({"ok": true}));
+
+        // The shapes that don't make sense are errors.
+        for bad in [
+            json!({"cmd": "say"}),
+            json!({"cmd": "say", "task": "  "}),
+            json!({"cmd": "say", "task": "x", "text": "y"}),
+            json!({"cmd": "say", "task": "x", "done": true}),
+        ] {
+            assert_eq!(state.handle(bad, &mut conn)["ok"], json!(false));
+        }
     }
 
     /// Commands must not queue behind an in-flight build — the old global

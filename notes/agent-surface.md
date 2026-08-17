@@ -39,7 +39,11 @@ The engine's spec table validates field names (typos list siblings,
 removed commands get redirect errors) — one error path, no CLI grammar
 errors beyond "that wasn't a JSON object". Wire word is `inputs`
 (renamed from `set` 2026-08: it's the word meta and the interface report
-use; "set" read imperative).
+use; "set" read imperative). `say` grew one optional *leading* flag
+(2026-08-17): `--task <text>` / `--done [<text>]` for the working
+status; the rest stays free text. Responses of say/poll/status echo a
+standing `task` (only when set — absent claims nothing); that echo is
+the whole staleness story, deliberately no expiry.
 
 ## Geometry queries: flat toplevel, JS parity
 

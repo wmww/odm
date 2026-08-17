@@ -178,7 +178,14 @@ pub(crate) struct PollReq {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SayReq {
-    pub text: String,
+    pub text: Option<String>,
+    /// Set/replace the working status (`odm say --task`). Exclusive with
+    /// `text`/`done` — enforced in `cmd_say`, where empty-text is too.
+    pub task: Option<String>,
+    /// Clear the working status (`odm say --done`), posting `text` — if
+    /// any — as a normal message.
+    #[serde(default)]
+    pub done: bool,
 }
 
 // --- the spec table ------------------------------------------------------
@@ -426,9 +433,24 @@ const SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "say",
-        summary: "send a message to the user",
+        summary: "send a message to the user, or set/clear the live working status the \
+                  viewer shows; say, poll and status responses all echo a standing `task`",
         view: false,
-        fields: &[f("text", "string", "the message")],
+        fields: &[
+            f("text", "string", "the message"),
+            f(
+                "task",
+                "string",
+                "instead of a message: set/replace the working status (`odm say --task \
+                 <text>` — a few words, present progressive); there is one at a time",
+            ),
+            f(
+                "done",
+                "bool",
+                "clear the working status (`odm say --done [<text>]`); `text` alongside it \
+                 is posted as a normal message",
+            ),
+        ],
         js_twin: None,
         hidden: false,
     },
@@ -846,14 +868,21 @@ mod tests {
             matches!(parse_str(r#"{"cmd":"poll","timeout":1.5}"#), Ok(Request::Poll(p)) if p.timeout == Some(1.5))
         );
         assert!(
-            matches!(parse_str(r#"{"cmd":"say","text":"hi"}"#), Ok(Request::Say(s)) if s.text == "hi")
+            matches!(parse_str(r#"{"cmd":"say","text":"hi"}"#), Ok(Request::Say(s)) if s.text.as_deref() == Some("hi"))
         );
+        assert!(
+            matches!(parse_str(r#"{"cmd":"say","task":"resizing"}"#), Ok(Request::Say(s)) if s.task.as_deref() == Some("resizing"))
+        );
+        assert!(
+            matches!(parse_str(r#"{"cmd":"say","done":true}"#), Ok(Request::Say(s)) if s.done)
+        );
+        // All fields optional at parse time: "say needs a message" and the
+        // task/text/done exclusivity are cmd_say's to enforce.
+        assert!(matches!(parse_str(r#"{"cmd":"say"}"#), Ok(Request::Say(_))));
         assert!(matches!(parse_str(r#"{"cmd":"ack"}"#), Ok(Request::Ack)));
 
         let e = parse_str(r#"{"cmd":"poll","timout":1}"#).err().unwrap();
         assert!(e.contains("timout") && e.contains("timeout"), "{e}");
-        let e = parse_str(r#"{"cmd":"say"}"#).err().unwrap();
-        assert!(e.contains("text"), "{e}");
     }
 
     /// The spec table and the serde structs describe the same grammar: a

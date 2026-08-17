@@ -1,7 +1,7 @@
 //! The agent-facing command handlers, and (with `requests.rs`) the only
 //! place that speaks `serde_json::Value`.
 
-use crate::requests::{self, Look, Ray, RenderFrame, RenderReq, Request, ViewSel};
+use crate::requests::{self, Look, Ray, RenderFrame, RenderReq, Request, SayReq, ViewSel};
 use crate::scene;
 use crate::server::Conn;
 use crate::state::{ActivityKind, EngineState, PollOutcome, Published};
@@ -140,7 +140,7 @@ impl EngineState {
         // nor build, so a poll blocked for minutes holds up nothing.
         match req {
             Request::Poll(p) => self.cmd_poll(p.timeout, p.events, conn),
-            Request::Say(s) => self.cmd_say(&s.text),
+            Request::Say(s) => self.cmd_say(&s),
             Request::Ack => Ok(json!({ "acked": conn.confirm() })),
             Request::Status => self.cmd_status(),
             Request::Inspect(r) => {
@@ -206,19 +206,26 @@ impl EngineState {
                 Value::Object(o)
             })
             .collect();
-        Ok(json!({
-            "project": self.project().display().to_string(),
-            "name": sync.snapshot.marker.as_ref().map(|m| m.name.clone()),
-            "generation": sync.generation.0,
-            "files": files,
-            // The default view target (`root.js`) is a convention, not a
-            // requirement — queries can name any file.
-            "default_view": sync.snapshot.sources.contains_key(odm_build::DEFAULT_ROOT),
-            // Active view slots (viewer tabs, or the headless default);
-            // `"view": <slot>` requests adopt their state.
-            "views": views,
-            "health": self.health_json(Some(sync.generation.0)),
-        }))
+        let mut o = Map::new();
+        o.insert("project".into(), json!(self.project().display().to_string()));
+        o.insert("name".into(), json!(sync.snapshot.marker.as_ref().map(|m| m.name.clone())));
+        o.insert("generation".into(), json!(sync.generation.0));
+        o.insert("files".into(), json!(files));
+        // The default view target (`root.js`) is a convention, not a
+        // requirement — queries can name any file.
+        o.insert(
+            "default_view".into(),
+            json!(sync.snapshot.sources.contains_key(odm_build::DEFAULT_ROOT)),
+        );
+        // Active view slots (viewer tabs, or the headless default);
+        // `"view": <slot>` requests adopt their state.
+        o.insert("views".into(), json!(views));
+        o.insert("health".into(), self.health_json(Some(sync.generation.0)));
+        // The standing `odm say --task` status, if one is set.
+        if let Some(t) = self.task() {
+            o.insert("task".into(), json!(t));
+        }
+        Ok(Value::Object(o))
     }
 
     /// Every active slot's diagnostic value, for poll responses: what
@@ -924,20 +931,50 @@ impl EngineState {
             })
             .collect();
         conn.hold(taken.into_iter().map(|m| m.index));
-        Ok(json!({
-            "messages": messages,
-            "builds": self.builds_json(),
-            "health": self.health_json(self.last_generation()),
-        }))
+        let mut o = Map::new();
+        o.insert("messages".into(), json!(messages));
+        o.insert("builds".into(), self.builds_json());
+        o.insert("health".into(), self.health_json(self.last_generation()));
+        // The standing working status, so an agent picking the project up
+        // (or one that forgot to clear it) sees it in-band.
+        if let Some(t) = self.task() {
+            o.insert("task".into(), json!(t));
+        }
+        Ok(Value::Object(o))
     }
 
-    fn cmd_say(&self, text: &str) -> Result<Value, CmdError> {
-        let text = text.trim();
-        if text.is_empty() {
+    /// `say`'s three shapes: a message (`text`), set the working status
+    /// (`task`), or clear it (`done`, optionally with a message). A message
+    /// response echoes any standing task — that echo, not a timeout, is what
+    /// corrects a forgotten one: the agent (or a successor picking up the
+    /// project) sees it in-band and clears or replaces it.
+    fn cmd_say(&self, req: &SayReq) -> Result<Value, CmdError> {
+        let text = req.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        let task = req.task.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        if req.task.is_some() && task.is_none() {
+            return Err(CmdError::bad_request("task needs text: what are you working on?"));
+        }
+        if task.is_some() && (text.is_some() || req.done) {
+            return Err(CmdError::bad_request("task is its own request — no text or done with it"));
+        }
+        if let Some(t) = task {
+            self.set_task(t.to_owned());
+            return Ok(json!({"task": t}));
+        }
+        if text.is_none() && !req.done {
             return Err(CmdError::bad_request("say needs a message"));
         }
-        self.say(text.to_owned());
-        Ok(json!({}))
+        if let Some(t) = text {
+            self.say(t.to_owned());
+        }
+        if req.done {
+            self.clear_task();
+        }
+        let mut o = Map::new();
+        if let Some(t) = self.task() {
+            o.insert("task".into(), json!(t));
+        }
+        Ok(Value::Object(o))
     }
 
     fn root_node(&self, result: &PassResult) -> Result<Node, CmdError> {

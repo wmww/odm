@@ -7,7 +7,8 @@
 //! request body (minus `cmd`), so the engine's field validation and errors
 //! are the CLI's too. The only commands with their own argument parsing are
 //! the ones whose arguments aren't a request: `poll` (its flags configure
-//! this process's waiting), `say` (free text), `docs` (engineless).
+//! this process's waiting), `say` (free text, after an optional
+//! `--task`/`--done`), `docs` (engineless).
 
 mod docs;
 
@@ -28,6 +29,8 @@ pub const USAGE: &str = "  status                     project, files, view slots
                              wait for messages the user typed in the viewer
                              (--follow: never exit, one JSON line per batch)
   say     <text>             send a message to the user
+  say     --task <text>      set the live working status the viewer shows
+  say     --done [<text>]    clear it; <text> is sent as a normal message
   docs    [<topic>]          the reference, markdown, no engine (bare: topics)
   docs    search <pattern>   grep the reference, whole sections out
   docs    changes <from> <to>  API migration guides, concatenated
@@ -96,18 +99,7 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             }
             v
         }
-        // Everything after `say` is the message: no options, and no quoting
-        // rules to get wrong.
-        "say" => {
-            let text = rest.join(" ");
-            if text.trim().is_empty() {
-                bail!("say needs a message: odm say <text>");
-            }
-            let mut v = Map::new();
-            v.insert("cmd".into(), json!("say"));
-            v.insert("text".into(), json!(text));
-            v
-        }
+        "say" => parse_say(rest)?,
         // Everything else — status, the view-targeting commands, and
         // whatever the engine grows next — is one JSON request body. Unknown
         // commands are forwarded too: the engine's answer (with redirects
@@ -183,6 +175,41 @@ fn json_arg(cmd: &str, rest: &[String]) -> anyhow::Result<Map<String, Value>> {
         bail!("the command is the first argument; drop \"cmd\": {prev} from the object");
     }
     Ok(body)
+}
+
+/// `say`: an optional leading `--task` (set the working status) or `--done`
+/// (clear it); everything after that (or after bare `say`) is the message —
+/// no quoting rules to get wrong.
+fn parse_say(rest: &[String]) -> anyhow::Result<Map<String, Value>> {
+    let (flag, rest) = match rest.first().map(|a| a.as_str()) {
+        Some(a @ ("--task" | "--done")) => (Some(a.to_owned()), &rest[1..]),
+        _ => (None, rest),
+    };
+    let text = rest.join(" ");
+    let text = text.trim();
+    let mut v = Map::new();
+    v.insert("cmd".into(), json!("say"));
+    match flag.as_deref() {
+        Some("--task") => {
+            if text.is_empty() {
+                bail!("--task needs a status: odm say --task <what you're doing>");
+            }
+            v.insert("task".into(), json!(text));
+        }
+        Some(_) => {
+            v.insert("done".into(), json!(true));
+            if !text.is_empty() {
+                v.insert("text".into(), json!(text));
+            }
+        }
+        None => {
+            if text.is_empty() {
+                bail!("say needs a message: odm say <text>");
+            }
+            v.insert("text".into(), json!(text));
+        }
+    }
+    Ok(v)
 }
 
 /// `poll`'s two flags: `--timeout <sec>` and `--follow`.
@@ -461,6 +488,23 @@ mod tests {
         assert!(e.contains("at most one"), "{e}");
         let e = json_arg("inspect", &args(&[r#"{"cmd": "render"}"#])).unwrap_err().to_string();
         assert!(e.contains("first argument"), "{e}");
+    }
+
+    #[test]
+    fn say_flags() {
+        let v = parse_say(&args(&["two", "words"])).unwrap();
+        assert_eq!(Value::Object(v), json!({"cmd": "say", "text": "two words"}));
+        let v = parse_say(&args(&["--task", "resizing", "connectors"])).unwrap();
+        assert_eq!(Value::Object(v), json!({"cmd": "say", "task": "resizing connectors"}));
+        let v = parse_say(&args(&["--done", "hinge", "works"])).unwrap();
+        assert_eq!(Value::Object(v), json!({"cmd": "say", "done": true, "text": "hinge works"}));
+        let v = parse_say(&args(&["--done"])).unwrap();
+        assert_eq!(Value::Object(v), json!({"cmd": "say", "done": true}));
+        assert!(parse_say(&[]).is_err());
+        assert!(parse_say(&args(&["--task"])).is_err());
+        // Only a *leading* flag is a flag: the message itself stays free text.
+        let v = parse_say(&args(&["done", "--done"])).unwrap();
+        assert_eq!(Value::Object(v), json!({"cmd": "say", "text": "done --done"}));
     }
 
     #[test]

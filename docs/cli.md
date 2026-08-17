@@ -32,8 +32,9 @@ odm raycast '{"rays": [{"origin": [0, 0, 50], "dir": [0, 0, -1]}]}'
 The exceptions are the commands whose arguments aren't a structured
 request: `poll` takes `--timeout <sec>`/`--follow` (they configure the
 CLI's own waiting; `--follow` never reaches the engine), `say` takes
-free text, and `docs` is engineless and textual. `--project` stays a
-prefix — transport, resolved before a request exists.
+free text (after an optional `--task`/`--done`), and `docs` is
+engineless and textual. `--project` stays a prefix — transport,
+resolved before a request exists.
 
 Every command that looks at the scene **syncs first**: it rescans the
 project's files, rebuilds what changed, then answers — so a query can
@@ -131,9 +132,11 @@ wait for messages the user typed in the viewer; every response also carries `bui
 
 ### say
 
-send a message to the user.
+send a message to the user, or set/clear the live working status the viewer shows; say, poll and status responses all echo a standing `task`.
 
 - `text` (string) — the message
+- `task` (string) — instead of a message: set/replace the working status (`odm say --task <text>` — a few words, present progressive); there is one at a time
+- `done` (bool) — clear the working status (`odm say --done [<text>]`); `text` alongside it is posted as a normal message
 
 <!--- END GENERATED COMMAND REFERENCE --->
 
@@ -396,8 +399,18 @@ engine until collected with `odm poll`:
   immediately, it is the same instruction, not a second one.
 
 `odm say <text>` sends a message back; it appears in the viewer next to
-the user's own messages. Everything after `say` is the message — no
-quoting rules.
+the user's own messages. Everything after `say` (and its one optional
+leading flag) is the message — no quoting rules.
+
+**The working status.** `odm say --task <text>` sets the one live
+status line the viewer shows with an in-progress indicator — a few
+words, present progressive ("resizing connectors"). Setting another
+replaces it; `odm say --done [<text>]` clears it, posting any text as
+a normal message. The status never expires on its own — instead, a
+standing task is echoed as `task` in every `say`, `poll` and `status`
+response, so if you see one that no longer matches what you're doing
+(you forgot to clear it, or you're picking up after another agent),
+clear or replace it.
 
 When the user refers to a part ("make *this* one longer"), the
 message's `view.selection` has it — clicked parts appear as

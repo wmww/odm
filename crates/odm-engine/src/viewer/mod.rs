@@ -911,6 +911,7 @@ impl ViewerApp {
         }
         let state = self.state();
         let activity = self.activity.enabled.then_some(&self.activity);
+        let task = state.task();
         state.with_transcript(|transcript| {
             let bg = |p: &egui::Painter, rect: egui::Rect| {
                 if let Some(a) = activity {
@@ -939,6 +940,20 @@ impl ViewerApp {
                         Who::Engine => (format!("engine: {}", entry.text), theme::WARN),
                     };
                     ui.label(egui::RichText::new(text).color(color));
+                }
+                // The agent's working status (`odm say --task`): a live tail
+                // line in the era's busy-dots idiom (Searching...). The one
+                // exception to "no animation anywhere" — it exists to show
+                // work in progress, which a still frame can't. Never times
+                // out: a wrong task is corrected by the agent (it's echoed
+                // in every say/poll/status response), not guessed away.
+                if let Some(task) = &task {
+                    let dots = 1 + (ui.input(|i| i.time) / 0.4) as usize % 3;
+                    ui.label(
+                        egui::RichText::new(format!("{task}{}", ".".repeat(dots)))
+                            .color(theme::AGENT_TEXT.gamma_multiply(0.6)),
+                    );
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
                 }
             })
         });

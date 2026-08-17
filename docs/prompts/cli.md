@@ -19,6 +19,8 @@ odm raycast '{…}'             # nearest surface hit along rays
 odm clearance '{…}'           # per node pair: overlap? + gap lower bound
 odm poll [--timeout <sec>] [--follow]   # wait for messages from the user
 odm say <text>                # send a message to the user
+odm say --task <text>         # set the live "working on..." status
+odm say --done [<text>]       # clear it (+ optionally send a message)
 odm docs [<topic>]            # full reference (list topics when bare)
 odm docs search <pattern>     # grep the reference, whole sections out
 ```
@@ -141,9 +143,21 @@ listening when no poll is active, so a standing poll is what makes you
 reachable.
 
 `odm say <text>` sends a message back; it appears in the viewer next to
-the user's own messages. Use it to answer questions and report what you
-did — the rebuilt scene speaks for itself, so keep it short. Don't use
-`say` for progress narration on every edit.
+the user's own messages. Use it to answer questions and report results
+— a line or two; the rebuilt scene speaks for itself.
+
+**Show what you're working on.** The viewer is the user's only window
+onto you, and a silent one reads as a dead one. The moment you pick up
+a prompt, set the live status line: `odm say --task <text>` — a few
+words, present progressive ("resizing connectors"). Update it whenever
+you move to a new step (it's one line in the viewer, updated in place —
+cheap, so err on the side of updating); when the work is done, `odm say
+--done <one-line result>` posts the message and clears the status.
+There is one status at a time; setting another replaces it. It never
+expires on its own — a standing `task` is echoed in every say/poll
+response, so if you see one that no longer matches what you're doing,
+clear or replace it rather than leave the user watching a stale
+"working on" line.
 
 When the user refers to a part ("make *this* one longer"), the
 message's `view.selection` has it — clicked parts appear as

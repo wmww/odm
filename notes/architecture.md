@@ -469,6 +469,19 @@ The user types in the viewer's chat panel; the agent collects messages with
 `odm poll` and answers with `odm say`. No MCP: CLI + `docs/prompts/` is
 agent-agnostic and enough.
 
+- **The working status** (2026-08-17): `odm say --task <text>` sets the one
+  live "working on" line; `--done [<text>]` clears it, posting any text as a
+  normal message. Stored as a last-write-wins `Option<String>` in `Chat`
+  (state.rs `set_task`/`clear_task`/`task`) — a status value, no Delivery
+  machinery, works headless. The viewer draws it as a dim-blue tail line in
+  the chat transcript with era busy-dots cycling at 0.4s (repaint timer only
+  while set — the one exception to theme's "no animation anywhere").
+  Deliberately **no expiry**: a timeout would fake "done" during long
+  thinking. Instead every say/poll/status response echoes a standing `task`,
+  so the agent (or a successor) sees a stale one in-band and clears it; the
+  prompt tells it to. Exclusivity (`task` vs `text`/`done`) and empty-text
+  are `cmd_say`'s to enforce, not serde's.
+
 - **Poll's contract is set by agent harnesses.** The baseline one can't read a
   running background command's output — it is woken when the command *exits*.
   So poll blocks until ≥1 message is queued, prints them all, and exits;
