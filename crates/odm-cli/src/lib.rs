@@ -113,13 +113,6 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         None => find_project(std::env::current_dir()?)?,
     };
     let sock = project.join(".odm/engine.sock");
-    let mut stream = UnixStream::connect(&sock).with_context(|| {
-        format!(
-            "no engine at {} — start one with: odm run {} --headless",
-            sock.display(),
-            project.display()
-        )
-    })?;
 
     // Resolve `out` relative to the CLI's cwd before sending: the one
     // client-side pass over the body (the engine's cwd is not ours).
@@ -129,9 +122,21 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         request["out"] = json!(abs.display().to_string());
     }
 
+    // `--follow` connects for itself: with no engine (yet) it parks and
+    // waits rather than failing the launch — start order doesn't matter for
+    // the session's standing listener. The project lookup above still
+    // catches a wrong directory outright.
     if follow {
-        return follow_poll(stream, &sock, &request, &mut std::io::stdout());
+        return follow_poll(&sock, &request, &mut std::io::stdout());
     }
+
+    let mut stream = UnixStream::connect(&sock).with_context(|| {
+        format!(
+            "no engine at {} — start one with: odm run {} --headless",
+            sock.display(),
+            project.display()
+        )
+    })?;
 
     let mut reader = BufReader::new(stream.try_clone()?);
     send(&mut stream, &request)?;
@@ -256,15 +261,18 @@ fn parse_poll(args: &[String]) -> anyhow::Result<(Option<f64>, bool)> {
 /// The engine going away does not end the follow — exiting would silently
 /// unpark the session's one standing listener exactly when the user restarts
 /// the engine. It prints `{"engine": "down"}`, waits for the socket to accept
-/// again, prints `{"engine": "back"}`, and resumes. What does end it: a dead
-/// stdout (the watcher went away), or the engine refusing the request itself
-/// (asking again would get the same answer).
-fn follow_poll<W: Write>(
-    mut stream: UnixStream,
-    sock: &Path,
-    request: &Value,
-    out: &mut W,
-) -> anyhow::Result<i32> {
+/// again, prints `{"engine": "back"}`, and resumes; launched before the
+/// engine exists, it starts in that same waiting state. What does end it: a
+/// dead stdout (the watcher went away), or the engine refusing the request
+/// itself (asking again would get the same answer).
+fn follow_poll<W: Write>(sock: &Path, request: &Value, out: &mut W) -> anyhow::Result<i32> {
+    let mut stream = match UnixStream::connect(sock) {
+        Ok(s) => s,
+        Err(_) => match await_engine(sock, out) {
+            Some(s) => s,
+            None => return Ok(1),
+        },
+    };
     loop {
         let mut reader = BufReader::new(stream.try_clone()?);
         // One connection's worth of batches, until the engine goes away.
@@ -291,19 +299,27 @@ fn follow_poll<W: Write>(
                 acknowledge(&mut stream, &mut reader);
             }
         }
-        if !emit(out, &json!({ "engine": "down" })) {
-            return Ok(1);
-        }
-        stream = loop {
-            match UnixStream::connect(sock) {
-                Ok(s) => break s,
-                Err(_) => std::thread::sleep(std::time::Duration::from_millis(300)),
-            }
+        stream = match await_engine(sock, out) {
+            Some(s) => s,
+            None => return Ok(1),
         };
-        if !emit(out, &json!({ "engine": "back" })) {
-            return Ok(1);
-        }
     }
+}
+
+/// The outage sequence: a `{"engine": "down"}` notice, knock on the socket
+/// until it accepts, then `{"engine": "back"}`. None means stdout died along
+/// the way — the watcher is gone, so the follow should end.
+fn await_engine<W: Write>(sock: &Path, out: &mut W) -> Option<UnixStream> {
+    if !emit(out, &json!({ "engine": "down" })) {
+        return None;
+    }
+    let stream = loop {
+        match UnixStream::connect(sock) {
+            Ok(s) => break s,
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(300)),
+        }
+    };
+    emit(out, &json!({ "engine": "back" })).then_some(stream)
 }
 
 /// One compact JSON line out, flushed. False means stdout is closed — the
@@ -583,17 +599,22 @@ mod tests {
     fn follow_acks_each_batch_and_survives_an_engine_restart() {
         let dir = tempfile::tempdir().unwrap();
         let sock = dir.path().join("engine.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-
-        let (engine, client) = UnixStream::pair().unwrap();
         let (tx, rx) = channel();
         let follower = {
             let sock = sock.clone();
             std::thread::spawn(move || {
-                follow_poll(client, &sock, &json!({ "cmd": "poll" }), &mut Lines(tx)).unwrap()
+                follow_poll(&sock, &json!({ "cmd": "poll" }), &mut Lines(tx)).unwrap()
             })
         };
 
+        // Started before any engine: the follow parks in the outage state
+        // instead of failing the launch, and connects once the socket shows
+        // up.
+        assert_eq!(next(&rx).trim(), r#"{"engine":"down"}"#);
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert_eq!(next(&rx).trim(), r#"{"engine":"back"}"#);
+
+        let (engine, _) = listener.accept().unwrap();
         let mut writer = engine.try_clone().unwrap();
         let mut reader = BufReader::new(engine);
         // No `follow` key: the engine only ever sees a plain poll.
@@ -642,12 +663,17 @@ mod tests {
     /// follow ends rather than reconnecting.
     #[test]
     fn a_refused_follow_prints_the_error_and_exits() {
-        let (engine, client) = UnixStream::pair().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("engine.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
         let (tx, rx) = channel();
-        let follower = std::thread::spawn(move || {
-            follow_poll(client, Path::new("/nonexistent"), &json!({ "cmd": "poll" }), &mut Lines(tx))
-                .unwrap()
-        });
+        let follower = {
+            let sock = sock.clone();
+            std::thread::spawn(move || {
+                follow_poll(&sock, &json!({ "cmd": "poll" }), &mut Lines(tx)).unwrap()
+            })
+        };
+        let (engine, _) = listener.accept().unwrap();
         let mut writer = engine.try_clone().unwrap();
         let mut reader = BufReader::new(engine);
         assert_eq!(request(&mut reader), r#"{"cmd":"poll"}"#);
@@ -672,11 +698,16 @@ mod tests {
             }
         }
 
-        let (engine, client) = UnixStream::pair().unwrap();
-        let follower = std::thread::spawn(move || {
-            follow_poll(client, Path::new("/nonexistent"), &json!({ "cmd": "poll" }), &mut Broken)
-                .unwrap()
-        });
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("engine.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        let follower = {
+            let sock = sock.clone();
+            std::thread::spawn(move || {
+                follow_poll(&sock, &json!({ "cmd": "poll" }), &mut Broken).unwrap()
+            })
+        };
+        let (engine, _) = listener.accept().unwrap();
         let mut writer = engine.try_clone().unwrap();
         let mut reader = BufReader::new(engine);
         assert_eq!(request(&mut reader), r#"{"cmd":"poll"}"#);

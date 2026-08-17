@@ -196,6 +196,8 @@ writing the values costs tokens ~nothing vs reading tiles.
   prints `{"engine":"down"}`, then the CLI retries the socket (300ms)
   forever and prints `{"engine":"back"}` — the standing listener must
   survive engine restarts or the viewer says nobody is listening.
+  Launched with no engine it parks in the same state (agent may start
+  before the engine); bad project path still errors at launch.
   Shutdown's `stopped` error is swallowed (the down notice is its
   line); other refusals still print + exit 1, as does a dead stdout.
   Prompt leads with `--follow` and names the harness background-task

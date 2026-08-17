@@ -395,8 +395,10 @@ engine until collected with `odm poll`:
 - `--follow` survives the engine too: when the engine stops it prints
   `{"engine": "down"}`, waits for the socket, reconnects, and prints
   `{"engine": "back"}` — one launch covers the whole session, engine
-  restarts included, no retry wrapper needed. (The engine refusing the
-  request itself still exits nonzero.)
+  restarts included, no retry wrapper needed. Launched before any
+  engine is running, it starts in that same waiting state rather than
+  failing (a wrong `--project` path still fails outright). The engine
+  refusing the request itself still exits nonzero.
 - Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
   a message is only retired once the poll that took it has printed it,
   so anything it didn't get to goes back in the queue for the next one.

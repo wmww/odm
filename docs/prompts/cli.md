@@ -125,7 +125,8 @@ you collect them with `odm poll`:
   whenever a build or health value changes (a slot turning red, a
   heal). It survives engine restarts: on engine death it prints
   `{"engine": "down"}`, reconnects when the engine returns, and prints
-  `{"engine": "back"}` — no retry wrapper needed.
+  `{"engine": "back"}` — no retry wrapper needed, and starting it
+  before the engine is up parks it the same way.
 - Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
   a message is only retired once the poll that took it has printed it,
   so anything it didn't get to goes back in the queue for the next one.
