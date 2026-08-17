@@ -146,7 +146,7 @@ are latest-wins debounced like the desktop build loop.
 **Phase 0 — spikes (decide feasibility, throwaway code):**
 
 - *Manifold-to-wasm*: **DONE, green** (2026-08-17, `spikes/web-fit/` —
-  kept as reference). One module via clang + wasm-cxx-shim; numbers and
+  kept as reference until phase 2 folds it in and deletes it). One module via clang + wasm-cxx-shim; numbers and
   caveats under "Core decisions". The spike also proved the ops seam and
   executor round trip beyond what this phase asked: the real, unmodified
   framework JS (version manifest install + determinism prelude) ran a
@@ -194,6 +194,13 @@ landable alone):
   as native.
 - Browser build loop: input-panel events → set values → rebuild
   (latest-wins), last-good scene + error/console panels like desktop.
+- **Fold in and delete `spikes/web-fit/`**: it exists only as reference
+  for this phase. Move what's reusable into real homes — toolchain
+  setup (`WASM_CXX_SHIM_*` env vars, rootless clang/wasm-ld layout)
+  into the template xtask + its docs; the ops-glue and factory-wrapping
+  shape into the exporter/web runtime; the native-vs-wasm probe into a
+  conformance test if kept at all — then remove the directory (and its
+  mention in `notes/`).
 
 **Phase 3 — the `export` command + site shell:** CLI command on the
 running engine (it knows the current generation and that it builds
