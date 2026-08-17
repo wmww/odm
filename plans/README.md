@@ -20,6 +20,13 @@ discussions that followed. Cross-references note where plans touch.
   inline links (era hypertext, not buttons): a file opens a tab, a node
   selects in that path's tab. Spans on the action transcript entries,
   resolved on click through `scene::locate`.
+- `inspect-and-description-papercuts.md` — three small fixes from
+  2026-08 agent feedback (absorbs the deleted issues/inspect-papercuts.md
+  and issues/description-not-in-short-prompt.md): `fields` narrows `full`
+  instead of erroring; `volume`/`area` become subtree totals like
+  `bounds`/`tris`; the short prompt's false "reports a file's
+  description" example fixed + a `//!`-block hint in the unknown-meta-key
+  error.
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
   separating translation, offending leaf pairs named on the CLI surface,
