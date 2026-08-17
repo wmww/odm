@@ -277,12 +277,28 @@ fn pretty(v: &Value) -> String {
 /// with children still breaks apart.
 const WRAP: usize = 96;
 
+/// Scalar → text. Floats are rounded to 13 significant digits, then printed
+/// as the rounded value's shortest repr: computed measurements (CSG volumes,
+/// rotated bounds) carry a few bits of arithmetic noise that would otherwise
+/// print as `1000.0000000000005`. The protocol keeps full precision; only
+/// the display is trimmed.
+fn scalar_str(v: &Value) -> String {
+    match v {
+        Value::Number(n) if n.is_f64() => {
+            let f = n.as_f64().unwrap();
+            let rounded = format!("{f:.12e}").parse().unwrap_or(f);
+            serde_json::Number::from_f64(rounded).map_or_else(|| v.to_string(), |n| n.to_string())
+        }
+        _ => v.to_string(),
+    }
+}
+
 /// `indent` is the nesting level to indent continuation lines by; `col` is
 /// how much of this line is already spoken for.
 fn write_value(out: &mut String, v: &Value, indent: usize, col: usize) {
     // A scalar has nowhere to break: an over-long message still prints.
     if !matches!(v, Value::Array(_) | Value::Object(_)) {
-        out.push_str(&v.to_string());
+        out.push_str(&scalar_str(v));
         return;
     }
     if let Some(line) = flat(v, WRAP.saturating_sub(col)) {
@@ -341,7 +357,7 @@ fn flat(v: &Value, budget: usize) -> Option<String> {
             }
             s.push('}');
         }
-        scalar => s = scalar.to_string(),
+        scalar => s = scalar_str(scalar),
     }
     (s.len() <= budget).then_some(s)
 }
@@ -558,6 +574,23 @@ mod tests {
         );
         assert_eq!(out.lines().count(), 8, "{out}");
         assert_eq!(serde_json::from_str::<Value>(&out).unwrap(), v);
+    }
+
+    #[test]
+    fn float_noise_is_rounded_for_display() {
+        let v = json!({
+            "volume": 1000.0000000000005,
+            "min": -25.6,
+            "count": 3,
+            "tiny": 3e-13,
+        });
+        let out = pretty(&v);
+        assert!(out.contains("1000.0") && !out.contains("000000000000"), "{out}");
+        // Already-clean values keep their natural length and type.
+        assert!(out.contains("-25.6") && !out.contains("-25.60"), "{out}");
+        assert!(out.contains("\"count\": 3,") || out.contains("\"count\": 3}"), "{out}");
+        // Relative precision: a genuinely tiny value is not snapped to zero.
+        assert!(out.contains("3e-13"), "{out}");
     }
 
     #[test]
