@@ -27,8 +27,11 @@ use idle::Quit;
 
 pub use idle::run_viewer;
 
-/// What [`theme::text_edit`] pads its text with, top and bottom.
-const INPUT_MARGIN: f32 = 6.0;
+/// Rows the chat input grows to hold before it stops growing and scrolls —
+/// and, in a short dock, the share of the chat it may take, so the transcript
+/// is never squeezed down to nothing by a long message being typed.
+const INPUT_MAX_ROWS: usize = 8;
+const INPUT_MAX_SHARE: f32 = 0.5;
 
 /// Height the bottom dock (chat/console) starts at, and the least it can be
 /// dragged to — a tab strip plus, at the minimum, the chat input and a line
@@ -509,11 +512,17 @@ impl ViewerApp {
                     activity.panel_ui(ui, frame, renderer);
                 });
         }
-        // The input line keeps its height; the transcript takes whatever the
-        // panel's edge has been dragged to, less that line and the gap above
-        // it. Exactly, so the panel is never asked to hold more than it is.
-        let input_height = ui.text_style_height(&egui::TextStyle::Body) + INPUT_MARGIN;
-        let height = (ui.available_height() - input_height - ui.spacing().item_spacing.y).max(24.0);
+        // The input box grows with what is typed into it; the transcript
+        // takes whatever the panel's edge has been dragged to, less the box
+        // and the gap above it. Exactly, so the panel is never asked to hold
+        // more than it is.
+        let input_width = ui.available_width() - 4.0;
+        let row = ui.text_style_height(&egui::TextStyle::Body);
+        let one_row = row + theme::TEXT_PAD * 2.0;
+        let input_max = (row * INPUT_MAX_ROWS as f32 + theme::TEXT_PAD * 2.0)
+            .min((ui.available_height() * INPUT_MAX_SHARE).max(one_row));
+        let input_height = theme::text_area_height(ui, &self.chat_input, input_width).min(input_max);
+        let height = (ui.available_height() - input_height - ui.spacing().item_spacing.y).max(one_row);
         let size = egui::vec2(ui.available_width(), height);
         let state = self.state();
         let task = state.task();
@@ -521,20 +530,24 @@ impl ViewerApp {
             theme::tail_box(ui, "chat", size, |ui| {
                 if transcript.is_empty() {
                     ui.label(
-                        egui::RichText::new("Type below to send the agent a message.")
-                            .color(theme::WEAK_TEXT),
+                        egui::RichText::new(
+                            "Type below to send the agent a message.\n\
+                             Enter sends it; shift+Enter starts a new line.",
+                        )
+                        .color(theme::WEAK_TEXT),
                     );
                 }
                 for entry in transcript {
                     let undelivered = entry.delivery != Delivery::Done;
+                    // A message can now hold newlines; its later lines are
+                    // indented under the one the `>` opened.
+                    let quoted = || format!("> {}", entry.text.replace('\n', "\n  "));
                     let (text, color) = match entry.who {
                         // Dimmed until the agent has actually acknowledged it,
                         // so a message that never got through still looks like
                         // one.
-                        Who::User if undelivered => {
-                            (format!("> {}", entry.text), theme::WEAK_TEXT)
-                        }
-                        Who::User => (format!("> {}", entry.text), theme::TEXT),
+                        Who::User if undelivered => (quoted(), theme::WEAK_TEXT),
+                        Who::User => (quoted(), theme::TEXT),
                         Who::Agent => (entry.text.clone(), theme::AGENT_TEXT),
                         // What the agent did, as against what it said: one
                         // compact line per command it ran or file it changed.
@@ -561,8 +574,9 @@ impl ViewerApp {
                 }
             })
         });
-        let input = theme::text_edit(ui, "chat-input", &mut self.chat_input, ui.available_width() - 4.0, "");
-        if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        let input =
+            theme::text_area(ui, "chat-input", &mut self.chat_input, input_width, input_max, "");
+        if input.submitted {
             let text = self.chat_input.trim().to_owned();
             if !text.is_empty() {
                 // Stamped now: the snapshot must be what the user sees as
@@ -572,7 +586,7 @@ impl ViewerApp {
             }
             self.chat_input.clear();
             // Enter sends *and* keeps the caret, so a reply can follow.
-            input.request_focus();
+            input.response.request_focus();
         }
     }
 

@@ -876,6 +876,9 @@ pub fn cross(p: &egui::Painter, at: Pos2, color: Color32) {
     p.add(mesh);
 }
 
+/// What a text box pads its text with, on every side.
+pub const TEXT_PAD: f32 = 3.0;
+
 /// Single-line text box: sunken client area, fixed width. `hint` shows weak
 /// in the box while it is empty.
 ///
@@ -899,7 +902,7 @@ pub fn text_edit(
                 egui::TextEdit::singleline(text)
                     .id(egui::Id::new(id))
                     .desired_width(width)
-                    .margin(Margin::symmetric(3, 3))
+                    .margin(Margin::same(TEXT_PAD as i8))
                     .hint_text(hint)
                     .background_color(WINDOW),
             )
@@ -907,6 +910,101 @@ pub fn text_edit(
         .inner;
     bevel(ui.painter(), r.rect, Bevel::Sunken);
     r
+}
+
+/// A [`text_area`]'s outcome: the box's response, plus whether the user hit
+/// Enter to submit what they typed (as against the newline keys, which the
+/// box swallows).
+pub struct TextArea {
+    pub response: Response,
+    pub submitted: bool,
+}
+
+/// The height [`text_area`] will take for `text` at `width`, before clamping.
+/// Callers lay the space above the box out from this, so it has to be known
+/// before the box is drawn.
+pub fn text_area_height(ui: &Ui, text: &str, width: f32) -> f32 {
+    let font = TextStyle::Body.resolve(ui.style());
+    let galley = ui.fonts_mut(|f| f.layout(text.to_owned(), font, TEXT, width - TEXT_PAD * 2.0));
+    galley.size().y + TEXT_PAD * 2.0
+}
+
+/// Multi-line text box: [`text_edit`] that grows with its text and takes
+/// newlines. Enter submits (reported back, since what that means is the
+/// caller's); shift+Enter and ctrl+J — what terminals bind — insert a
+/// newline. Past `max_height` the box stops growing and scrolls, keeping the
+/// caret in view.
+pub fn text_area(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    text: &mut String,
+    width: f32,
+    max_height: f32,
+    hint: &str,
+) -> TextArea {
+    let id = egui::Id::new(id);
+    let focused = ui.memory(|m| m.has_focus(id));
+    // ctrl+J arrives as the newline key the box already knows: egui's own
+    // handler then inserts it at the caret, over the selection, undoably.
+    if focused {
+        ui.input_mut(|i| {
+            for ev in &mut i.events {
+                if let egui::Event::Key { key: egui::Key::J, pressed, modifiers, .. } = *ev
+                    && modifiers.command_only()
+                {
+                    *ev = egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed,
+                        repeat: false,
+                        modifiers: egui::Modifiers::SHIFT,
+                    };
+                }
+            }
+        });
+    }
+    // Read off the events rather than `key_pressed` + the current modifiers:
+    // a rewritten ctrl+J is an Enter press with ctrl still physically down.
+    let submitted = focused
+        && ui.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. }
+                    if !modifiers.shift && !modifiers.command)
+            })
+        });
+
+    let height = text_area_height(ui, text, width).min(max_height);
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+    let response = child
+        .scope(|ui| {
+            ui.visuals_mut().selection.stroke = Stroke::NONE;
+            egui::ScrollArea::vertical()
+                .id_salt(id.with("scroll"))
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(text)
+                            .id(id)
+                            .desired_width(width)
+                            .desired_rows(1)
+                            .margin(Margin::same(TEXT_PAD as i8))
+                            .hint_text(hint)
+                            // Enter is the caller's to act on, so only the
+                            // newline chord reaches egui as the return key.
+                            .return_key(egui::KeyboardShortcut::new(
+                                egui::Modifiers::SHIFT,
+                                egui::Key::Enter,
+                            ))
+                            .background_color(WINDOW),
+                    )
+                })
+                .inner
+        })
+        .inner;
+    bevel(ui.painter(), rect, Bevel::Sunken);
+    TextArea { response, submitted }
 }
 
 /// One line of a list box: icon, name, selection fill across the full width.
@@ -932,3 +1030,112 @@ pub fn list_row(ui: &mut Ui, icon: Icon, text: &str, selected: bool) -> Response
     response
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Event, Key, Modifiers};
+
+    const WIDTH: f32 = 200.0;
+
+    /// A headless [`text_area`], one frame at a time, focused throughout —
+    /// what the chat box is while the user types into it.
+    struct Harness {
+        ctx: egui::Context,
+        text: String,
+        submitted: bool,
+        height: f32,
+    }
+
+    impl Harness {
+        fn new(text: &str) -> Harness {
+            let mut h = Harness {
+                ctx: egui::Context::default(),
+                text: text.to_owned(),
+                submitted: false,
+                height: 0.0,
+            };
+            h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("box")));
+            h.frame(Vec::new());
+            h
+        }
+
+        fn frame(&mut self, events: Vec<Event>) {
+            let modifiers = events
+                .iter()
+                .find_map(|e| match e {
+                    Event::Key { modifiers, .. } => Some(*modifiers),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(300.0, 600.0))),
+                modifiers,
+                events,
+                ..Default::default()
+            };
+            let (text, mut submitted, mut height) = (&mut self.text, false, 0.0);
+            let _ = self.ctx.run_ui(input, |ui| {
+                let out = text_area(ui, "box", text, WIDTH, 1000.0, "");
+                submitted = out.submitted;
+                height = out.response.rect.height();
+            });
+            self.submitted = submitted;
+            self.height = height;
+        }
+
+        fn key(&mut self, key: Key, modifiers: Modifiers) {
+            self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }]);
+        }
+    }
+
+    #[test]
+    fn shift_enter_inserts_a_newline() {
+        let mut h = Harness::new("one");
+        h.key(Key::Enter, Modifiers::SHIFT);
+        h.frame(vec![Event::Text("two".into())]);
+        assert_eq!(h.text, "one\ntwo");
+        assert!(!h.submitted, "a newline is not a send");
+    }
+
+    /// Terminals bind ctrl+J to a newline, so the box does too — and the
+    /// ctrl held down while it lands must not read as a send.
+    #[test]
+    fn ctrl_j_inserts_a_newline() {
+        let mut h = Harness::new("one");
+        h.key(Key::J, Modifiers::COMMAND);
+        h.frame(vec![Event::Text("two".into())]);
+        assert_eq!(h.text, "one\ntwo");
+        assert!(!h.submitted);
+    }
+
+    #[test]
+    fn enter_submits_and_leaves_the_text_alone() {
+        let mut h = Harness::new("one\ntwo");
+        h.key(Key::Enter, Modifiers::NONE);
+        assert!(h.submitted);
+        assert_eq!(h.text, "one\ntwo", "the caller decides what a send does with it");
+    }
+
+    #[test]
+    fn an_unfocused_box_submits_nothing() {
+        let mut h = Harness::new("one");
+        h.ctx.memory_mut(|m| m.surrender_focus(egui::Id::new("box")));
+        h.key(Key::Enter, Modifiers::NONE);
+        assert!(!h.submitted);
+    }
+
+    /// The box grows a row per line, which is what the caller lays out the
+    /// space above it from.
+    #[test]
+    fn it_grows_with_its_lines() {
+        let mut h = Harness::new("one");
+        let one = h.height;
+        h.frame(vec![Event::Text("\ntwo\nthree".into())]);
+        let three = h.height;
+        assert!(
+            (three - one - 2.0 * (one - TEXT_PAD * 2.0)).abs() < 1.0,
+            "three lines is two rows taller than one: {one} -> {three}"
+        );
+    }
+}

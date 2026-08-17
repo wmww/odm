@@ -495,6 +495,22 @@ The user types in the viewer's chat panel; the agent collects messages with
 `odm poll` and answers with `odm say`. No MCP: CLI + `docs/prompts/` is
 agent-agnostic and enough.
 
+- **The message box takes newlines** (2026-08-17, was
+  issues/chat-box-no-multiline.md): `theme::text_area` — a multiline
+  `TextEdit` whose `return_key` is *shift+Enter*, so plain Enter falls
+  through for the caller to act on (`TextArea::submitted`). ctrl+J, what
+  terminals bind, is rewritten into a shift+Enter event before the widget
+  runs, so egui's own handler does the insert (caret, selection, undo). Two
+  traps: the submit check must read the *event's* modifiers, not
+  `InputState::modifiers` (a rewritten ctrl+J is an Enter press with ctrl
+  physically down), and egui multiline no longer surrenders focus on Enter,
+  so `lost_focus()` is not the signal it was. The box grows with its text —
+  `theme::text_area_height` lays the galley out ahead of the widget, since
+  the transcript above has to be sized before it is drawn — capped at 8 rows
+  or half the chat, whichever is less; past that it scrolls (egui keeps the
+  caret in view on the next keystroke). Transcript indents a message's later
+  lines under the `>`.
+
 - **The working status** (2026-08-17): `odm say --task <text>` sets the one
   live "working on" line; `--done [<text>]` clears it, posting any text as a
   normal message. A user message sets it to `state::PROCESSING`
