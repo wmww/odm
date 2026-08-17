@@ -106,6 +106,24 @@ fn walk(
     Ok(())
 }
 
+/// World AABB of the instances `keep` accepts — the scene's own `bounds` is
+/// this over all of them; a selection is a subset.
+pub fn subset_bounds(
+    scene: &RenderScene,
+    keep: impl Fn(&Instance) -> bool,
+) -> Option<([f64; 3], [f64; 3])> {
+    let mut bounds = None;
+    let mut local: LocalBoundsCache = HashMap::new();
+    for inst in scene.instances.iter().filter(|i| keep(i)) {
+        let Some(mesh) = scene.meshes.get(&inst.mesh) else { continue };
+        let lb = *local.entry(inst.mesh).or_insert_with(|| mesh_aabb(mesh));
+        if let Some((min, max)) = lb {
+            grow_bounds(&mut bounds, &inst.world, min, max);
+        }
+    }
+    bounds
+}
+
 /// AABB of a mesh's positions (no kernel/Manifold involvement).
 pub fn mesh_aabb(mesh: &Mesh) -> Option<([f64; 3], [f64; 3])> {
     if mesh.positions.is_empty() {
@@ -144,5 +162,55 @@ fn grow_bounds(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unit cube at the origin.
+    fn unit_cube() -> Mesh {
+        Mesh {
+            positions: vec![
+                0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0,
+                0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0,
+            ],
+            indices: vec![0, 1, 2],
+        }
+    }
+
+    /// Two cubes, "0" at the origin and "1" translated 10 along x.
+    fn two_cubes() -> RenderScene {
+        let mesh = Arc::new(unit_cube());
+        let hash = Hash::of_bytes(b"cube");
+        let mut far = math::IDENTITY;
+        far[12] = 10.0;
+        let inst = |id: &str, world| Instance {
+            id: id.to_string(),
+            name: None,
+            mesh: hash,
+            world,
+            color: DEFAULT_COLOR,
+        };
+        RenderScene {
+            instances: vec![inst("0", math::IDENTITY), inst("1", far)],
+            meshes: HashMap::from([(hash, mesh)]),
+            bounds: None,
+        }
+    }
+
+    #[test]
+    fn subset_bounds_fits_only_what_is_kept() {
+        let scene = two_cubes();
+        assert_eq!(
+            subset_bounds(&scene, |i| i.id == "1"),
+            Some(([10.0, 0.0, 0.0], [11.0, 1.0, 1.0]))
+        );
+        assert_eq!(
+            subset_bounds(&scene, |_| true),
+            Some(([0.0, 0.0, 0.0], [11.0, 1.0, 1.0]))
+        );
+        assert_eq!(subset_bounds(&scene, |_| false), None);
     }
 }

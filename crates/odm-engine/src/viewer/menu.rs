@@ -35,11 +35,16 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
         ));
         // Nothing to look at without a project, so nothing to say about how.
         if app.session.is_some() {
+            // F does both jobs; the label says which one it will do now.
+            let framing = match app.tabs.get(app.active) {
+                Some(tab) if !tab.selected.is_empty() => "Frame Selection",
+                _ => "Frame Scene",
+            };
             action = action.or(theme::menu(
                 ui,
                 "View",
                 &[
-                    MenuEntry::item(Action::Frame, "Frame Scene").shortcut("F"),
+                    MenuEntry::item(Action::Frame, framing).shortcut("F"),
                     MenuEntry::separator(),
                     MenuEntry::check(Action::Wireframe, "Wireframe", app.wireframe),
                     MenuEntry::check(Action::Xray, "X-Ray", app.xray),

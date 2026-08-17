@@ -618,6 +618,11 @@ children. Consequences:
   what each auto-expand displaced, and any user toggle (`set_manual`) takes
   that node out of auto-expand's hands for good. Nodes above `AUTO_DEPTH`
   start open.
+- F (View ▸ Frame) fits the selection's world AABB if anything is selected,
+  else the whole scene's (`odm_render::subset_bounds`), keeping the current
+  yaw/pitch. It moves the orbit *target*, so the camera keeps turning around
+  what was framed after the selection is dropped, until F with an empty
+  selection recenters on everything.
 - Selection is a list, in pick order. Shift-clicking a row — or a solid in the
   viewport — adds it, or removes it if it was already selected; a plain click
   replaces the whole selection. `status` (active slot) and poll

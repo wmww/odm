@@ -59,6 +59,19 @@ const CHAT_HEIGHT: f32 = 92.0;
 
 impl Orbit {
     pub(crate) fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
+        let mut orbit = Orbit {
+            target: [0.0; 3],
+            distance: 1.0,
+            yaw: 1.4f64.atan2(1.0),
+            pitch: 0.9f64.atan2((1.0f64 + 1.4 * 1.4).sqrt()),
+        };
+        orbit.frame(bounds);
+        orbit
+    }
+
+    /// Center on some bounds and back off far enough to fit them, keeping the
+    /// view direction — reframing should not spin the model.
+    fn frame(&mut self, bounds: Option<([f64; 3], [f64; 3])>) {
         let (center, radius) = match bounds {
             Some((min, max)) => {
                 let c = [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0, (min[2] + max[2]) / 2.0];
@@ -68,12 +81,8 @@ impl Orbit {
             }
             None => ([0.0; 3], 1.0),
         };
-        Orbit {
-            target: center,
-            distance: radius * 1.1 / (FOV_Y_DEG / 2.0).to_radians().sin(),
-            yaw: 1.4f64.atan2(1.0),
-            pitch: 0.9f64.atan2((1.0f64 + 1.4 * 1.4).sqrt()),
-        }
+        self.target = center;
+        self.distance = radius * 1.1 / (FOV_Y_DEG / 2.0).to_radians().sin();
     }
 
     fn eye(&self) -> [f64; 3] {
@@ -277,10 +286,25 @@ impl ViewerApp {
             Some(Dialog::AgentFiles(agent::AgentDialog::new(self.agent_questions.remove(0))));
     }
 
+    /// F (and View ▸ Frame): fit the selection if there is one, else the whole
+    /// scene. The orbit target stays where it was put, so the camera goes on
+    /// turning around the framed objects after the selection is dropped —
+    /// until F with nothing selected recenters on everything again.
     fn frame_scene(&mut self) {
         let tab = self.tab_mut();
-        if let Some(scene) = &tab.scene {
-            tab.orbit = Orbit::framed(scene.scene.bounds);
+        let Some(scene) = &tab.scene else { return };
+        let bounds = if tab.selected.is_empty() {
+            scene.scene.bounds
+        } else {
+            let selected = &tab.selected;
+            odm_render::subset_bounds(&scene.scene, |inst| {
+                selected.iter().any(|(sel, _)| selection_covers(sel, &inst.id))
+            })
+        };
+        // Nothing to fit (empty scene, or a selection with no geometry under
+        // it): leave the camera alone rather than jump it to the origin.
+        if bounds.is_some() {
+            tab.orbit.frame(bounds);
             self.needs_render = true;
         }
     }
@@ -791,7 +815,7 @@ impl ViewerApp {
         ui.painter().text(
             rect.left_top() + egui::vec2(8.0, 8.0),
             egui::Align2::LEFT_TOP,
-            "drag orbit · shift/middle-drag pan · scroll zoom · click select (shift adds) · F frame",
+            "drag orbit · shift/middle-drag pan · scroll zoom · click select (shift adds) · F frame selection",
             egui::FontId::proportional(theme::UI_SIZE),
             egui::Color32::from_white_alpha(60),
         );

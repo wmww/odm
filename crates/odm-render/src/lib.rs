@@ -14,7 +14,7 @@ pub mod sheet;
 mod wire;
 
 pub use camera::{Camera, Projection, ResolvedCamera};
-pub use flatten::{DEFAULT_COLOR, flatten_node, flatten_scene, mesh_aabb, node_id};
+pub use flatten::{DEFAULT_COLOR, flatten_node, flatten_scene, mesh_aabb, node_id, subset_bounds};
 pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, Renderer, encode_png};
 pub use wire::{WireHit, mesh_edges, pick_wire};
 
