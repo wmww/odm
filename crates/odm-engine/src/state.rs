@@ -10,7 +10,7 @@ use odm_kernel::Kernel;
 use odm_render::{RenderScene, Renderer};
 use odm_store::Store;
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -43,6 +43,11 @@ pub enum Who {
     /// session events, not build output — they ride the transcript so both
     /// the viewer chat panel and `odm poll` see them.
     Engine,
+    /// Something the agent did to the project: a CLI command it ran, a file
+    /// it changed. Viewer-only (never `Pending`, so no poll ever takes one)
+    /// and only recorded while a viewer is attached — the agent knows what
+    /// it did, the user is the one who can't see it.
+    Action,
 }
 
 /// How far a message has got towards the agent. A user message is only ever
@@ -108,6 +113,40 @@ pub enum ActivityKind {
 
 /// Bounds activity memory: pushes past this drop the oldest event.
 const ACTIVITY_CAP: usize = 8;
+
+/// The working status a user message sets, until the agent replaces it
+/// (`odm say --task`) or clears it (`--done`).
+pub const PROCESSING: &str = "Processing";
+
+/// Changed files past this are logged as a count instead of a line each —
+/// a branch switch is one event to the user, not forty.
+const FILE_LOG_CAP: usize = 6;
+
+/// What changed between two syncs' source hashes, as transcript lines:
+/// one per file while there are few, a count once a change is wholesale
+/// (a branch switch, a generated tree landing).
+fn file_edits(
+    old: &BTreeMap<String, odm_ir::Hash>,
+    new: &BTreeMap<String, odm_ir::Hash>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (path, hash) in new {
+        match old.get(path) {
+            None => lines.push(format!("new {path}")),
+            Some(h) if h != hash => lines.push(format!("edit {path}")),
+            Some(_) => {}
+        }
+    }
+    for path in old.keys() {
+        if !new.contains_key(path) {
+            lines.push(format!("deleted {path}"));
+        }
+    }
+    if lines.len() > FILE_LOG_CAP {
+        return vec![format!("{} files changed", lines.len())];
+    }
+    lines
+}
 
 /// One taken message: transcript index, sender, text, send-time view
 /// snapshot.
@@ -187,9 +226,10 @@ pub struct EngineState {
     published: Mutex<HashMap<String, Published>>,
     /// slot → the view the background loop keeps built.
     views: Mutex<HashMap<String, View>>,
-    /// Generation of the last sync seen by `build_once`; a change makes
-    /// every active slot stale.
-    last_generation: Mutex<Option<u64>>,
+    /// Generation of the last sync seen by `build_once` and that sync's
+    /// source hashes; a change makes every active slot stale, and the hash
+    /// diff is what the viewer logs as the agent's file edits.
+    last_generation: Mutex<Option<(u64, BTreeMap<String, odm_ir::Hash>)>>,
     /// The viewer tab the user is looking at (None when headless): what
     /// `"view": true` queries adopt and poll snapshots describe.
     active_slot: Mutex<Option<String>>,
@@ -457,7 +497,21 @@ impl EngineState {
     pub fn send_message(&self, text: String, view: Option<Value>) {
         let entry = TranscriptEntry { who: Who::User, text, delivery: Delivery::Pending, view };
         self.chat.lines.lock().unwrap().push(entry);
+        // The message itself is the status until the agent says otherwise:
+        // the user sees the viewer react the instant they hit Enter, instead
+        // of a dead panel until the agent gets round to `--task`.
+        *self.chat.task.lock().unwrap() = Some(PROCESSING.to_owned());
         self.chat.cv.notify_all();
+        self.wake();
+    }
+
+    /// Note an agent action in the transcript (viewer-only, never polled).
+    pub(crate) fn log_action(&self, text: String) {
+        if !self.viewer_attached() {
+            return;
+        }
+        let entry = TranscriptEntry { who: Who::Action, text, delivery: Delivery::Done, view: None };
+        self.chat.lines.lock().unwrap().push(entry);
         self.wake();
     }
 
@@ -639,7 +693,7 @@ impl EngineState {
     /// Generation of the last sync the build loop saw (what health entries'
     /// staleness is judged against when no fresh sync is at hand).
     pub(crate) fn last_generation(&self) -> Option<u64> {
-        *self.last_generation.lock().unwrap()
+        self.last_generation.lock().unwrap().as_ref().map(|(g, _)| *g)
     }
 
     /// Read the chat, for the viewer's panel. `f` runs under the chat lock:
@@ -807,14 +861,26 @@ impl EngineState {
 
     /// A new generation makes every active slot stale: queue rebuilds
     /// (except `building`, the slot already being built from it), and
-    /// reschedule the health sweep over the generation's files.
-    fn note_generation(&self, sync: &SyncResult, building: Option<&str>) {
-        {
+    /// reschedule the health sweep over the generation's files. The source
+    /// hashes it moved between are also the viewer's file-edit log.
+    pub(crate) fn note_generation(&self, sync: &SyncResult, building: Option<&str>) {
+        let edits = {
             let mut last = self.last_generation.lock().unwrap();
-            if *last == Some(sync.generation.0) {
+            if last.as_ref().map(|(g, _)| *g) == Some(sync.generation.0) {
                 return;
             }
-            *last = Some(sync.generation.0);
+            let sources = sync.snapshot.generation_sources.clone();
+            // The first sync of a session has nothing to compare against:
+            // an open is not an edit.
+            let edits = match last.take() {
+                Some((_, old)) => file_edits(&old, &sources),
+                None => Vec::new(),
+            };
+            *last = Some((sync.generation.0, sources));
+            edits
+        };
+        for line in edits {
+            self.log_action(line);
         }
         let slots: Vec<String> = self.views.lock().unwrap().keys().cloned().collect();
         for slot in slots {
@@ -1063,8 +1129,44 @@ pub(crate) mod tests {
         // nothing built yet.
         assert_eq!(replies.0["builds"][0]["build"], json!("pending"));
         assert_eq!(replies.0["health"], json!([]));
-        assert_eq!(replies.1, json!({"ok": true}));
+        // The say echoes the status the user's message put up.
+        assert_eq!(replies.1, json!({"ok": true, "task": "Processing"}));
         state.with_transcript(|t| assert_eq!(t.len(), 2));
+    }
+
+    /// A user message is itself a working status: the viewer says
+    /// "Processing" from the moment they hit Enter until the agent replaces
+    /// or clears it.
+    #[test]
+    fn a_user_message_starts_the_processing_status() {
+        let state = engine();
+        let mut conn = Conn::new(state.clone());
+        assert_eq!(state.task(), None);
+        state.send_message("make it taller".into(), None);
+        assert_eq!(state.task().as_deref(), Some(PROCESSING));
+        // The agent's own task takes over from it, and --done clears it.
+        state.handle(json!({"cmd": "say", "task": "stretching the post"}), &mut conn);
+        assert_eq!(state.task().as_deref(), Some("stretching the post"));
+        state.handle(json!({"cmd": "say", "done": true}), &mut conn);
+        assert_eq!(state.task(), None);
+        // A second message puts it back up.
+        state.send_message("now wider".into(), None);
+        assert_eq!(state.task().as_deref(), Some(PROCESSING));
+    }
+
+    #[test]
+    fn file_edits_are_one_line_each_until_a_wholesale_change() {
+        let h = |n: u8| odm_ir::Hash::of_bytes(&[n]);
+        let old: BTreeMap<String, odm_ir::Hash> =
+            [("a.js".to_owned(), h(1)), ("gone.js".to_owned(), h(2))].into();
+        let new: BTreeMap<String, odm_ir::Hash> =
+            [("a.js".to_owned(), h(3)), ("b.js".to_owned(), h(4))].into();
+        assert_eq!(file_edits(&old, &new), ["edit a.js", "new b.js", "deleted gone.js"]);
+        assert!(file_edits(&new, &new).is_empty(), "an unchanged sync says nothing");
+        // Past the cap it is one event, not forty (a branch switch).
+        let many: BTreeMap<String, odm_ir::Hash> =
+            (0..FILE_LOG_CAP + 1).map(|i| (format!("f{i}.js"), h(9))).collect();
+        assert_eq!(file_edits(&BTreeMap::new(), &many), [format!("{} files changed", many.len())]);
     }
 
     /// The working status: `--task` sets/replaces the one value, `--done`

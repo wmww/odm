@@ -1,7 +1,12 @@
-//! The agent activity view: a faded render behind the chat transcript showing
-//! the last agent CLI action — a raycast draws the ray on the queried scene,
-//! an inspect highlights the node, a render shows the image itself. Queued
-//! cards snap in one after another; the last one persists until replaced.
+//! The agent activity view: a panel beside the chat transcript showing the
+//! last agent CLI action — a raycast draws the ray on the queried scene, an
+//! inspect highlights the node, a render shows the image itself. Queued cards
+//! snap in one after another; the last one persists until replaced.
+//!
+//! The card fills its box: raycast/inspect cards are rendered at the box's
+//! size, and a render card's fixed aspect is cropped to cover it (the panel
+//! is dragged to whatever shape the user wants — letterboxing it would waste
+//! what they gave it).
 
 use odm_viewer_core::{OffscreenTarget, Orbit, selection_covers};
 use crate::state::{ActivityEvent, ActivityKind};
@@ -16,8 +21,6 @@ use std::time::Duration;
 const DWELL: f64 = 1.2;
 /// Queued cards beyond this drop oldest-first (mirrors the engine's cap).
 const CAP: usize = 8;
-/// The "faded" look: the card's paint alpha behind the chat text.
-const ALPHA: u8 = 96;
 /// Ray and hit-marker color, linear RGBA.
 const RAY_COLOR: [f32; 4] = [1.0, 0.65, 0.1, 1.0];
 
@@ -90,7 +93,7 @@ impl ActivityView {
 
     /// Render the current card if it (or the well size) changed — the ui-pass
     /// render, exactly like the main viewport's.
-    pub fn update(
+    fn update(
         &mut self,
         frame: &mut eframe::Frame,
         renderer: &mut Renderer,
@@ -142,36 +145,82 @@ impl ActivityView {
         }
     }
 
-    /// Paint the current card faded into `rect` (the chat well), caption in
-    /// the top-right corner. Placement is entirely the call site's.
-    pub fn paint(&self, painter: &egui::Painter, rect: egui::Rect) {
-        let Some(card) = &self.current else { return };
-        let tint = egui::Color32::from_white_alpha(ALPHA);
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    /// The whole panel: a sunken well holding the current card, rendered at
+    /// the well's own size. Takes the ui's remaining space, so the caller
+    /// only has to decide how wide the panel is.
+    pub fn panel_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &mut eframe::Frame,
+        renderer: &mut Renderer,
+    ) {
+        let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+        let painter = ui.painter().clone();
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::WINDOW);
+        theme::bevel(&painter, rect, theme::Bevel::Sunken);
+        let well = rect.shrink(2.0);
+        if well.width() < 1.0 || well.height() < 1.0 {
+            return;
+        }
+        let ppp = ui.ctx().pixels_per_point();
+        let px = [
+            ((well.width() * ppp) as u32).clamp(16, 4096),
+            ((well.height() * ppp) as u32).clamp(16, 4096),
+        ];
+        let ctx = ui.ctx().clone();
+        self.update(frame, renderer, &ctx, px);
+        self.paint(&painter.with_clip_rect(well), well);
+    }
+
+    /// Paint the current card into `rect`, caption in the top-right corner.
+    fn paint(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let Some(card) = &self.current else {
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                "Nothing from the agent yet.",
+                egui::FontId::proportional(theme::UI_SIZE),
+                theme::WEAK_TEXT,
+            );
+            return;
+        };
+        let full = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         match &card.kind {
             ActivityKind::Render { width, height, .. } => {
                 if let Some((seq, tex)) = &self.image
                     && *seq == card.seq
                 {
-                    let fit = contain(rect, *width as f32 / *height as f32);
-                    painter.image(tex.id(), fit, uv, tint);
+                    let uv = cover(rect, *width as f32 / *height as f32);
+                    painter.image(tex.id(), rect, uv, egui::Color32::WHITE);
                 }
             }
             _ => {
                 if let Some(target) = &self.target
                     && self.rendered.map(|(s, _)| s) == Some(card.seq)
                 {
-                    painter.image(target.image(rect.size()).id, rect, uv, tint);
+                    painter.image(
+                        target.image(rect.size()).id,
+                        rect,
+                        full,
+                        egui::Color32::WHITE,
+                    );
                 }
             }
         }
-        painter.text(
-            rect.right_top() + egui::vec2(-4.0, 2.0),
-            egui::Align2::RIGHT_TOP,
-            &card.caption,
+        // The caption reads over whatever the render put behind it, so it
+        // gets the window colour to sit on.
+        let galley = painter.layout_no_wrap(
+            card.caption.clone(),
             egui::FontId::proportional(theme::UI_SIZE),
             theme::WEAK_TEXT,
         );
+        let pos = rect.right_top() + egui::vec2(-4.0 - galley.size().x, 2.0);
+        painter.rect_filled(
+            egui::Rect::from_min_size(pos, galley.size()).expand(2.0),
+            egui::CornerRadius::ZERO,
+            theme::WINDOW.gamma_multiply(0.8),
+        );
+        painter.galley(pos, galley, theme::WEAK_TEXT);
     }
 }
 
@@ -287,14 +336,17 @@ fn highlight(scene: &RenderScene, node: &str) -> RenderScene {
     RenderScene { instances, meshes: scene.meshes.clone(), bounds: scene.bounds }
 }
 
-/// Largest rect of the given aspect that fits centered in `rect`.
-fn contain(rect: egui::Rect, aspect: f32) -> egui::Rect {
-    let (w, h) = if rect.width() / rect.height() > aspect {
-        (rect.height() * aspect, rect.height())
+/// UV window that makes an image of `aspect` cover `rect`: the whole box is
+/// filled and the longer dimension is cropped equally at both ends.
+fn cover(rect: egui::Rect, aspect: f32) -> egui::Rect {
+    let box_aspect = rect.width() / rect.height().max(1e-6);
+    let (mut w, mut h) = (1.0, 1.0);
+    if aspect > box_aspect {
+        w = box_aspect / aspect;
     } else {
-        (rect.width(), rect.width() / aspect)
-    };
-    egui::Rect::from_center_size(rect.center(), egui::vec2(w, h))
+        h = aspect / box_aspect;
+    }
+    egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(w, h))
 }
 
 #[cfg(test)]
@@ -356,6 +408,20 @@ mod tests {
         queue.push_back(2);
         assert_eq!(advance_cards(&mut queue, &mut current, &mut since, 50.1), None);
         assert_eq!(current, Some(2));
+    }
+
+    #[test]
+    fn cover_crops_the_longer_dimension_only() {
+        let box_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0));
+        // A square image in a 2:1 box: full width, half the height shown.
+        let uv = cover(box_rect, 1.0);
+        assert!((uv.width() - 1.0).abs() < 1e-6);
+        assert!((uv.height() - 0.5).abs() < 1e-6);
+        // A 4:1 image in the same box: full height, half the width shown.
+        let uv = cover(box_rect, 4.0);
+        assert!((uv.height() - 1.0).abs() < 1e-6);
+        assert!((uv.width() - 0.5).abs() < 1e-6);
+        assert!((uv.center() - egui::pos2(0.5, 0.5)).length() < 1e-6, "crop is centered");
     }
 
     #[test]

@@ -30,5 +30,7 @@ for the topic list, `odm docs <topic>` to read one, `odm docs search
 The user watches the viewer and talks to you through it: keep
 `odm poll` running in the background so their messages reach you,
 answer with `odm say`, keep `odm say --task <what you're doing>`
-current while you work so the viewer shows you're alive, and read what
-they have clicked off the poll's `view.selection` (or `odm status`).
+current while you work so the viewer shows you're alive — always
+clearing it with `odm say --done <result>` before you stop — and read
+what they have clicked off the poll's `view.selection` (or `odm
+status`).

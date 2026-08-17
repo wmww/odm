@@ -256,7 +256,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
   **Agent activity view** (2026-08-17, was plans/agent-activity-view.md): a
-  faded render behind the chat transcript showing the last agent CLI action.
+  render of the last agent CLI action, in its own resizable column down the
+  right of the chat tab (was a faded backdrop behind the transcript until
+  2026-08-17 — text over a render served neither).
   raycast/inspect/render handlers push `ActivityEvent`s (state.rs: capped
   deque ~8, gated on `viewer_attached()` = wake hook set, so headless pays
   nothing — `cmd_render` even skips the RGBA capture). Events are
@@ -269,16 +271,19 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   `RenderOptions.overlays` (`OverlaySeg` — generic odm-render wire-pipeline
   feature, depth-tested); inspect cards frame the node's AABB and brighten
   its instances with the selection formula; render cards upload RGBA as an
-  egui texture, letterboxed. Cards render once per (card, size) via the
+  egui texture, *cover*-cropped (`cover` returns the uv window — the panel is
+  whatever shape the user drags, and letterboxing would waste it). Cards render once per (card, size) via the
   shared-device renderer into an odm-viewer-core `OffscreenTarget` (the
   ViewportTex machinery extracted for reuse — future render windows are one
   OffscreenTarget + camera + scene each; per-window Orbit not built yet).
-  Painted by a bg hook in `theme::tail_box_with_bg` (called with the well's
-  content rect between WINDOW fill and text; alpha 96), caption top-right in
-  WEAK_TEXT. Viewer mesh-cache prune keeps activity-card scenes alive too.
-  View ▸ Agent Activity toggles it (session-local; off = drain-and-drop).
-  Legibility/framing polish deliberately deferred; burst coalescing (N rays
-  → one card) deliberately out of scope, the caps bound bursts.
+  `ActivityView::panel_ui` owns the whole column: sunken well, render at the
+  well's own pixel size, opaque paint, caption top-right in WEAK_TEXT on a
+  dimmed plate. The column is an `egui::Panel::right` *nested in the chat
+  tab* (resizable, 220 default / 60 min / 70% max, 8px left margin so its
+  resize grab zone clears the transcript's scrollbar). Viewer mesh-cache
+  prune keeps activity-card scenes alive too. View ▸ Agent Activity toggles
+  it (session-local; off = drain-and-drop, no column). Burst coalescing (N
+  rays → one card) deliberately out of scope, the caps bound bursts.
   Commands: status/inspect/render/raycast/clearance, and poll/say/ack (see
   "Talking to the agent"); every command except those three syncs first
   (no standalone `sync` — folded into `status` 2026-08). Commands run
@@ -492,7 +497,11 @@ agent-agnostic and enough.
 
 - **The working status** (2026-08-17): `odm say --task <text>` sets the one
   live "working on" line; `--done [<text>]` clears it, posting any text as a
-  normal message. Stored as a last-write-wins `Option<String>` in `Chat`
+  normal message. A user message sets it to `state::PROCESSING`
+  ("Processing") on the spot, so the viewer reacts on Enter instead of
+  waiting for the agent's first `--task`; the agent's own task replaces it
+  and `--done` clears it. The prompt tells the agent to always clear it
+  before it stops. Stored as a last-write-wins `Option<String>` in `Chat`
   (state.rs `set_task`/`clear_task`/`task`) — a status value, no Delivery
   machinery, works headless. The viewer draws it as a dim-blue tail line in
   the chat transcript with era busy-dots cycling at 0.4s (repaint timer only
@@ -502,6 +511,18 @@ agent-agnostic and enough.
   so the agent (or a successor) sees a stale one in-band and clears it; the
   prompt tells it to. Exclusivity (`task` vs `text`/`done`) and empty-text
   are `cmd_say`'s to enforce, not serde's.
+
+- **The agent's actions are log lines** (2026-08-17, `Who::Action`,
+  `EngineState::log_action`): one compact transcript line per command it ran
+  (`dispatch` logs the verb + the response's resolved `view` path, or
+  `verb failed: <first line, clipped>`; poll/say/ack are the chat, not
+  actions) and per file that changed (`note_generation` diffs the last sync's
+  `generation_sources` against the new one — `new`/`edit`/`deleted`, or one
+  "N files changed" line past `FILE_LOG_CAP`, and never for a session's first
+  sync). `Delivery::Done` from birth, so no poll ever takes one, and gated on
+  `viewer_attached()` like activity events — headless keeps no log. `status`
+  now calls `note_generation` too (it syncs without building; a generation it
+  was first to scan must not be swallowed — slots go stale, edits get logged).
 
 - **Poll's contract is set by agent harnesses.** The baseline one can't read a
   running background command's output — it is woken when the command *exits*.
@@ -579,7 +600,8 @@ agent-agnostic and enough.
   `state::tests::chat_commands_skip_the_build_gate` guards it.
 - Viewer: a resizable panel above the status band —
   `theme::tail_box` transcript (user lines `> …` white, dimmed while
-  undelivered; agent lines in `theme::AGENT_TEXT`) plus one `theme::text_edit`
+  undelivered; agent lines in `theme::AGENT_TEXT`; action lines in
+  `theme::ACTION_TEXT`) plus one `theme::text_edit`
   where Enter sends and keeps focus. The transcript takes the panel's height
   less the input line, exactly (item spacing included) — get that arithmetic
   wrong and the panel grows a few px every frame until it eats the window.

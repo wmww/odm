@@ -147,17 +147,26 @@ the user's own messages. Use it to answer questions and report results
 — a line or two; the rebuilt scene speaks for itself.
 
 **Show what you're working on.** The viewer is the user's only window
-onto you, and a silent one reads as a dead one. The moment you pick up
-a prompt, set the live status line: `odm say --task <text>` — a few
-words, present progressive ("resizing connectors"). Update it whenever
-you move to a new step (it's one line in the viewer, updated in place —
-cheap, so err on the side of updating); when the work is done, `odm say
---done <one-line result>` posts the message and clears the status.
-There is one status at a time; setting another replaces it. It never
-expires on its own — a standing `task` is echoed in every say/poll
-response, so if you see one that no longer matches what you're doing,
-clear or replace it rather than leave the user watching a stale
-"working on" line.
+onto you, and a silent one reads as a dead one. Sending a message puts
+the status line up on its own — it reads "Processing" from the moment
+the user hits Enter — and it is yours from there: replace it with what
+you are actually doing, `odm say --task <text>` — a few words, present
+progressive ("resizing connectors"). Update it whenever you move to a
+new step (it's one line in the viewer, updated in place — cheap, so err
+on the side of updating).
+
+**Always clear the status before you stop.** `odm say --done <one-line
+result>` posts the message and clears it; `odm say --done` alone just
+clears it. A status left standing tells the user you are still working
+when you have finished and gone — so clear it before your last word,
+every time, including when you stop early or give up. There is one
+status at a time; setting another replaces it, and it never expires on
+its own — a standing `task` is echoed in every say/poll response, so if
+you see one that no longer matches what you're doing, clear or replace
+it.
+
+The viewer also logs what you do next to what you say: one line per
+command you run and per file you change.
 
 When the user refers to a part ("make *this* one longer"), the
 message's `view.selection` has it — clicked parts appear as

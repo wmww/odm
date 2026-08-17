@@ -14,7 +14,7 @@
 
 mod scroll;
 
-pub use scroll::{BAR as SCROLLBAR, list_box, tail_box_with_bg};
+pub use scroll::{BAR as SCROLLBAR, list_box, tail_box};
 
 use crate::icons::{self, Icon};
 use eframe::egui::{
@@ -49,6 +49,9 @@ pub const ERROR: Color32 = Color32::from_rgb(0xff, 0x6b, 0x6b);
 pub const WARN: Color32 = Color32::from_rgb(0xe6, 0xc4, 0x5c);
 /// The agent's chat lines, against the user's white ones.
 pub const AGENT_TEXT: Color32 = Color32::from_rgb(0x8c, 0xc8, 0xff);
+/// What the agent *did* — CLI commands, file edits — in the chat log:
+/// the same weight as its words, told apart by hue.
+pub const ACTION_TEXT: Color32 = Color32::from_rgb(0x8c, 0xd0, 0x94);
 
 /// Slider handle aspect ratio. Mirrored by [`trackbar`], which paints the
 /// handle itself but must land where egui's hit-testing puts it.

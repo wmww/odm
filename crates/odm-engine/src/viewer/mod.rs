@@ -36,6 +36,12 @@ const INPUT_MARGIN: f32 = 6.0;
 const DOCK_HEIGHT: f32 = 150.0;
 const DOCK_MIN: f32 = 100.0;
 
+/// The agent activity column in the chat tab: where its edge starts, the
+/// least it can be dragged to, and the most of the chat it may take.
+const ACTIVITY_WIDTH: f32 = 220.0;
+const ACTIVITY_MIN: f32 = 60.0;
+const ACTIVITY_MAX_SHARE: f32 = 0.7;
+
 /// The two tabs of the bottom dock.
 #[derive(Clone, Copy, PartialEq)]
 enum Dock {
@@ -482,37 +488,37 @@ impl ViewerApp {
         }
     }
 
-    /// Messages to and from the agent: transcript above, one input line below,
-    /// the agent activity view faded behind the transcript.
+    /// Messages to and from the agent: transcript above, one input line
+    /// below, the agent activity view down the right-hand side.
     fn chat_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if self.activity.enabled {
+            // Its own resizable column, not a backdrop: the render is worth
+            // looking at, and text over it was worth neither.
+            let max = (ui.available_width() * ACTIVITY_MAX_SHARE).max(ACTIVITY_MIN);
+            egui::Panel::right("activity")
+                .resizable(true)
+                .default_size(ACTIVITY_WIDTH)
+                .min_size(ACTIVITY_MIN)
+                .max_size(max)
+                // The gap is the resize handle's room: egui grabs within a
+                // few px of the panel edge, and the transcript's scrollbar
+                // must not be sitting in it.
+                .frame(egui::Frame::new().outer_margin(egui::Margin { left: 8, ..Default::default() }))
+                .show(ui, |ui| {
+                    let Self { activity, renderer, .. } = &mut *self;
+                    activity.panel_ui(ui, frame, renderer);
+                });
+        }
         // The input line keeps its height; the transcript takes whatever the
         // panel's edge has been dragged to, less that line and the gap above
         // it. Exactly, so the panel is never asked to hold more than it is.
         let input_height = ui.text_style_height(&egui::TextStyle::Body) + INPUT_MARGIN;
         let height = (ui.available_height() - input_height - ui.spacing().item_spacing.y).max(24.0);
         let size = egui::vec2(ui.available_width(), height);
-        if self.activity.enabled {
-            // Render the current card at the well's content size (2px bevel
-            // all round, scrollbar on the right), in the ui pass like the
-            // main viewport.
-            let ppp = ui.ctx().pixels_per_point();
-            let px = [
-                (((size.x - 4.0 - theme::SCROLLBAR) * ppp) as u32).clamp(16, 4096),
-                (((size.y - 4.0) * ppp) as u32).clamp(16, 4096),
-            ];
-            let ctx = ui.ctx().clone();
-            self.activity.update(frame, &mut self.renderer, &ctx, px);
-        }
         let state = self.state();
-        let activity = self.activity.enabled.then_some(&self.activity);
         let task = state.task();
         state.with_transcript(|transcript| {
-            let bg = |p: &egui::Painter, rect: egui::Rect| {
-                if let Some(a) = activity {
-                    a.paint(p, rect);
-                }
-            };
-            theme::tail_box_with_bg(ui, "chat", size, bg, |ui| {
+            theme::tail_box(ui, "chat", size, |ui| {
                 if transcript.is_empty() {
                     ui.label(
                         egui::RichText::new("Type below to send the agent a message.")
@@ -530,17 +536,21 @@ impl ViewerApp {
                         }
                         Who::User => (format!("> {}", entry.text), theme::TEXT),
                         Who::Agent => (entry.text.clone(), theme::AGENT_TEXT),
+                        // What the agent did, as against what it said: one
+                        // compact line per command it ran or file it changed.
+                        Who::Action => (entry.text.clone(), theme::ACTION_TEXT),
                         // Host warnings, where the user already looks.
                         Who::Engine => (format!("engine: {}", entry.text), theme::WARN),
                     };
                     ui.label(egui::RichText::new(text).color(color));
                 }
-                // The agent's working status (`odm say --task`): a live tail
-                // line in the era's busy-dots idiom (Searching...). The one
-                // exception to "no animation anywhere" — it exists to show
-                // work in progress, which a still frame can't. Never times
-                // out: a wrong task is corrected by the agent (it's echoed
-                // in every say/poll/status response), not guessed away.
+                // The agent's working status (`odm say --task`, or
+                // "Processing" from the moment the user hits Enter): a live
+                // tail line in the era's busy-dots idiom (Searching...). The
+                // one exception to "no animation anywhere" — it exists to
+                // show work in progress, which a still frame can't. Never
+                // times out: a wrong task is corrected by the agent (it's
+                // echoed in every say/poll/status response), not guessed away.
                 if let Some(task) = &task {
                     let dots = 1 + (ui.input(|i| i.time) / 0.4) as usize % 3;
                     ui.label(

@@ -36,23 +36,18 @@ pub fn list_box<R>(
     axes: Vec2b,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    scroll_box(ui, id_salt, size, axes, false, None, add)
+    scroll_box(ui, id_salt, size, axes, false, add)
 }
 
-/// A vertical list box that follows its tail (content added at the bottom
-/// scrolls into view, unless the user has scrolled up), with a background
-/// painter: called with the content view rect (inside the border, left of
-/// the scrollbar) after the WINDOW fill, before the contents. For the chat
-/// panel and its agent activity view.
-pub fn tail_box_with_bg<R>(
+/// A vertical list box that follows its tail: content added at the bottom
+/// scrolls into view, unless the user has scrolled up. The chat transcript.
+pub fn tail_box<R>(
     ui: &mut Ui,
     id_salt: &str,
     size: Vec2,
-    bg: impl FnOnce(&egui::Painter, Rect),
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    let bg: Box<dyn FnOnce(&egui::Painter, Rect) + '_> = Box::new(bg);
-    scroll_box(ui, id_salt, size, Vec2b::new(false, true), true, Some(bg), add)
+    scroll_box(ui, id_salt, size, Vec2b::new(false, true), true, add)
 }
 
 fn scroll_box<R>(
@@ -61,7 +56,6 @@ fn scroll_box<R>(
     size: Vec2,
     axes: Vec2b,
     stick_to_bottom: bool,
-    bg: Option<Box<dyn FnOnce(&egui::Painter, Rect) + '_>>,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -78,10 +72,6 @@ fn scroll_box<R>(
     if axes.x {
         view.max.y -= BAR;
     }
-    if let Some(bg) = bg {
-        bg(&p, view);
-    }
-
     let mut child =
         ui.new_child(egui::UiBuilder::new().max_rect(view.shrink(PAD)).layout(*ui.layout()));
     let out = egui::ScrollArea::new(axes)

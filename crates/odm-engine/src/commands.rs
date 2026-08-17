@@ -135,6 +135,27 @@ impl EngineState {
     }
 
     fn dispatch(&self, req: Request, conn: &mut Conn) -> Result<Value, CmdError> {
+        // Every command that looks at the project is one line in the
+        // viewer's chat log — the chat commands are not, being the chat.
+        let verb = match &req {
+            Request::Poll(_) | Request::Say(_) | Request::Ack => None,
+            Request::Status => Some("status"),
+            Request::Inspect(_) => Some("inspect"),
+            Request::Render(..) => Some("render"),
+            Request::Raycast(_) => Some("raycast"),
+            Request::Clearance(_) => Some("clearance"),
+        };
+        let out = self.dispatch_inner(req, conn);
+        if let Some(verb) = verb {
+            self.log_action(action_line(verb, &out));
+        }
+        out
+    }
+
+    /// The command line as the user reads it: the verb, the doohickey it
+    /// answered about (the response's own resolved path, so a defaulted
+    /// `root.js` reads as one), and a failure said plainly.
+    fn dispatch_inner(&self, req: Request, conn: &mut Conn) -> Result<Value, CmdError> {
         // No global lock: commands run concurrently. Builds hold the build
         // gate shared inside `query_view`; the chat commands neither sync
         // nor build, so a poll blocked for minutes holds up nothing.
@@ -185,6 +206,10 @@ impl EngineState {
     /// reports last-published build outcomes per slot and never builds.
     fn cmd_status(&self) -> Result<Value, CmdError> {
         let sync = self.build_engine().sync().map_err(|e| CmdError::new("scan", e.to_string()))?;
+        // Status builds nothing, but a new generation it happened to be the
+        // one to scan still makes every slot stale — and its file diff is
+        // still what the viewer logs as edits. Queueing is not building.
+        self.note_generation(&sync, None);
         let files: Vec<&String> = sync.snapshot.sources.keys().collect();
         let active = self.active_view().map(|(slot, _)| slot);
         let views: Vec<Value> = self
@@ -985,6 +1010,31 @@ impl EngineState {
     }
 }
 
+/// One log line for a finished command (see `dispatch`).
+fn action_line(verb: &str, out: &Result<Value, CmdError>) -> String {
+    match out {
+        // `view` is the resolved doohickey path; `path` in a render
+        // response is the PNG it wrote, which is not what this line is about.
+        Ok(v) => match v.get("view").and_then(Value::as_str) {
+            Some(path) => format!("{verb} {path}"),
+            None => verb.to_owned(),
+        },
+        // One line, and a short one: the agent has the whole error, this
+        // is the user's glance at it.
+        Err(e) => format!("{verb} failed: {}", brief(&e.message)),
+    }
+}
+
+/// A message's first line, clipped to something a log line can hold.
+fn brief(message: &str) -> String {
+    let line = message.lines().next().unwrap_or_default();
+    let mut out: String = line.chars().take(60).collect();
+    if out.chars().count() < line.chars().count() {
+        out.push('…');
+    }
+    out
+}
+
 /// One slot's diagnostic value, shared by `status.views` and poll `builds`:
 /// `build` is the last-published *value* (ok / error / pending — an error
 /// keeps `error` next to it), and `stale` says a newer generation's answer
@@ -1263,6 +1313,7 @@ fn logs_json(logs: &[(String, LogLine)]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{Delivery, Who};
 
     /// The agent-facing query commands feed the viewer's activity view —
     /// but only when a viewer is attached.
@@ -1334,6 +1385,73 @@ mod tests {
         } else {
             eprintln!("render event check skipped (no GPU?): {v}");
         }
+    }
+
+    /// Every project-facing command is one compact line in the chat log,
+    /// with the doohickey it answered about; the chat commands are not.
+    #[test]
+    fn commands_are_logged_to_the_chat() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("root.js"),
+            "export default function build(ctx) { return odm.box([1, 1, 1]); }",
+        )
+        .unwrap();
+        let state =
+            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
+        let mut conn = Conn::new(state.clone());
+
+        // Headless logs nothing: the lines exist for the viewer's user.
+        state.handle(json!({"cmd": "inspect"}), &mut conn);
+        state.with_transcript(|t| assert!(t.is_empty(), "headless keeps no log"));
+
+        state.set_wake(Arc::new(|| {}));
+        state.handle(json!({"cmd": "inspect"}), &mut conn);
+        state.handle(json!({"cmd": "status"}), &mut conn);
+        state.handle(json!({"cmd": "say", "text": "hi"}), &mut conn);
+        state.handle(json!({"cmd": "inspect", "path": "nope.js"}), &mut conn);
+        state.with_transcript(|t| {
+            let log: Vec<(Who, &str)> = t.iter().map(|e| (e.who, e.text.as_str())).collect();
+            assert_eq!(log[0], (Who::Action, "inspect root.js"));
+            assert_eq!(log[1], (Who::Action, "status"), "no view of its own to name");
+            assert_eq!(log[2], (Who::Agent, "hi"), "saying is not doing");
+            assert_eq!(log[3].0, Who::Action);
+            assert!(log[3].1.starts_with("inspect failed:"), "{}", log[3].1);
+            assert_eq!(log.len(), 4);
+            // Log lines are never queued for the agent — it did them.
+            assert!(t.iter().all(|e| e.who != Who::Action || e.delivery == Delivery::Done));
+        });
+    }
+
+    /// What the agent edits shows up in the log too — the diff between one
+    /// sync's source hashes and the next.
+    #[test]
+    fn file_changes_are_logged_to_the_chat() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root.js");
+        std::fs::write(&root, "export default function build(ctx) { return odm.box([1, 1, 1]); }")
+            .unwrap();
+        let state =
+            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
+        let mut conn = Conn::new(state.clone());
+        state.set_wake(Arc::new(|| {}));
+
+        // The first sync is the project as found, not an edit.
+        state.handle(json!({"cmd": "status"}), &mut conn);
+        state.with_transcript(|t| assert_eq!(t.len(), 1, "opening a project edits nothing"));
+
+        std::fs::write(&root, "export default function build(ctx) { return odm.box([2, 2, 2]); }")
+            .unwrap();
+        std::fs::write(dir.path().join("part.js"), "export default function build() {}").unwrap();
+        state.handle(json!({"cmd": "status"}), &mut conn);
+        state.with_transcript(|t| {
+            let log: Vec<&str> = t.iter().map(|e| e.text.as_str()).collect();
+            assert_eq!(log, ["status", "new part.js", "edit root.js", "status"]);
+        });
+
+        std::fs::remove_file(dir.path().join("part.js")).unwrap();
+        state.handle(json!({"cmd": "status"}), &mut conn);
+        state.with_transcript(|t| assert_eq!(t[4].text, "deleted part.js"));
     }
 
     fn cam(body: &str) -> Result<Camera, String> {
