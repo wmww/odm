@@ -105,7 +105,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   tests/conformance/unstable/three-f64.js are f32-regression tripwires
   (bit-exact 0.1 / near-1e7 probes) — an `as f32` sneaking into any seam
   fails one of them; keep new position paths covered there.
-- `odm-js` — deno_core =0.408.0; per-build disposable isolates from ONE
+- `odm-js` — the *native executor*: deno_core =0.408.0; per-build
+  disposable isolates from ONE
   snapshot embedding `framework/` (odm API + three r185 subset, every
   supported API version's surface manifest — see "API versions" below); ops
   extension; dep recording; console capture (logs are always data —
@@ -123,7 +124,16 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   ops re-enter); no fixed-size-array params (use Vec<f64>);
   `serde_json::Value` must be written fully qualified. Module loading is
   driven by futures::executor::block_on (no tokio — nested block_on works).
-- `odm-build` — one `BuildEngine` per project; `sync()` rescans it and
+  Since the executor seam (2026-08-17) odm-js *depends on odm-build* and
+  implements its `Executor` trait for `JsEnv` (`run_build` +
+  `extract_export`; isolate handles wrapped as `InterruptHandle`); the
+  shared types (`BuildInput`/`Output`, `Invoker`, `FailedBuild`,
+  `cascade_value_hash`, `node_from_json`, `ApiVersion` + pragma/doc
+  parsing) live in odm-build's `executor`/`version`/`ir_json` modules.
+- `odm-build` — one `BuildEngine` per project; V8-free (compiles for
+  wasm32 — `BuildEngine::new` takes an `Arc<dyn Executor>`; the engine
+  passes `Arc<JsEnv>`, the web export its JS-glue executor; timing and
+  the cancel watchdog are cfg'd off wasm); `sync()` rescans it and
   reuses the current generation while the source hashes match (retiring the
   old one otherwise); pass = generation + view (path, args, cascade).
   Per-build environments: each invoke path derives its env (invoke cascade
@@ -217,9 +227,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   that report selection onward). Hosts own tabs, the `Renderer` (desktop
   shares it with the activity view), layout/panels, and persistence;
   methods return whether the view changed so the host can save. Hard
-  rule: no odm-js, no `EngineState`, no sockets/watcher — meant to
-  compile to wasm once odm-build's JS-executor seam makes odm-js
-  optional (until then odm-build still pulls V8 transitively).
+  rule: no odm-js, no `EngineState`, no sockets/watcher — it compiles to
+  wasm, and the web export (odm-web) is the second host.
 - `odm-engine` — library, entered via `odm run` (`run_headless(project)` /
   `run_viewer(Option<project>)`).
   Headless runs the same background threads as a viewer session (build
@@ -353,6 +362,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   ones — see "Viewer fonts" and "Viewer icons" below; small glyphs that are not
   worth a file (the checkmark, scrollbar arrows, the tree's +/-) are painted
   from `theme::pixels`/`theme::arrow` as a `Mesh`. See "Scrollbars" below.
+- `odm-export` + `odm-web` + `xtask` — `odm export --web`: the native
+  bundler/manifest half, the wasm browser host, and the template builder
+  (`cargo xtask build-web-template`). Whole story in
+  notes/web-export.md; odm-web is wasm-only (native = empty stub) so
+  ordinary builds never need its toolchain.
 - `odm-prompt` — std-only, no odm deps (odm-cli must stay V8-free): the
   `docs/prompts/*.md` `include_str!`s behind `text()`, plus the marked-block
   machinery both the `prompt` docs topic and the engine's on-open sync use.
@@ -368,7 +382,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   rejected until frozen docs snapshots exist).
 - `odm` — the only binary. `odm run [<dir>] [--headless]` → the engine
   (`odm_cli::project_dir`, per Project format above: the dir named or cwd,
-  never an ancestor); everything else → `odm_cli::run`. Top-level `--help` splices in
+  never an ancestor); `odm export --web <out>` → odm-export (standalone,
+  no engine); everything else → `odm_cli::run`. Top-level `--help` splices in
   `odm_cli::USAGE`. Splitting the two halves into libs behind one bin keeps
   the client's dependency-light layering and leaves room for a
   client-only build later, while shipping one binary: no CLI/engine version

@@ -17,6 +17,11 @@
   from the 2026-07 concept review plus later dated ones (colors, "user
   state: sent, not sampled"), rejected alternatives, licensing, egui
   i18n limits.
+- `web-export.md` — `odm export --web` as built: the bundler/transformer,
+  the odm-web wasm host and its executor seam, runtime.js semantics,
+  stamp/template lookup, the wasm toolchain setup, drift caveats, and how
+  to test an export. Read before touching framework module syntax, ops,
+  or anything under crates/odm-export / crates/odm-web.
 - `spike-findings.md` — measured facts from the pre-MVP spikes and stack
   verification: V8/deno_core threading rules and numbers, scheduler dedup
   policy, three→Manifold weld results, cancellation timings.

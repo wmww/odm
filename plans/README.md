@@ -10,12 +10,6 @@ discussions that followed. Cross-references note where plans touch.
   crate, alacritty_terminal, $SHELL at the project dir; not
   agent-specific, nothing runs by default). Tab placement means no
   overlap with the activity view's chat-area real estate.
-- `web-export.md` — export a project as a static interactive web page:
-  frozen generation, doohickey JS bundled to run natively in browser,
-  core crates + our renderer compiled to wasm (Manifold via emscripten
-  is the risk to spike first), egui web viewer. The remaining
-  phase-1 seam (JS-executor trait in odm-build) is a useful desktop
-  refactor on its own; the viewer-core seam is done (see below).
 - `chat-links.md` — the chat action log's file and node names become
   inline links (era hypertext, not buttons): a file opens a tab, a node
   selects in that path's tab. Spans on the action transcript entries,
@@ -63,4 +57,8 @@ failure memoization; standing rules in `notes/agent-surface.md`'s
 async-diagnostics section, mechanics in notes/architecture.md);
 `viewer-core.md` (executed 2026-08-17 — the viewer's read side extracted
 into the `odm-viewer-core` crate behind the `Engine` trait, desktop
-behavior-preserving; see notes/architecture.md's odm-viewer-core entry).
+behavior-preserving; see notes/architecture.md's odm-viewer-core entry);
+`web-export.md` (executed 2026-08-17 — `odm export --web`: executor seam
+in odm-build, odm-export bundler, odm-web wasm host, template xtask;
+verified interactive in Chromium/WebGPU. Everything standing is in
+`notes/web-export.md`).
