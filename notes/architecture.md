@@ -205,7 +205,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (scrub + play at 1 unit/sec looping), error + console panels with
   last-good scene (`Published.logs` is latest-attempt: success or failure,
   colored by level), click-select via CPU raycast when shaded / nearest-wire
-  screen-space pick when wireframe, shift-click to select several),
+  screen-space pick when wireframe, shift-click to select several,
+  **agent activity view** — see below),
   background build loop over the active view slots
   (per-slot latest-wins, Pass::cancel on same-slot supersede; a new
   generation re-queues every slot), notify-based watcher (150ms
@@ -215,6 +216,30 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   headless), i.e. on every `published` change. It also owns its winit event
   loop so `SlowIdle` can fix up what eframe leaves behind — see viewer/idle.rs
   and "Owning the event loop" below.
+  **Agent activity view** (2026-08-17, was plans/agent-activity-view.md): a
+  faded render behind the chat transcript showing the last agent CLI action.
+  raycast/inspect/render handlers push `ActivityEvent`s (state.rs: capped
+  deque ~8, gated on `viewer_attached()` = wake hook set, so headless pays
+  nothing — `cmd_render` even skips the RGBA capture). Events are
+  self-contained (flattened `Arc<RenderScene>` / RGBA pixels, never store
+  hashes — memo eviction keeps one entry per key, so display-time store
+  reads would dangle). Viewer side (viewer/activity.rs): card queue snaps
+  through at 1.2s DWELL, last card persists, pure `advance_cards` policy is
+  unit-tested with injected time; raycast cards frame the ray side-on (yaw ⊥
+  azimuth, pitch 0.5; near-vertical keeps default) and draw it via
+  `RenderOptions.overlays` (`OverlaySeg` — generic odm-render wire-pipeline
+  feature, depth-tested); inspect cards frame the node's AABB and brighten
+  its instances with the selection formula; render cards upload RGBA as an
+  egui texture, letterboxed. Cards render once per (card, size) via the
+  shared-device renderer into a `viewer/viewport.rs` `OffscreenTarget` (the
+  ViewportTex machinery extracted for reuse — future render windows are one
+  OffscreenTarget + camera + scene each; per-window Orbit not built yet).
+  Painted by a bg hook in `theme::tail_box_with_bg` (called with the well's
+  content rect between WINDOW fill and text; alpha 96), caption top-right in
+  WEAK_TEXT. Viewer mesh-cache prune keeps activity-card scenes alive too.
+  View ▸ Agent Activity toggles it (session-local; off = drain-and-drop).
+  Legibility/framing polish deliberately deferred; burst coalescing (N rays
+  → one card) deliberately out of scope, the caps bound bursts.
   Commands: status/inspect/render/raycast/clearance, and poll/say/ack (see
   "Talking to the agent"); every command except those three syncs first
   (no standalone `sync` — folded into `status` 2026-08). Commands run

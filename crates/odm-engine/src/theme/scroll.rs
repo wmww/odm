@@ -13,7 +13,7 @@ use eframe::egui::{self, Sense, TextureOptions, Vec2b};
 use std::time::Duration;
 
 /// Thickness of a scrollbar, and so the side of its arrow buttons.
-const BAR: f32 = 16.0;
+pub const BAR: f32 = 16.0;
 /// Shortest the handle gets, however long the content is.
 const HANDLE_MIN: f32 = 16.0;
 /// What an arrow button scrolls: one row of text.
@@ -41,8 +41,9 @@ pub fn list_box<R>(
 
 /// A vertical list box that follows its tail (content added at the bottom
 /// scrolls into view, unless the user has scrolled up), with a background
-/// painter: called with the well's inner rect after the WINDOW fill, before
-/// the contents. For the chat panel and its agent activity view.
+/// painter: called with the content view rect (inside the border, left of
+/// the scrollbar) after the WINDOW fill, before the contents. For the chat
+/// panel and its agent activity view.
 pub fn tail_box_with_bg<R>(
     ui: &mut Ui,
     id_salt: &str,
@@ -67,9 +68,6 @@ fn scroll_box<R>(
     let p = ui.painter().clone();
     p.rect_filled(outer, CornerRadius::ZERO, WINDOW);
     bevel(&p, outer, Bevel::Sunken);
-    if let Some(bg) = bg {
-        bg(&p, outer.shrink(2.0));
-    }
 
     // Inside the border the bars sit flush; only the contents are inset.
     let inner = outer.shrink(2.0);
@@ -79,6 +77,9 @@ fn scroll_box<R>(
     }
     if axes.x {
         view.max.y -= BAR;
+    }
+    if let Some(bg) = bg {
+        bg(&p, view);
     }
 
     let mut child =

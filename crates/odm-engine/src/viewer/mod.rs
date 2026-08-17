@@ -861,11 +861,12 @@ impl ViewerApp {
     fn chat_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let size = egui::vec2(ui.available_width(), CHAT_HEIGHT);
         if self.activity.enabled {
-            // Render the current card at the well's inner pixel size (2px
-            // bevel all round), in the ui pass like the main viewport.
+            // Render the current card at the well's content size (2px bevel
+            // all round, scrollbar on the right), in the ui pass like the
+            // main viewport.
             let ppp = ui.ctx().pixels_per_point();
             let px = [
-                (((size.x - 4.0) * ppp) as u32).clamp(16, 4096),
+                (((size.x - 4.0 - theme::SCROLLBAR) * ppp) as u32).clamp(16, 4096),
                 (((size.y - 4.0) * ppp) as u32).clamp(16, 4096),
             ];
             let ctx = ui.ctx().clone();
