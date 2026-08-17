@@ -17,6 +17,12 @@ discussions that followed. Cross-references note where plans touch.
   memo invalidation, host warnings into the transcript, log-level enum,
   per-slot build status on poll with transition wakes for `--follow`,
   and a default-inputs health sweep over unviewed doohickeys.
+- `web-export.md` — export a project as a static interactive web page:
+  frozen generation, doohickey JS bundled to run natively in browser,
+  core crates + our renderer compiled to wasm (Manifold via emscripten
+  is the risk to spike first), egui web viewer. Phase 1 seams
+  (JS-executor trait in odm-build, viewer-core extraction) are useful
+  desktop refactors on their own.
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
   separating translation. Corrects clearance.md's premise: manifold-csg
