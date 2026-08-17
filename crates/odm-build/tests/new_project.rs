@@ -39,6 +39,22 @@ fn a_new_project_is_a_project_that_builds() {
 }
 
 #[test]
+fn an_existing_folder_becomes_a_project_with_its_files_kept() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("widget");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("root.js"), "mine").unwrap();
+    std::fs::write(project.join("AGENTS.md"), "my notes\n").unwrap();
+    create_project(&project, "widget").unwrap();
+
+    assert!(is_project(&project));
+    assert_eq!(std::fs::read_to_string(project.join("root.js")).unwrap(), "mine");
+    // Unmarked agent files are the open-time question's to offer the block.
+    assert_eq!(std::fs::read_to_string(project.join("AGENTS.md")).unwrap(), "my notes\n");
+    assert!(!project.join("CLAUDE.md").exists());
+}
+
+#[test]
 fn nothing_already_there_is_written_over() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("widget");

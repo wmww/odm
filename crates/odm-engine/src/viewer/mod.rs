@@ -904,7 +904,7 @@ impl ViewerApp {
             })
         });
         ui.add_space(3.0);
-        let input = theme::text_edit(ui, "chat-input", &mut self.chat_input, ui.available_width() - 4.0);
+        let input = theme::text_edit(ui, "chat-input", &mut self.chat_input, ui.available_width() - 4.0, "");
         if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             let text = self.chat_input.trim().to_owned();
             if !text.is_empty() {

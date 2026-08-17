@@ -837,7 +837,8 @@ pub fn cross(p: &egui::Painter, at: Pos2, color: Color32) {
     p.add(mesh);
 }
 
-/// Single-line text box: sunken client area, fixed width.
+/// Single-line text box: sunken client area, fixed width. `hint` shows weak
+/// in the box while it is empty.
 ///
 /// Deliberately no `TextEdit::frame`: setting one makes egui skip its own
 /// background and margins, which is how you get white-on-face text in a box
@@ -847,6 +848,7 @@ pub fn text_edit(
     id: impl std::hash::Hash + std::fmt::Debug,
     text: &mut String,
     width: f32,
+    hint: &str,
 ) -> Response {
     let r = ui
         .scope(|ui| {
@@ -859,6 +861,7 @@ pub fn text_edit(
                     .id(egui::Id::new(id))
                     .desired_width(width)
                     .margin(Margin::symmetric(3, 3))
+                    .hint_text(hint)
                     .background_color(WINDOW),
             )
         })

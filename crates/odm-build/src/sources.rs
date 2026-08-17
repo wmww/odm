@@ -134,8 +134,11 @@ pub fn sync_marker(dir: &Path) -> Result<Option<String>, ScanError> {
 
 /// Author a new project in `dir`: the marker that makes it one, a starter
 /// `root.js` so there is something to look at, and the agent files carrying
-/// the standard ODM instructions. The directory is created if it is not
-/// there; no file is overwritten if it is.
+/// the standard ODM instructions. `dir` may be an existing folder (it is
+/// created if not): the marker must be new — one already there means this is
+/// a project already — but a root.js or agent file already present is kept
+/// as-is, the root as the project's root, the agent files to be offered the
+/// block at open time.
 ///
 /// The other places the engine writes project files are `sync_marker` and the
 /// agent-file block (`odm_prompt`). This one only ever writes files that do
@@ -146,7 +149,10 @@ pub fn create_project(dir: &Path, name: &str) -> Result<(), ScanError> {
     let marker = ProjectMarker { name: name.to_owned(), engine: ENGINE_VERSION };
     let marker = toml::to_string(&marker).map_err(|e| ScanError::BadMarker(e.to_string()))?;
     write_new(&dir.join("odm.toml"), &marker)?;
-    write_new(&dir.join("root.js"), &starter(name))?;
+    match write_new(&dir.join("root.js"), &starter(name)) {
+        Err(ScanError::Exists(_)) => {} // theirs, and the root now
+        other => other?,
+    }
     odm_prompt::create(dir).map_err(|e| ScanError::Io { path: "agent files".into(), err: e })
 }
 

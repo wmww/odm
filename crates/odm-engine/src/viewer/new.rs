@@ -1,8 +1,9 @@
 //! File ▸ New Project: where to put it, and what to call it.
 //!
 //! Same browsing as Open (`browse::Browser`), but the field is a name rather
-//! than a path — the project is a *new* folder in the browsed directory, so
-//! there is nothing to point at yet.
+//! than a path — the project is a *new* folder in the browsed directory.
+//! Left empty, the browsed directory itself becomes the project, named after
+//! its folder: that is how a project is made in a folder that already exists.
 
 use super::browse::Browser;
 use crate::session::is_project;
@@ -17,7 +18,8 @@ pub enum Outcome {
     /// Still open.
     Idle,
     Cancelled,
-    /// Create `path` — a folder named `name` that is not there yet.
+    /// Create a project at `path` named `name`. The folder may already
+    /// exist; nothing in it is written over.
     Create { path: PathBuf, name: String },
 }
 
@@ -52,13 +54,14 @@ impl NewDialog {
         let mut outcome = Outcome::Idle;
         self.browser.header_ui(ui);
         ui.add_space(4.0);
-        // Rows are only a way to get somewhere here: the name is typed, and a
-        // folder that exists is not a folder we can make.
+        // Rows are a way to get somewhere: a typed name is a new folder in
+        // the browsed directory, no name is the browsed directory itself.
         let hit = self.browser.list_ui(ui);
         ui.add_space(5.0);
         ui.horizontal(|ui| {
             ui.label("Name:");
-            theme::text_edit(ui, "new-name", &mut self.name, ui.available_width() - 4.0);
+            let width = ui.available_width() - 4.0;
+            theme::text_edit(ui, "new-name", &mut self.name, width, "empty: use this folder");
         });
         self.browser.error_ui(ui);
 
@@ -69,9 +72,7 @@ impl NewDialog {
             ui.add_space(ui.available_width() - 130.0);
             if theme::button(ui, "Create").clicked() || confirm {
                 match self.resolve() {
-                    Ok(path) => {
-                        outcome = Outcome::Create { path, name: self.name.trim().to_owned() }
-                    }
+                    Ok((path, name)) => outcome = Outcome::Create { path, name },
                     Err(e) => self.browser.report(e),
                 }
             }
@@ -91,13 +92,25 @@ impl NewDialog {
         outcome
     }
 
-    /// Where the new project would go, if it can go there. Creating it is the
-    /// engine's job, and it checks again — saying so here is what keeps the
-    /// dialog open on a bad answer instead of closing over an error.
-    fn resolve(&self) -> Result<PathBuf, String> {
+    /// Where the new project would go and what it would be called, if it can
+    /// go there. Creating it is the engine's job, and it checks again —
+    /// saying so here is what keeps the dialog open on a bad answer instead
+    /// of closing over an error.
+    fn resolve(&self) -> Result<(PathBuf, String), String> {
+        let dir = self.browser.dir();
+        if !dir.is_dir() {
+            return Err(format!("{} is not a directory", dir.display()));
+        }
         let name = self.name.trim();
         if name.is_empty() {
-            return Err("type a name for the project".to_owned());
+            // No name: the browsed folder itself becomes the project.
+            if is_project(dir) {
+                return Err("this folder is already a project — Open it instead".to_owned());
+            }
+            let Some(leaf) = dir.file_name() else {
+                return Err("this folder has no name to call the project; type one".to_owned());
+            };
+            return Ok((dir.to_path_buf(), leaf.to_string_lossy().into_owned()));
         }
         // A name, not a path: one new folder, right where we are looking.
         if Path::new(name).file_name() != Some(name.as_ref()) {
@@ -105,10 +118,6 @@ impl NewDialog {
         }
         if name.starts_with('.') {
             return Err("a name starting with '.' would be hidden".to_owned());
-        }
-        let dir = self.browser.dir();
-        if !dir.is_dir() {
-            return Err(format!("{} is not a directory", dir.display()));
         }
         // Every .js file under a project belongs to it, so a project inside a
         // project would be built as part of its host.
@@ -119,7 +128,7 @@ impl NewDialog {
         if path.exists() {
             return Err(format!("{name} is already here"));
         }
-        Ok(path)
+        Ok((path, name.to_owned()))
     }
 }
 

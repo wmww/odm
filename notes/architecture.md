@@ -54,7 +54,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   current prompt in on every project open (viewer *and* headless), touching
   nothing outside the markers and not writing at all when the block is already
   current. A new project (File ▸ New Project) gets AGENTS.md with the block and
-  CLAUDE.md as a relative symlink to it. Anything else is a viewer question,
+  CLAUDE.md as a relative symlink to it (`odm_prompt::create` — skipped
+  entirely if either name is already taken, leaving the open-time question to
+  offer the block). Anything else is a viewer question,
   one per logical file (the symlink pair dedupes by canonical path, asked about
   as AGENTS.md): an existing unmarked file offers an append, and no agent file
   at all offers to create the pair. Answers are not recorded — a "no" is asked
@@ -677,7 +679,10 @@ notes/spike-findings.md "Snapshot count/concurrency".
   see "Agent files" under Project format). Agent-file writes are either marker-scoped (the markers *are* the
   file's opt-in) or user-consented (a viewer question box). (`create_project`,
   File ▸ New Project, authors a project's first files, but only ever creates
-  files that are not there.)
+  files that are not there — it may target an existing folder, where the New
+  dialog's empty Name field means "this folder", named after its leaf; only
+  `odm.toml` already existing is an error, an existing root.js/agent file is
+  kept.)
 - Engine queries on content-addressed handles are pure → never memo deps.
   Queries on transformed solids bake via op_transform_bake (cached per
   Solid) — exact, but costs a mesh copy per distinct transform.

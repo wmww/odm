@@ -2,9 +2,9 @@
 //!
 //! Two ways the block gets into a file. Markers are the opt-in — a file that
 //! has them is updated on every project open, silently. A file without them is
-//! only ever written after the user says so (`append`), and `create` only
-//! authors files that are not there. Everything outside the markers is the
-//! user's.
+//! only ever written after the user says so (`append`), and `create` authors
+//! the pair only when neither name is taken. Everything outside the markers is
+//! the user's.
 
 use crate::{FILES, Splice, block, splice};
 use std::path::{Path, PathBuf};
@@ -99,17 +99,17 @@ pub fn append(project: &Path, name: &str) -> Result<(), String> {
 }
 
 /// Author a project's agent files: `AGENTS.md` holding the block, and
-/// `CLAUDE.md` pointing at it. Neither is written over if it is already there.
+/// `CLAUDE.md` pointing at it. If either name is already taken (New Project
+/// into a folder that has one) nothing is written: those files are the
+/// user's, and `sync` reporting them unmarked at open time is what offers
+/// them the block.
 pub fn create(project: &Path) -> Result<(), String> {
     use std::io::Write;
-    let agents = project.join("AGENTS.md");
-    let mut file = match std::fs::File::create_new(&agents) {
-        Ok(file) => file,
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err("AGENTS.md already exists".to_owned());
-        }
-        Err(e) => return Err(format!("could not write AGENTS.md: {e}")),
-    };
+    if FILES.iter().any(|name| project.join(name).symlink_metadata().is_ok()) {
+        return Ok(());
+    }
+    let mut file = std::fs::File::create_new(project.join("AGENTS.md"))
+        .map_err(|e| format!("could not write AGENTS.md: {e}"))?;
     file.write_all(format!("{}\n", block()).as_bytes())
         .map_err(|e| format!("could not write AGENTS.md: {e}"))?;
     link_claude(project)
@@ -179,7 +179,18 @@ mod tests {
         );
         // Fresh files: nothing to update, nothing to ask about.
         assert_eq!(sync(dir.path()), SyncReport::default());
-        assert_eq!(create(dir.path()).unwrap_err(), "AGENTS.md already exists");
+        // And a second create has nothing left to author.
+        create(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn create_leaves_existing_agent_files_for_the_open_question() {
+        let dir = project();
+        std::fs::write(dir.path().join("CLAUDE.md"), "just mine\n").unwrap();
+        create(dir.path()).unwrap();
+        assert!(!dir.path().join("AGENTS.md").exists());
+        assert_eq!(read(dir.path(), "CLAUDE.md"), "just mine\n");
+        assert_eq!(sync(dir.path()).unmarked, ["CLAUDE.md"]);
     }
 
     #[test]

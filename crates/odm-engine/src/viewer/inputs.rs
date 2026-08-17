@@ -200,7 +200,7 @@ fn control(
                     _ => plain(&shown),
                 };
                 let response =
-                    theme::text_edit(ui, ("input", section, &name), &mut buf, ui.available_width() - 8.0);
+                    theme::text_edit(ui, ("input", section, &name), &mut buf, ui.available_width() - 8.0, "");
                 if response.has_focus() {
                     tab.edit = Some((section, name.clone(), buf));
                 } else if editing {
