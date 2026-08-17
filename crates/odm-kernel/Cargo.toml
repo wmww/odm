@@ -9,8 +9,16 @@ doctest = false
 # no unit tests in src/; set true if you add #[cfg(test)] modules
 test = false
 
+[features]
+# parallel is the native default; wasm-uu builds Manifold for
+# wasm32-unknown-unknown via clang + wasm-cxx-shim (no emscripten).
+# Use with default-features = false.
+default = ["parallel"]
+parallel = ["manifold-csg/parallel"]
+wasm-uu = ["manifold-csg/unstable-wasm-uu"]
+
 [dependencies]
 odm-ir = { path = "../odm-ir" }
 odm-store = { path = "../odm-store" }
-manifold-csg = "=0.3.3"
+manifold-csg = { version = "=0.3.3", default-features = false }
 thiserror.workspace = true

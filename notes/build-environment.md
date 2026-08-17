@@ -115,3 +115,16 @@ cargo fingerprint inputs.
   cost one full rebuild of the 7.8 GiB target dir to adopt. Build scripts aren't
   rustc calls, so the v8 download and the Manifold/TBB cmake build wouldn't be
   cached either.
+
+## wasm32 toolchain (web-export spikes)
+
+`rustup target add wasm32-unknown-unknown` is done. The Manifold wasm lane
+needs libc++ headers and wasm-ld; neither is installed system-wide (no
+root), so both were extracted from Arch packages into
+`~/.local/opt/wasm-cxx/` (`libcxx-headers/`, `wasm-ld`). Export
+`WASM_CXX_SHIM_LIBCXX_HEADERS=~/.local/opt/wasm-cxx/libcxx-headers` and
+`WASM_CXX_SHIM_WASM_LD=~/.local/opt/wasm-cxx/wasm-ld` before building any
+crate with odm-kernel's `wasm-uu` feature (or `pacman -S libc++ lld` with
+root and drop both vars). Keep `MANIFOLD_CSG_NO_SCCACHE=1` (sccache stays
+off on this machine). The sys build script clones manifold/Clipper2/
+wasm-cxx-shim from GitHub on first build.

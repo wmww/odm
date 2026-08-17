@@ -46,16 +46,23 @@ rewrite.
   seam (see phase 1): today `scheduler.rs` calls
   `odm_js::{run_build, extract_export}` directly and Cargo-depends on
   odm-js.
-- **Kernel: Manifold in wasm, probably as a second module.** Manifold is
-  C++ (emscripten), egui/wgpu web is wasm-bindgen (wasm32-unknown-unknown);
-  the toolchains don't link into one module happily. ManifoldCAD.org is
-  the existence proof that Manifold-in-wasm works in production. Baseline
-  shape: kernel wasm module (emscripten) + viewer/core wasm module
-  (bindgen), JS glue between, mesh data crossing as typed arrays,
-  Hash→Manifold cache living kernel-side. odm-kernel's Rust logic (weld
-  diagnosis, raycast fraction conversion, clearance tiers, segment
-  rules) via `wasm32-unknown-emscripten` into the kernel module, or —
-  worst case — ported to the glue. **Spike first; this is risk #1.**
+- **Kernel: Manifold in the SAME wasm module — resolved by spike**
+  (2026-08-17, `spikes/web-fit/`). `manifold-csg-sys` ships an
+  `unstable-wasm-uu` feature building Manifold + Clipper2 for
+  wasm32-unknown-unknown with plain clang + wasm-ld against wasm-cxx-shim
+  — no emscripten, no second module, no glue layer. odm-kernel (whole
+  Rust logic included) + odm-store + odm-ir + jsonschema link into one
+  module; odm-kernel now forwards the feature (`wasm-uu`, with
+  `default-features = false`). Measured: 497 KB release wasm for kernel +
+  core crates; boolean perf ~1.3× native (sphere-subtract 256 segs:
+  63.8 ms wasm vs 48.7 ms native, non-parallel both sides); native and
+  wasm agreed on exact f64 volume bits on a sin/cos-exercising probe —
+  promising for keeping the exported memo snapshot hash-consistent with
+  browser rebuilds (one sample, not a proof).
+  Caveats of the wasm lane: upstream calls it provisional; built with
+  `-fno-exceptions` (a C++ throw traps — verify odm-kernel's error paths,
+  e.g. weld NotManifold, surface as status codes, not exceptions);
+  `MANIFOLD_PAR=OFF` (fine for main-thread MVP); OBJ I/O off (unused).
 - **Renderer: ours, via wgpu on WebGPU. No three.js.** The invariant is
   one renderer of record with one code path; a three.js rewrite means
   re-implementing depth peeling, the line-quad/AA/grid-fade path, flat
@@ -81,8 +88,8 @@ rewrite.
 Static directory, no server smarts required:
 
 - `index.html` + viewer JS glue
-- viewer/core wasm (egui + odm-render + odm-store + odm-build)
-- kernel wasm (Manifold + odm-kernel)
+- ONE wasm module: egui + odm-render + odm-store + odm-build +
+  odm-kernel + Manifold (kernel+core alone measured 497 KB release)
 - `bundle.js` — factories for every doohickey + the framework + the
   project's API-version surfaces (the bundler must respect `//! odm <v>`
   per-file surface selection, same as snapshot install order)
@@ -100,17 +107,28 @@ are latest-wins debounced like the desktop build loop.
 
 **Phase 0 — spikes (decide feasibility, throwaway code):**
 
-- *Manifold-to-wasm*: one boolean running in a browser, called through
-  odm-kernel's op surface shape. Decides: emscripten vs clang/wasi-sdk,
-  one module vs two, whether odm-kernel Rust rides along via
-  `wasm32-unknown-emscripten` or gets a thin glue port. Also measure
-  wasm size and a ~100k-tri boolean's time vs native.
-- *egui+wgpu web hello*: our theme + bitmap fonts + one mesh on WebGPU;
-  check font crispness at integer scaling, and that the depth-peel
-  pass structure validates on a browser device (limits: peel textures,
-  Rgba16Float blend).
+- *Manifold-to-wasm*: **DONE, green** (2026-08-17, `spikes/web-fit/` —
+  kept as reference). One module via clang + wasm-cxx-shim; numbers and
+  caveats under "Core decisions". The spike also proved the ops seam and
+  executor round trip beyond what this phase asked: the real, unmodified
+  framework JS (version manifest install + determinism prelude) ran a
+  factory-wrapped doohickey through `__odm.runBuild` against wasm-backed
+  ops in node — CSG, volume, op_log console capture, frozen Date, IR
+  JSON referencing wasm-built solids, byte-identical rebuild from a
+  fresh factory invocation — and wasm→JS→wasm reentrancy
+  (`scheduler_build` → imported `js_run_build` → op exports) works, so
+  the native `run_build` control flow maps 1:1. Mesh data crossed as a
+  `Float64Array` view of wasm memory.
+  Toolchain on this machine: no root libc++/lld; extracted headers +
+  wasm-ld live at `~/.local/opt/wasm-cxx/` via
+  `WASM_CXX_SHIM_LIBCXX_HEADERS`/`WASM_CXX_SHIM_WASM_LD` (see the spike
+  README).
+- *egui+wgpu web hello* (still open): our theme + bitmap fonts + one
+  mesh on WebGPU; check font crispness at integer scaling, and that the
+  depth-peel pass structure validates on a browser device (limits: peel
+  textures, Rgba16Float blend).
 
-Both spikes green → commit to the plan; either red → rethink (three.js
+Renderer spike green → commit to the plan; red → rethink (three.js
 fallback only becomes a question if the *renderer* spike fails, which is
 the unlikely one).
 
@@ -134,9 +152,10 @@ landable alone):
 
 - Exporter's bundler: wrap modules, resolve the fixed import graph,
   per-version surface install, determinism prelude.
-- Web ops backend implementing the `ops()` surface against the two wasm
-  modules; dep recording and invoke flow through the same odm-build
-  code as native.
+- Web ops backend implementing the `ops()` surface against the wasm
+  module (wasm-bindgen exports; the spike's hand-rolled glue shows the
+  shape); dep recording and invoke flow through the same odm-build code
+  as native.
 - Browser build loop: input-panel events → set values → rebuild
   (latest-wins), last-good scene + error/console panels like desktop.
 
@@ -148,29 +167,41 @@ static file server works (wasm needs correct MIME; document
 `python -m http.server` caveat if any).
 
 **Phase 4 — polish (each optional, demand-driven):** worker split,
-multiple exported tabs, WebGL2 fallback, size budget pass (expect
-~5–15 MB total wasm; fine for an export, worth measuring), supersample
-control on the page.
+multiple exported tabs, WebGL2 fallback, size budget pass (kernel+core
+measured 497 KB; egui+wgpu will dominate — expect a few MB total),
+supersample control on the page.
 
 ## Risks
 
-1. **Toolchain clash** (emscripten C++ vs bindgen Rust) — the one
-   genuine unknown; phase 0 exists to kill it early.
+1. ~~**Toolchain clash**~~ — resolved: no emscripten anywhere, one
+   module (see "Core decisions"). Residual: the wasm-uu lane is
+   provisional upstream, and `-fno-exceptions` means any C++ throw is a
+   trap — test odm-kernel's error paths (weld failure, degenerate
+   booleans) under wasm before trusting them.
 2. **Viewer entanglement** — viewer code touches `EngineState`
    directly; extraction is real work but improves desktop layering.
 3. **wgpu-on-WebGPU gaps** — believed none for our passes; spike
    verifies.
 4. **Drift between hosts** — two ops backends and two executors can
-   diverge. Mitigation: identical framework JS, shared odm-build code,
-   and (later) running the conformance suite against the web runtime in
-   CI-with-browser if that ever exists.
+   diverge. Mitigation: identical framework JS (spike-verified: ships
+   byte-identical, `Deno.core.ops`-shaped glue is enough), shared
+   odm-build code, and (later) running the conformance suite against
+   the web runtime in CI-with-browser if that ever exists.
+
+Executor-seam facts from the spike (sizes phase 1): odm-ir, odm-store,
+odm-kernel compile for wasm32 untouched (no threads/fs/time anywhere);
+jsonschema compiles for wasm too. odm-build's only wasm-hostile spots
+sit exactly on the V8 side of the planned seam — `Pass::cancel`'s
+isolate-terminating watchdog thread (scheduler.rs) and the
+`Instant::now` BuildStats timing around `run_build`; `registry.rs`'s
+Condvar compiles and its wait path is unreachable single-threaded. The
+web runtime likely needs only `run_build`: meta extraction
+(`extract_export`) can happen at export time, with extracted metas
+shipped in the snapshot.
 
 ## Open questions
 
-- Kernel module boundary: if the spike finds Manifold builds for
-  wasm32-unknown-unknown with clang (no emscripten), everything links
-  into ONE module and the glue layer disappears — worth an afternoon of
-  the spike before accepting two modules.
+- ~~Kernel module boundary~~ — resolved: one module (spike).
 - Where `export` runs: engine command (chosen above for the hot store)
   vs. standalone CLI mode — revisit if engine-side proves awkward.
 - Memo-cache snapshot size on real projects (a big animation sweep

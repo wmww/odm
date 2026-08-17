@@ -1,4 +1,5 @@
 /target
+spikes/*/target
 /.target-seed.*
 node_modules/
 .odm/

@@ -86,3 +86,36 @@ did we measure / what did we prove" record behind `design-decisions.md`.
 - Cancellation (ExecutionContext): lands within a few tens of ms even inside
   a single 1M-tri boolean; a pre-cancelled context returns in ~14 µs. Good
   enough to wire directly into build cancellation.
+
+## Web-export fit (spike, 2026-08-17)
+
+Derisk of plans/web-export.md; code kept in `spikes/web-fit/` (README has
+run instructions). Facts:
+
+- **Manifold builds for wasm32-unknown-unknown with clang — no
+  emscripten.** `manifold-csg-sys`'s `unstable-wasm-uu` feature (clang +
+  wasm-ld + wasm-cxx-shim; `-fno-exceptions`, `MANIFOLD_PAR=OFF`, no OBJ
+  I/O). odm-kernel forwards it as feature `wasm-uu` (use with
+  `default-features = false`; native default unchanged). Everything —
+  odm-kernel/store/ir + Manifold + Clipper2 + jsonschema — links into ONE
+  module: 497 KB release wasm.
+- odm-ir, odm-store, odm-kernel have zero wasm-hostile std usage and
+  compile for wasm32 untouched. odm-build's V8-side-only hazards:
+  `Pass::cancel` watchdog thread + `Instant::now` stats timing
+  (scheduler.rs), both inside the planned executor seam;
+  registry Condvar compiles, wait unreachable single-threaded.
+- Sync reentrant JS↔wasm round trip works with plain extern "C" (no
+  wasm-bindgen needed to prove it): JS → wasm scheduler → imported JS
+  executor → wasm ops. Mesh positions read as Float64Array views.
+- The real framework JS runs unmodified in node against wasm-backed ops:
+  set a `Deno.core.ops`-shaped global, import
+  `framework/versions/unstable.js` + `runtime/determinism.js`, call
+  `__odmVersions.unstable.install(globalThis)`, run a factory-wrapped
+  doohickey via `__odm.runBuild`. Note `install` replaces `console`
+  (op_log capture) — host-side prints must use stdout directly.
+- Boolean perf (sphere-subtract, non-parallel both sides, this machine):
+  segs 64/128/256 → native 4.1/12.3/48.7 ms, wasm-in-node
+  5.3/16.9/63.8 ms (~1.3×). Identical tri counts, and the probe's volume
+  f64 bits matched exactly (`0x401c0031e9de621a`) — one-sample evidence
+  that native-exported memo snapshots stay hash-consistent with browser
+  rebuilds despite different C++ toolchains/libm.
