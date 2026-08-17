@@ -36,13 +36,22 @@ pub fn list_box<R>(
     axes: Vec2b,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    scroll_box(ui, id_salt, size, axes, false, add)
+    scroll_box(ui, id_salt, size, axes, false, None, add)
 }
 
-/// A vertical list box that follows its tail: content added at the bottom
-/// scrolls into view, unless the user has scrolled up. For the chat panel.
-pub fn tail_box<R>(ui: &mut Ui, id_salt: &str, size: Vec2, add: impl FnOnce(&mut Ui) -> R) -> R {
-    scroll_box(ui, id_salt, size, Vec2b::new(false, true), true, add)
+/// A vertical list box that follows its tail (content added at the bottom
+/// scrolls into view, unless the user has scrolled up), with a background
+/// painter: called with the well's inner rect after the WINDOW fill, before
+/// the contents. For the chat panel and its agent activity view.
+pub fn tail_box_with_bg<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    size: Vec2,
+    bg: impl FnOnce(&egui::Painter, Rect),
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let bg: Box<dyn FnOnce(&egui::Painter, Rect) + '_> = Box::new(bg);
+    scroll_box(ui, id_salt, size, Vec2b::new(false, true), true, Some(bg), add)
 }
 
 fn scroll_box<R>(
@@ -51,12 +60,16 @@ fn scroll_box<R>(
     size: Vec2,
     axes: Vec2b,
     stick_to_bottom: bool,
+    bg: Option<Box<dyn FnOnce(&egui::Painter, Rect) + '_>>,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter().clone();
     p.rect_filled(outer, CornerRadius::ZERO, WINDOW);
     bevel(&p, outer, Bevel::Sunken);
+    if let Some(bg) = bg {
+        bg(&p, outer.shrink(2.0));
+    }
 
     // Inside the border the bars sit flush; only the contents are inset.
     let inner = outer.shrink(2.0);

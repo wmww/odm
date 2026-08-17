@@ -17,6 +17,7 @@ pub enum Action {
     Wireframe,
     Xray,
     Grid,
+    Activity,
 }
 
 pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
@@ -43,6 +44,7 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
                     MenuEntry::check(Action::Wireframe, "Wireframe", app.wireframe),
                     MenuEntry::check(Action::Xray, "X-Ray", app.xray),
                     MenuEntry::check(Action::Grid, "Grid", app.grid),
+                    MenuEntry::check(Action::Activity, "Agent Activity", app.activity.enabled),
                 ],
             ));
         }
@@ -81,6 +83,12 @@ fn apply(app: &mut ViewerApp, action: Action) {
         Action::Grid => {
             app.grid = !app.grid;
             app.needs_render = true;
+        }
+        Action::Activity => {
+            app.activity.enabled = !app.activity.enabled;
+            if !app.activity.enabled {
+                app.activity.clear();
+            }
         }
     }
 }

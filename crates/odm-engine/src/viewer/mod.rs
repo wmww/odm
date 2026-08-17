@@ -3,6 +3,7 @@
 //! transport, error panel. Never blocks on builds — shows each tab's last
 //! published scene with a building indicator.
 
+mod activity;
 mod agent;
 mod browse;
 mod idle;
@@ -12,6 +13,7 @@ mod new;
 mod open;
 mod tabs;
 mod tree;
+mod viewport;
 
 use crate::scene;
 use crate::session::{AgentQuestion, Sessions};
@@ -19,15 +21,16 @@ use crate::state::{Delivery, EngineState, Who};
 use crate::theme;
 use eframe::egui;
 use odm_render::math::{cross, normalize};
-use odm_render::wgpu;
 use odm_render::{Camera, Instance, RenderOptions, RenderScene, Renderer, flatten_node};
 use odm_store::Object;
 use serde_json::Value;
 use std::sync::Arc;
 
+use activity::ActivityView;
 use idle::Quit;
 use tabs::{Section, Tab};
 use tree::{TreeNode, TreeUi, click_selection, selection_covers, tree_node_ui};
+use viewport::OffscreenTarget;
 
 pub use idle::run_viewer;
 
@@ -110,16 +113,6 @@ impl Orbit {
     }
 }
 
-/// Offscreen viewport target registered as an egui texture. One final color
-/// texture; the renderer owns every intermediate target.
-struct ViewportTex {
-    size: [u32; 2],
-    target_view: wgpu::TextureView,
-    egui_view: wgpu::TextureView,
-    tex_id: egui::TextureId,
-    registered: bool,
-}
-
 pub(crate) struct SceneCache {
     /// Materialized tree snapshot for the tree panel (IR children are hashes).
     pub root: TreeNode,
@@ -146,11 +139,13 @@ pub struct ViewerApp {
     tabs: Vec<Tab>,
     active: usize,
     tab_counter: u64,
-    tex: Option<ViewportTex>,
+    tex: Option<OffscreenTarget>,
     wireframe: bool,
     /// X-ray: render everything at `XRAY_OPACITY`.
     xray: bool,
     grid: bool,
+    /// Agent CLI actions visualized behind the chat transcript.
+    activity: ActivityView,
     needs_render: bool,
     /// The chat input line. The transcript itself lives in `EngineState`.
     chat_input: String,
@@ -184,6 +179,7 @@ impl ViewerApp {
             wireframe: false,
             xray: false,
             grid: true,
+            activity: ActivityView::default(),
             needs_render: true,
             chat_input: String::new(),
             dialog: None,
@@ -260,6 +256,7 @@ impl ViewerApp {
         self.chat_input.clear();
         self.state().set_selection(Vec::new());
         // Nothing of the old project should still be resident, or on screen.
+        self.activity.clear();
         self.renderer.prune_cache(&|_| false);
         self.needs_render = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.session.as_deref())));
@@ -326,8 +323,11 @@ impl ViewerApp {
                 tab.framed = true;
             }
             // Drop GPU buffers for meshes no longer shown (unbounded
-            // otherwise, e.g. while scrubbing t).
-            self.renderer.prune_cache(&|h| scene.meshes.contains_key(h));
+            // otherwise, e.g. while scrubbing t). Activity cards keep
+            // theirs alive too, or they'd thrash re-uploading.
+            let activity = &self.activity;
+            self.renderer
+                .prune_cache(&|h| scene.meshes.contains_key(h) || activity.keeps(h));
             tab.scene = Some(SceneCache { root: tree, scene });
             selection_reset = true;
             self.needs_render = true;
@@ -620,54 +620,9 @@ impl ViewerApp {
     }
 
     fn ensure_viewport(&mut self, frame: &mut eframe::Frame, size: [u32; 2]) {
-        let recreate = match &self.tex {
-            Some(t) => t.size != size,
-            None => true,
-        };
-        if !recreate {
-            return;
+        if OffscreenTarget::ensure(&mut self.tex, frame, size) {
+            self.needs_render = true;
         }
-        let rs = frame.wgpu_render_state().expect("wgpu render state");
-        let device = &rs.device;
-        let extent =
-            wgpu::Extent3d { width: size[0], height: size[1], depth_or_array_layers: 1 };
-        // egui samples in gamma space: expose a non-sRGB view of the sRGB target.
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("viewport"),
-            size: extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: odm_render::COLOR_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
-        });
-        let egui_view = target.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(wgpu::TextureFormat::Rgba8Unorm),
-            ..Default::default()
-        });
-
-        let mut egui_renderer = rs.renderer.write();
-        let tex_id = match self.tex.take() {
-            Some(old) if old.registered => {
-                egui_renderer.update_egui_texture_from_wgpu_texture(
-                    device,
-                    &egui_view,
-                    wgpu::FilterMode::Linear,
-                    old.tex_id,
-                );
-                old.tex_id
-            }
-            _ => egui_renderer.register_native_texture(device, &egui_view, wgpu::FilterMode::Linear),
-        };
-        self.tex = Some(ViewportTex {
-            size,
-            target_view: target.create_view(&Default::default()),
-            egui_view,
-            tex_id,
-            registered: true,
-        });
-        self.needs_render = true;
     }
 
     /// Render options for the current viewport — also what picking projects
@@ -685,14 +640,14 @@ impl ViewerApp {
 
     fn render_viewport(&mut self) {
         let Some(tex) = &self.tex else { return };
-        let opts = self.view_opts(tex.size);
+        let opts = self.view_opts(tex.size());
         let tab = &self.tabs[self.active];
         // No build yet (startup, or a project just opened): draw the empty
         // scene, so the previous project isn't left on screen.
         let empty;
         let Some(scene) = &tab.scene else {
             empty = RenderScene { instances: Vec::new(), meshes: Default::default(), bounds: None };
-            if let Err(e) = self.renderer.render_to_target(&empty, &opts, &tex.target_view) {
+            if let Err(e) = self.renderer.render_to_target(&empty, &opts, tex.view()) {
                 eprintln!("viewport render failed: {e}");
             }
             self.needs_render = false;
@@ -734,10 +689,9 @@ impl ViewerApp {
             };
             &highlighted
         };
-        if let Err(e) = self.renderer.render_to_target(render_scene, &opts, &tex.target_view) {
+        if let Err(e) = self.renderer.render_to_target(render_scene, &opts, tex.view()) {
             eprintln!("viewport render failed: {e}");
         }
-        let _ = &tex.egui_view; // kept alive for egui sampling
         self.needs_render = false;
     }
 
@@ -832,10 +786,7 @@ impl ViewerApp {
             self.render_viewport();
         }
         if let Some(tex) = &self.tex {
-            let image = egui::Image::new(egui::load::SizedTexture::new(
-                tex.tex_id,
-                egui::Vec2::new(rect.width(), rect.height()),
-            ));
+            let image = egui::Image::new(tex.image(egui::Vec2::new(rect.width(), rect.height())));
             image.paint_at(ui, rect);
         }
         theme::bevel(ui.painter(), outer, theme::Bevel::Sunken);
@@ -870,7 +821,7 @@ impl ViewerApp {
     ) -> Option<(String, Option<String>)> {
         let (scene, tex) = (self.tab().scene.as_ref()?, self.tex.as_ref()?);
         let radius = PICK_RADIUS_PT * pixels_per_point as f64;
-        let hit = odm_render::pick_wire(&scene.scene, &self.view_opts(tex.size), point_px, radius)?;
+        let hit = odm_render::pick_wire(&scene.scene, &self.view_opts(tex.size()), point_px, radius)?;
         let inst = scene.scene.instances.get(hit.instance)?;
         Some((inst.id.clone(), inst.name.clone()))
     }
@@ -905,11 +856,30 @@ impl ViewerApp {
         }
     }
 
-    /// Messages to and from the agent: transcript above, one input line below.
-    fn chat_ui(&mut self, ui: &mut egui::Ui) {
+    /// Messages to and from the agent: transcript above, one input line below,
+    /// the agent activity view faded behind the transcript.
+    fn chat_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let size = egui::vec2(ui.available_width(), CHAT_HEIGHT);
-        self.state().with_transcript(|transcript| {
-            theme::tail_box(ui, "chat", size, |ui| {
+        if self.activity.enabled {
+            // Render the current card at the well's inner pixel size (2px
+            // bevel all round), in the ui pass like the main viewport.
+            let ppp = ui.ctx().pixels_per_point();
+            let px = [
+                (((size.x - 4.0) * ppp) as u32).clamp(16, 4096),
+                (((size.y - 4.0) * ppp) as u32).clamp(16, 4096),
+            ];
+            let ctx = ui.ctx().clone();
+            self.activity.update(frame, &mut self.renderer, &ctx, px);
+        }
+        let state = self.state();
+        let activity = self.activity.enabled.then_some(&self.activity);
+        state.with_transcript(|transcript| {
+            let bg = |p: &egui::Painter, rect: egui::Rect| {
+                if let Some(a) = activity {
+                    a.paint(p, rect);
+                }
+            };
+            theme::tail_box_with_bg(ui, "chat", size, bg, |ui| {
                 if transcript.is_empty() {
                     ui.label(
                         egui::RichText::new("Type below to send the agent a message.")
@@ -1131,6 +1101,12 @@ impl eframe::App for ViewerApp {
         }
         self.poll_published(ui.ctx());
         self.advance_transport(ui.ctx());
+        // Activity events are drained either way; the toggle drops them.
+        let events = self.state().take_activity();
+        if self.activity.enabled {
+            self.activity.ingest(events);
+            self.activity.tick(ui.ctx(), ui.input(|i| i.time));
+        }
 
         let menu = egui::Panel::top("menubar")
             .frame(egui::Frame::new().fill(theme::FACE).inner_margin(egui::Margin::symmetric(2, 1)))
@@ -1169,7 +1145,7 @@ impl eframe::App for ViewerApp {
         // Above the status band, below the viewport.
         let chat = egui::Panel::bottom("chat")
             .frame(theme::panel_frame())
-            .show(ui, |ui| self.chat_ui(ui));
+            .show(ui, |ui| self.chat_ui(ui, frame));
         theme::band(ui, chat.response.rect);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
