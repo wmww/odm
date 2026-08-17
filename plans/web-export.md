@@ -75,7 +75,7 @@ rewrite.
   policy as native golden PNGs (none exist for the same reason).
 - **egui on web** for the UI, keeping the theme. Decided against a
   DOM/HTML chrome (2026-08-17): the viewer core
-  (`plans/viewer-core.md`) is shared with desktop, so tree,
+  (the `odm-viewer-core` crate) is shared with desktop, so tree,
   click-select, console pane, toggles, and future viewer features come
   from one frontend — a DOM chrome would be a second frontend needing
   permanent feature-parity work, the UI analogue of the three.js
@@ -194,10 +194,10 @@ landable alone):
   cancellation handles); native impl = today's behavior; odm-js becomes
   an optional/feature dep so odm-build compiles for wasm without V8.
   Pragma/doc parsing (`sources.rs`) moves somewhere V8-free.
-- Viewer-core extraction: moved to its own plan,
-  `plans/viewer-core.md` — done first, regardless of web export. The
-  engine interface it defines (submit view / read published result) is
-  exactly what the web host implements in phase 2.
+- Viewer-core extraction: **DONE** (2026-08-17, the `odm-viewer-core`
+  crate — see notes/architecture.md). Its `Engine` trait (set_view /
+  published / store / raycast / set_selection) is exactly what the web
+  host implements in phase 2.
 
 **Phase 2 — web runtime:**
 
@@ -236,9 +236,9 @@ supersample control on the page.
    provisional upstream, and `-fno-exceptions` means any C++ throw is a
    trap — test odm-kernel's error paths (weld failure, degenerate
    booleans) under wasm before trusting them.
-2. **Viewer entanglement** — viewer code touches `EngineState`
-   directly. Covered by `plans/viewer-core.md`, sequenced before this
-   plan.
+2. ~~**Viewer entanglement**~~ — resolved: the read side lives in
+   `odm-viewer-core` behind the `Engine` trait (2026-08-17); only the
+   desktop chrome still touches `EngineState`.
 3. **wgpu-on-WebGPU gaps** — believed none for our passes; spike
    verifies.
 4. **Drift between hosts** — two ops backends and two executors can

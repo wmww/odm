@@ -7,7 +7,7 @@
 use eframe::egui;
 use odm_render::wgpu;
 
-pub(crate) struct OffscreenTarget {
+pub struct OffscreenTarget {
     size: [u32; 2],
     target_view: wgpu::TextureView,
     /// egui samples in gamma space: a non-sRGB view of the sRGB target. Held

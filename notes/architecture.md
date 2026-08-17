@@ -202,6 +202,24 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   build, 2026-08-16): 400-sphere full x-ray ≈ same ~80 ms CLI round-trip
   as opaque; 4× supersample ~120 ms — the N+1 translucent draws are
   nowhere near a bottleneck at CAD scale.
+- `odm-viewer-core` — the viewer's *read side*, shared between hosts
+  (2026-08-17 extraction; desktop today, the web export is the planned
+  second host — plans/web-export.md). Holds `theme/` + `icons` + the
+  bundled font/icon assets, the `Orbit` camera, `OffscreenTarget`, the
+  scene tree, the input panel, the console pane, the `t` transport, `Tab`
+  (per-tab state; persistence stays with the host), and `Viewer` — the
+  shared per-tab machinery (poll published → flatten + tree snapshot,
+  viewport paint, orbit/pan/zoom, solid/wire picking, frame, transport,
+  the app-wide wireframe/x-ray/grid toggles). Parameterized over the
+  `Engine` trait: `set_view` (submit a view for a slot, latest-wins),
+  `published` (the slot's last result — `Published` is defined here,
+  state.rs re-exports it), `store`, `raycast`, `set_selection` (hosts
+  that report selection onward). Hosts own tabs, the `Renderer` (desktop
+  shares it with the activity view), layout/panels, and persistence;
+  methods return whether the view changed so the host can save. Hard
+  rule: no odm-js, no `EngineState`, no sockets/watcher — meant to
+  compile to wasm once odm-build's JS-executor seam makes odm-js
+  optional (until then odm-build still pulls V8 transitively).
 - `odm-engine` — library, entered via `odm run` (`run_headless(project)` /
   `run_viewer(Option<project>)`).
   Headless runs the same background threads as a viewer session (build
@@ -252,7 +270,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   feature, depth-tested); inspect cards frame the node's AABB and brighten
   its instances with the selection formula; render cards upload RGBA as an
   egui texture, letterboxed. Cards render once per (card, size) via the
-  shared-device renderer into a `viewer/viewport.rs` `OffscreenTarget` (the
+  shared-device renderer into an odm-viewer-core `OffscreenTarget` (the
   ViewportTex machinery extracted for reuse — future render windows are one
   OffscreenTarget + camera + scene each; per-window Orbit not built yet).
   Painted by a bg hook in `theme::tail_box_with_bg` (called with the well's
@@ -305,12 +323,13 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   `commands.rs` (the whole JSON
   layer: a serde-tagged `Request` enum with `deny_unknown_fields`, so a
   typo'd command *or* option is an error, plus `CmdError`→JSON),
-  `watcher.rs`, `server.rs`, `session.rs`, `viewer/` (`mod.rs` app + viewport,
+  `watcher.rs`, `server.rs`, `session.rs`, `scene.rs`, and `viewer/` — the
+  desktop chrome around odm-viewer-core (`mod.rs` shell: layout, tab strip,
+  chat, dialogs, and the `impl odm_viewer_core::Engine for EngineState`;
   `idle.rs` event loop, `menu.rs` menu bar, `browse.rs` folder list with
-  `open.rs`/`new.rs` on top of it, `tree.rs` scene tree, `tabs.rs` tab state,
-  `inputs.rs` input panel — see "Input panel" below), `scene.rs`, `theme/`,
-  `icons.rs`.
-  `theme/` holds the viewer's dark Windows 95
+  `open.rs`/`new.rs` on top of it, `tabs.rs` tab persistence, `agent.rs`
+  agent-file question, `activity.rs` — see "Agent activity view" above).
+  odm-viewer-core's `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`,
   `collapsing`, `list_box`, `text_edit`, `trackbar`, `menu_bar`/`menu`,
@@ -365,10 +384,11 @@ overruns, so a full strip can still be added to. Labels elide
 
 ### Input panel
 
-`viewer/inputs.rs` + `viewer/tabs.rs`. Controls come from the tab's
+odm-viewer-core `inputs.rs` + `tab.rs`. Controls come from the tab's
 fall-through report; interactions come back as `Event`s which
 `inputs::apply` folds into the tab's `set_args`/`set_cascade` (pure and
-unit-tested; `mod.rs` then submits `tab.view()` to the engine). The
+unit-tested; `Tab::apply` then submits `tab.view()` through the `Engine`
+trait). The
 invariant that keeps it honest: **the panel is a pure render of (report, tab
 set values)** — the only other state is `Tab::edit`, the buffer of the one
 text field currently holding keyboard focus (egui focus is single, so it's
@@ -587,7 +607,8 @@ eframe leaves broken here:
 
 ### Viewer fonts
 
-`crates/odm-engine/assets/fonts/` holds two bitmap faces converted from X11
+`crates/odm-viewer-core/assets/fonts/` holds two bitmap faces converted from
+X11
 fonts by `scripts/bdf2ttf.py` — `odm-sans-14` (Adobe helvR10, the
 period-correct MS Sans Serif lineage) everywhere, `odm-mono-14` (misc-fixed
 7x14) in the build-error panel. Sources, licenses, available strikes,
@@ -601,7 +622,7 @@ whole-number `pixels_per_point` scales fine, fractional blurs.
 
 ### Viewer icons
 
-`crates/odm-engine/assets/icons/` — one 11×11 RGBA PNG per icon,
+`crates/odm-viewer-core/assets/icons/` — one 11×11 RGBA PNG per icon,
 `include_bytes!`d by `icons.rs`, uploaded once, drawn as one NEAREST-sampled
 quad: left of each tree name via `theme::tree_row` (`empty`/`mesh`), and left
 of each Open-dialog row via `theme::list_row` (`folder`/`project`). Editing
@@ -618,7 +639,7 @@ feathering.
 ### Scene tree
 
 `theme::tree_row` draws a whole row — nesting gutter, icon, name — and
-`viewer/tree.rs` walks the tree telling it where each row sits (depth, which
+odm-viewer-core `tree.rs` walks the tree telling it where each row sits (depth, which
 ancestors still have siblings below, whether this row is the last of its own).
 It walks a viewer-local `TreeNode` snapshot (name/has_mesh/children),
 materialized from the store once per published build, since IR children are
@@ -632,7 +653,7 @@ children. Consequences:
 - `TREE_INDENT` is even and the row midline is nudged onto the checkerboard, so
   every column and rule shares a parity and corners get a dot.
 - The +/- hit target is ours, and so is open/closed state: `TreeState` in
-  viewer/tree.rs, not egui's `CollapsingState`. The box toggles, the name selects,
+  odm-viewer-core tree.rs, not egui's `CollapsingState`. The box toggles, the name selects,
   a double-click on the name does both.
 - Selecting a node auto-expands its ancestors, and collapsing them again when
   the selection goes away is why the state is ours: `TreeState::auto` remembers
@@ -648,7 +669,7 @@ children. Consequences:
   viewport — adds it, or removes it if it was already selected; a plain click
   replaces the whole selection. `status` (active slot) and poll
   snapshots report the list.
-- `viewer::tree::tests` drives rows through a headless `egui::Context` (real hit
+- odm-viewer-core's `tree::tests` drives rows through a headless `egui::Context` (real hit
   testing, real modifiers — note egui reads `modifiers` off `RawInput`, not
   off the events). That is how modifier-clicks are *tested*; injecting one into
   a live viewer also works, but only as a chained call (see "Seeing the
@@ -770,10 +791,10 @@ notes/spike-findings.md "Snapshot count/concurrency".
 `cargo test` runs everything in ~1s after compile. Almost all tests are
 integration tests in `crates/*/tests/`; the unit tests in `src/` are
 `odm-render/src/grid.rs`, `odm-js/src/version.rs` (pragma parsing),
-`odm-prompt/src/` (marker splicing + the agent-file scan) and, in
-odm-engine, `icons.rs`, `commands.rs`, `state.rs` (the chat queue),
-`server.rs` (delivery over a real socket), `viewer/tree.rs`,
-`viewer/inputs.rs` (the input panel, headless egui), `theme/scroll.rs`, and
+`odm-prompt/src/` (marker splicing + the agent-file scan); in
+odm-viewer-core, `icons.rs`, `tree.rs`, `inputs.rs` (the input panel,
+headless egui) and `theme/scroll.rs`; and in odm-engine, `commands.rs`,
+`state.rs` (the chat queue), `server.rs` (delivery over a real socket) and
 `conformance.rs` (the suite runner, below). Every
 test binary shares one `JsEnv` in a `OnceLock` (`state::tests::env()` in
 odm-engine) — building a snapshot while another test thread runs JS aborts

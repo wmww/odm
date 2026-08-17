@@ -3,9 +3,7 @@
 //! an inspect highlights the node, a render shows the image itself. Queued
 //! cards snap in one after another; the last one persists until replaced.
 
-use super::tree::selection_covers;
-use super::viewport::OffscreenTarget;
-use super::Orbit;
+use odm_viewer_core::{OffscreenTarget, Orbit, selection_covers};
 use crate::state::{ActivityEvent, ActivityKind};
 use crate::theme;
 use eframe::egui;

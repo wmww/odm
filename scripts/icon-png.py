@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Text grid <-> viewer icon PNG.
 
-Viewer icons are small PNGs (see crates/odm-engine/assets/icons/README.md).
+Viewer icons are small PNGs (see crates/odm-viewer-core/assets/icons/README.md).
 Editing eleven pixels in a paint program is no fun, so this builds one from a
 text grid, and dumps an existing PNG back to a grid to edit or review:
 
-    scripts/icon-png.py build mesh.txt crates/odm-engine/assets/icons/mesh.png
-    scripts/icon-png.py dump crates/odm-engine/assets/icons/mesh.png
+    scripts/icon-png.py build mesh.txt crates/odm-viewer-core/assets/icons/mesh.png
+    scripts/icon-png.py dump crates/odm-viewer-core/assets/icons/mesh.png
 
 Grid format: `.` and space are transparent, every other character is a pixel.
 Palette lines name their colors (`rgb`, `rrggbb` or `rrggbbaa`, default white);

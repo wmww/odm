@@ -7,14 +7,16 @@ mod commands;
 mod requests;
 #[cfg(test)]
 mod conformance;
-mod icons;
 mod scene;
 mod server;
 mod session;
 mod state;
-mod theme;
 mod viewer;
 mod watcher;
+
+// The theme and icons moved to the viewer core with the rest of the read
+// side; aliased so the desktop chrome keeps its `crate::theme` spelling.
+pub(crate) use odm_viewer_core::{icons, theme};
 
 use std::path::PathBuf;
 use std::sync::Arc;

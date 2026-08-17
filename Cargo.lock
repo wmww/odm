@@ -2766,7 +2766,7 @@ dependencies = [
  "odm-prompt",
  "odm-render",
  "odm-store",
- "png",
+ "odm-viewer-core",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -2838,6 +2838,20 @@ name = "odm-store"
 version = "0.1.0"
 dependencies = [
  "odm-ir",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "odm-viewer-core"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "odm-build",
+ "odm-ir",
+ "odm-render",
+ "odm-store",
+ "png",
  "serde",
  "serde_json",
 ]

@@ -32,9 +32,9 @@ curl -LO https://www.x.org/releases/individual/font/font-misc-misc-1.1.3.tar.gz
 tar xzf font-adobe-100dpi-1.0.4.tar.gz && tar xzf font-misc-misc-1.1.3.tar.gz
 
 scripts/bdf2ttf.py font-adobe-100dpi-1.0.4/helvR10.bdf \
-  crates/odm-engine/assets/fonts/odm-sans-14.ttf 'ODM Sans 14' \
+  crates/odm-viewer-core/assets/fonts/odm-sans-14.ttf 'ODM Sans 14' \
   'Copyright 1984-1989, 1994 Adobe Systems Incorporated. Copyright 1988, 1994 Digital Equipment Corporation. See LICENSE.'
 
 scripts/bdf2ttf.py font-misc-misc-1.1.3/7x14.bdf \
-  crates/odm-engine/assets/fonts/odm-mono-14.ttf 'ODM Mono 14' 'Public domain.'
+  crates/odm-viewer-core/assets/fonts/odm-mono-14.ttf 'ODM Mono 14' 'Public domain.'
 ```

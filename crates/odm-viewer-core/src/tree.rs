@@ -11,15 +11,15 @@ use std::collections::{HashMap, HashSet};
 /// viewer materializes one snapshot per published build instead of walking
 /// the store every frame.
 pub(crate) struct TreeNode {
-    pub(super) name: Option<String>,
-    pub(super) has_mesh: bool,
-    pub(super) children: Vec<TreeNode>,
+    pub(crate) name: Option<String>,
+    pub(crate) has_mesh: bool,
+    pub(crate) children: Vec<TreeNode>,
 }
 
 impl TreeNode {
     /// Materialize a subtree; None if a child hash is missing from the store
     /// (the caller retries, as with a failed flatten).
-    pub(super) fn from_node(store: &Store, node: &Node) -> Option<TreeNode> {
+    pub(crate) fn from_node(store: &Store, node: &Node) -> Option<TreeNode> {
         let children = node
             .children
             .iter()
@@ -40,7 +40,7 @@ impl TreeNode {
 /// collapsing-header memory so auto-expand can tell its own doing from the
 /// user's, and undo only its own.
 #[derive(Default)]
-pub(super) struct TreeState {
+pub(crate) struct TreeState {
     /// Open/closed where it differs from the default (open above `AUTO_DEPTH`).
     open: HashMap<String, bool>,
     /// Nodes opened to reveal a selection, each with the `open` entry it
@@ -64,7 +64,7 @@ impl TreeState {
 
     /// Expand every ancestor of a selected node, and collapse the ones expanded
     /// for a selection that has since gone away.
-    pub(super) fn reveal(&mut self, selected: &[(String, Option<String>)]) {
+    pub(crate) fn reveal(&mut self, selected: &[(String, Option<String>)]) {
         let mut needed: HashSet<String> = HashSet::new();
         for (id, _) in selected {
             if id.is_empty() {
@@ -96,16 +96,16 @@ fn node_depth(id: &str) -> usize {
 }
 
 /// The tree's shared state for one pass of `tree_node_ui`.
-pub(super) struct TreeUi<'a> {
-    pub(super) tree: &'a mut TreeState,
-    pub(super) selected: &'a [(String, Option<String>)],
+pub(crate) struct TreeUi<'a> {
+    pub(crate) tree: &'a mut TreeState,
+    pub(crate) selected: &'a [(String, Option<String>)],
     /// The row clicked this frame: (node id, name, shift held).
-    pub(super) clicked: Option<(String, Option<String>, bool)>,
+    pub(crate) clicked: Option<(String, Option<String>, bool)>,
 }
 
 /// Draw `node` and, if it is open, its subtree. `trunk` carries, per ancestor
 /// depth, whether that ancestor's sibling line runs past these rows.
-pub(super) fn tree_node_ui(
+pub(crate) fn tree_node_ui(
     ui: &mut egui::Ui,
     node: &TreeNode,
     id: &str,
@@ -166,7 +166,7 @@ pub(super) fn tree_node_ui(
 /// Apply a click on `hit` (`None` = empty space) to the selection: shift adds
 /// the node, or removes it if it was already selected; a plain click replaces
 /// whatever was selected.
-pub(super) fn click_selection(
+pub(crate) fn click_selection(
     selected: Vec<(String, Option<String>)>,
     hit: Option<(String, Option<String>)>,
     additive: bool,
@@ -182,7 +182,7 @@ pub(super) fn click_selection(
 }
 
 /// Selecting a group highlights its whole subtree.
-pub(super) fn selection_covers(selected: &str, id: &str) -> bool {
+pub fn selection_covers(selected: &str, id: &str) -> bool {
     selected.is_empty() || id == selected || id.starts_with(&format!("{selected}/"))
 }
 

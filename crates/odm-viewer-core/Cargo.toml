@@ -1,0 +1,24 @@
+[package]
+name = "odm-viewer-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+# icons.rs, theme/scroll.rs, tree.rs and inputs.rs carry unit tests.
+test = true
+
+[dependencies]
+odm-ir = { path = "../odm-ir" }
+odm-store = { path = "../odm-store" }
+odm-build = { path = "../odm-build" }
+odm-render = { path = "../odm-render" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The core only needs egui + the shared wgpu render state, but winit refuses
+# to compile with no backend at all, so the native windowing features ride
+# along (the host owns the event loop either way).
+eframe = { version = "=0.35.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+# Icon art (assets/icons); same version odm-render encodes renders with.
+png = "0.18"

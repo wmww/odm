@@ -497,7 +497,7 @@ pub fn tab_edge(p: &egui::Painter, y: f32, x0: f32, x1: f32) {
 
 /// A plain row of notebook tabs at the top of a panel, opening into the page
 /// below it. The fixed set a dock switches between: no close boxes, no +, no
-/// squeezing — [`crate::viewer`]'s view tabs paint their own strip for those.
+/// squeezing — a host's view tabs paint their own strip for those.
 /// Returns the tab clicked this frame, if any.
 pub fn tab_strip(
     ui: &mut Ui,

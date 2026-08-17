@@ -8,7 +8,7 @@
 //! holding keyboard focus — so a value changed from anywhere else (a preset,
 //! an ×, a rebuild, the CLI) is always what the panel shows next frame.
 
-use super::tabs::{Section, Tab};
+use crate::tab::{Section, Tab};
 use crate::theme;
 use eframe::egui;
 use odm_build::{InputKind, InputReport, ReportEntry};

@@ -8,7 +8,7 @@ use odm_build::{BuildEngine, FailureKind, InputReport, PassResult, SyncResult, V
 use odm_js::{JsEnv, LogLine};
 use odm_kernel::Kernel;
 use odm_render::{RenderScene, Renderer};
-use odm_store::{Object, Store};
+use odm_store::Store;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -20,28 +20,9 @@ use std::time::{Duration, Instant};
 /// the background loop publish into.
 pub const DEFAULT_SLOT: &str = "default";
 
-/// Last published build of one active view slot. Last-good semantics — a
-/// failed build updates `error` but keeps the previous root.
-#[derive(Clone, Default)]
-pub struct Published {
-    /// Bumped whenever anything here changes; the viewer polls it.
-    pub revision: u64,
-    pub generation: u64,
-    /// The view this result was built for.
-    pub view: View,
-    /// Root hash plus the object itself: holding the `Arc` keeps the root
-    /// alive across store GCs, so the viewer never reads an unrooted hash.
-    pub root: Option<(odm_ir::Hash, Arc<Object>)>,
-    pub error: Option<String>,
-    /// Console output of the last build attempt — success or failure, memo
-    /// hits replay theirs — as (doohickey path, line). Latest-attempt
-    /// semantics, unlike `root`'s last-good.
-    pub logs: Arc<Vec<(String, LogLine)>>,
-    pub building: bool,
-    /// Fall-through report of the last successful build: the view-settable
-    /// cascade inputs (the input panel's data source).
-    pub report: Arc<InputReport>,
-}
+// The published-slot value lives with the viewer core (it is the read side's
+// input); the engine is its writer.
+pub use odm_viewer_core::Published;
 
 /// Per-slot latest-wins build requests from the viewer (input edits) and
 /// the file watcher.

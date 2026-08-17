@@ -46,9 +46,9 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
                 &[
                     MenuEntry::item(Action::Frame, framing).shortcut("F"),
                     MenuEntry::separator(),
-                    MenuEntry::check(Action::Wireframe, "Wireframe", app.wireframe),
-                    MenuEntry::check(Action::Xray, "X-Ray", app.xray),
-                    MenuEntry::check(Action::Grid, "Grid", app.grid),
+                    MenuEntry::check(Action::Wireframe, "Wireframe", app.core.wireframe),
+                    MenuEntry::check(Action::Xray, "X-Ray", app.core.xray),
+                    MenuEntry::check(Action::Grid, "Grid", app.core.grid),
                     MenuEntry::check(Action::Activity, "Agent Activity", app.activity.enabled),
                 ],
             ));
@@ -78,16 +78,16 @@ fn apply(app: &mut ViewerApp, action: Action) {
         Action::Quit => app.quit.request(),
         Action::Frame => app.frame_scene(),
         Action::Wireframe => {
-            app.wireframe = !app.wireframe;
-            app.needs_render = true;
+            app.core.wireframe = !app.core.wireframe;
+            app.core.needs_render = true;
         }
         Action::Xray => {
-            app.xray = !app.xray;
-            app.needs_render = true;
+            app.core.xray = !app.core.xray;
+            app.core.needs_render = true;
         }
         Action::Grid => {
-            app.grid = !app.grid;
-            app.needs_render = true;
+            app.core.grid = !app.core.grid;
+            app.core.needs_render = true;
         }
         Action::Activity => {
             app.activity.enabled = !app.activity.enabled;

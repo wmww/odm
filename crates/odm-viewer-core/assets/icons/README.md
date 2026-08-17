@@ -18,9 +18,9 @@ Any pixel editor will do, but eleven pixels is easier as text, so
 `scripts/icon-png.py` converts both ways:
 
 ```sh
-scripts/icon-png.py dump crates/odm-engine/assets/icons/mesh.png > /tmp/mesh.txt
+scripts/icon-png.py dump crates/odm-viewer-core/assets/icons/mesh.png > /tmp/mesh.txt
 $EDITOR /tmp/mesh.txt
-scripts/icon-png.py build /tmp/mesh.txt crates/odm-engine/assets/icons/mesh.png
+scripts/icon-png.py build /tmp/mesh.txt crates/odm-viewer-core/assets/icons/mesh.png
 ```
 
 The grid is `.` for transparent, one character per color, named by palette lines

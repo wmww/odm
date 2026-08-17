@@ -13,9 +13,9 @@ discussions that followed. Cross-references note where plans touch.
 - `web-export.md` — export a project as a static interactive web page:
   frozen generation, doohickey JS bundled to run natively in browser,
   core crates + our renderer compiled to wasm (Manifold via emscripten
-  is the risk to spike first), egui web viewer. Phase 1 seams
-  (JS-executor trait in odm-build, viewer-core extraction) are useful
-  desktop refactors on their own.
+  is the risk to spike first), egui web viewer. The remaining
+  phase-1 seam (JS-executor trait in odm-build) is a useful desktop
+  refactor on its own; the viewer-core seam is done (see below).
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
   separating translation. Corrects clearance.md's premise: manifold-csg
@@ -46,4 +46,7 @@ log-replay rollback, log-level enum + one console pane, engine warnings
 in the transcript, headless thread parity, poll `builds`/`health` with
 `events` follow wakes, the health sweep, and — landed as a follow-up —
 failure memoization; standing rules in `notes/agent-surface.md`'s
-async-diagnostics section, mechanics in notes/architecture.md).
+async-diagnostics section, mechanics in notes/architecture.md);
+`viewer-core.md` (executed 2026-08-17 — the viewer's read side extracted
+into the `odm-viewer-core` crate behind the `Engine` trait, desktop
+behavior-preserving; see notes/architecture.md's odm-viewer-core entry).

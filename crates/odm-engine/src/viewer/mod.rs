@@ -1,59 +1,31 @@
-//! eframe/egui viewer: tabs (one view each), viewport (shared render path
-//! with headless renders), scene tree, generated input panel with a `t`
-//! transport, error panel. Never blocks on builds — shows each tab's last
-//! published scene with a building indicator.
+//! The desktop viewer: chrome (sessions, menu bar, tab strip, chat, dialogs,
+//! agent activity) around the shared viewer core, which owns the per-tab read
+//! side — viewport, tree, input panel, transport, console. Never blocks on
+//! builds — shows each tab's last published scene with a building indicator.
 
 mod activity;
 mod agent;
 mod browse;
 mod idle;
-mod inputs;
 mod menu;
 mod new;
 mod open;
 mod tabs;
-mod tree;
-mod viewport;
 
 use crate::scene;
 use crate::session::{AgentQuestion, Sessions};
 use crate::state::{Delivery, EngineState, Who};
 use crate::theme;
 use eframe::egui;
-use odm_render::math::{cross, normalize};
-use odm_render::{Camera, Instance, RenderOptions, RenderScene, Renderer, flatten_node};
-use odm_store::Object;
+use odm_render::{Instance, Renderer};
+use odm_viewer_core::{Engine, FOV_Y_DEG, PANEL_SHARE, Tab, Viewer, console_tab, console_ui, inputs};
 use serde_json::Value;
 use std::sync::Arc;
 
 use activity::ActivityView;
 use idle::Quit;
-use tabs::{Section, Tab};
-use tree::{TreeNode, TreeUi, click_selection, selection_covers, tree_node_ui};
-use viewport::OffscreenTarget;
 
 pub use idle::run_viewer;
-
-/// Orbit camera: spherical eye around a target, Z-up.
-pub(crate) struct Orbit {
-    pub target: [f64; 3],
-    pub distance: f64,
-    pub yaw: f64,
-    pub pitch: f64,
-}
-
-const FOV_Y_DEG: f64 = 45.0;
-/// What View ▸ X-Ray renders everything at.
-const XRAY_OPACITY: f32 = 0.3;
-
-/// How far from a wire a click still counts, in UI points.
-const PICK_RADIUS_PT: f64 = 6.0;
-
-
-/// Most of the space a draggable panel may take from what is left when it is
-/// shown, so that dragging one out never leaves the viewport (or the panels
-/// under it) with nothing.
-const PANEL_SHARE: f32 = 0.6;
 
 /// What [`theme::text_edit`] pads its text with, top and bottom.
 const INPUT_MARGIN: f32 = 6.0;
@@ -71,72 +43,36 @@ enum Dock {
     Console,
 }
 
-impl Orbit {
-    pub(crate) fn framed(bounds: Option<([f64; 3], [f64; 3])>) -> Orbit {
-        let mut orbit = Orbit {
-            target: [0.0; 3],
-            distance: 1.0,
-            yaw: 1.4f64.atan2(1.0),
-            pitch: 0.9f64.atan2((1.0f64 + 1.4 * 1.4).sqrt()),
-        };
-        orbit.frame(bounds);
-        orbit
+/// The viewer core's engine, implemented over the desktop `EngineState`.
+impl Engine for EngineState {
+    fn set_view(&self, slot: &str, view: odm_build::View) {
+        EngineState::set_view(self, slot, view);
     }
 
-    /// Center on some bounds and back off far enough to fit them, keeping the
-    /// view direction — reframing should not spin the model.
-    fn frame(&mut self, bounds: Option<([f64; 3], [f64; 3])>) {
-        let (center, radius) = match bounds {
-            Some((min, max)) => {
-                let c = [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0, (min[2] + max[2]) / 2.0];
-                let d = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-                let r = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() / 2.0;
-                (c, if r > 1e-9 { r } else { 1.0 })
-            }
-            None => ([0.0; 3], 1.0),
-        };
-        self.target = center;
-        self.distance = radius * 1.1 / (FOV_Y_DEG / 2.0).to_radians().sin();
+    fn published(&self, slot: &str) -> odm_viewer_core::Published {
+        EngineState::published(self, slot)
     }
 
-    fn eye(&self) -> [f64; 3] {
-        let (cp, sp) = (self.pitch.cos(), self.pitch.sin());
-        let (cy, sy) = (self.yaw.cos(), self.yaw.sin());
-        [
-            self.target[0] + self.distance * cp * cy,
-            self.target[1] + self.distance * cp * sy,
-            self.target[2] + self.distance * sp,
-        ]
+    fn store(&self) -> &odm_store::Store {
+        &self.build_engine().store
     }
 
-    fn camera(&self) -> Camera {
-        Camera {
-            eye: Some(self.eye()),
-            target: Some(self.target),
-            up: Some([0.0, 0.0, 1.0]),
-            fov_y_deg: Some(FOV_Y_DEG),
-            ..Camera::default()
-        }
+    fn raycast(
+        &self,
+        instances: &[Instance],
+        origin: [f64; 3],
+        dir: [f64; 3],
+    ) -> Option<(String, Option<String>)> {
+        let hit = scene::raycast(&self.build_engine().kernel, instances, origin, dir, 1e9)?;
+        Some((
+            hit.get("id")?.as_str()?.to_string(),
+            hit.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()),
+        ))
     }
 
-    /// Camera basis (right, up, forward), for panning and picking.
-    fn basis(&self) -> ([f64; 3], [f64; 3], [f64; 3]) {
-        let eye = self.eye();
-        let f = normalize([
-            self.target[0] - eye[0],
-            self.target[1] - eye[1],
-            self.target[2] - eye[2],
-        ]);
-        let s = normalize(cross(f, [0.0, 0.0, 1.0]));
-        let u = cross(s, f);
-        (s, u, f)
+    fn set_selection(&self, sel: &[(String, Option<String>)]) {
+        EngineState::set_selection(self, sel.to_vec());
     }
-}
-
-pub(crate) struct SceneCache {
-    /// Materialized tree snapshot for the tree panel (IR children are hashes).
-    pub root: TreeNode,
-    pub scene: RenderScene,
 }
 
 /// The modal that is up, if one is. Open and New are the same kind of thing —
@@ -155,18 +91,14 @@ pub struct ViewerApp {
     /// Swapped wholesale by File ▸ Open.
     session: Option<Arc<EngineState>>,
     renderer: Renderer,
+    /// The shared read side: display toggles, viewport target.
+    core: Viewer,
     /// One view each; `active` is what the viewport shows.
     tabs: Vec<Tab>,
     active: usize,
     tab_counter: u64,
-    tex: Option<OffscreenTarget>,
-    wireframe: bool,
-    /// X-ray: render everything at `XRAY_OPACITY`.
-    xray: bool,
-    grid: bool,
     /// Agent CLI actions visualized behind the chat transcript.
     activity: ActivityView,
-    needs_render: bool,
     /// The chat input line. The transcript itself lives in `EngineState`.
     chat_input: String,
     /// Which tab of the bottom dock is showing. One dock for the window, not
@@ -195,15 +127,11 @@ impl ViewerApp {
             session: sessions.current(),
             sessions,
             renderer,
+            core: Viewer::default(),
             tabs: Vec::new(),
             active: 0,
             tab_counter: 0,
-            tex: None,
-            wireframe: false,
-            xray: false,
-            grid: true,
             activity: ActivityView::default(),
-            needs_render: true,
             chat_input: String::new(),
             dock: Dock::Chat,
             dialog: None,
@@ -259,10 +187,6 @@ impl ViewerApp {
         &self.tabs[self.active]
     }
 
-    fn tab_mut(&mut self) -> &mut Tab {
-        &mut self.tabs[self.active]
-    }
-
     fn save_tabs(&self) {
         tabs::save(self.state().project(), &self.tabs, self.active);
     }
@@ -282,7 +206,7 @@ impl ViewerApp {
         // Nothing of the old project should still be resident, or on screen.
         self.activity.clear();
         self.renderer.prune_cache(&|_| false);
-        self.needs_render = true;
+        self.core.needs_render = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.session.as_deref())));
         self.ask_about_agent_files();
         Ok(())
@@ -304,118 +228,18 @@ impl ViewerApp {
             Some(Dialog::AgentFiles(agent::AgentDialog::new(self.agent_questions.remove(0))));
     }
 
-    /// F (and View ▸ Frame): fit the selection if there is one, else the whole
-    /// scene. The orbit target stays where it was put, so the camera goes on
-    /// turning around the framed objects after the selection is dropped —
-    /// until F with nothing selected recenters on everything again.
     fn frame_scene(&mut self) {
-        let tab = self.tab_mut();
-        let Some(scene) = &tab.scene else { return };
-        let bounds = if tab.selected.is_empty() {
-            scene.scene.bounds
-        } else {
-            let selected = &tab.selected;
-            odm_render::subset_bounds(&scene.scene, |inst| {
-                selected.iter().any(|(sel, _)| selection_covers(sel, &inst.id))
-            })
-        };
-        // Nothing to fit (empty scene, or a selection with no geometry under
-        // it): leave the camera alone rather than jump it to the origin.
-        if bounds.is_some() {
-            tab.orbit.frame(bounds);
-            self.needs_render = true;
-        }
-    }
-
-    /// Pull the active tab's latest published build; re-flatten on change.
-    fn poll_published(&mut self, ctx: &egui::Context) {
-        let state = self.state();
-        let tab = &mut self.tabs[self.active];
-        let p = state.published(&tab.slot);
-        if p.revision == tab.published.revision {
-            return;
-        }
-        let engine = state.build_engine();
-        let mut selection_reset = false;
-        if let Some((root_hash, root_obj)) = &p.root
-            && tab.published.root.as_ref().map(|(h, _)| h) != Some(root_hash)
-            && let Object::Node(root) = &**root_obj
-        {
-            // The root object is kept alive by the Arc in Published, but its
-            // children/meshes may race a GC of a superseding build; on a miss
-            // keep the old scene and retry next poll (revision stays
-            // unrecorded).
-            let retry = |what: &str, ctx: &egui::Context| {
-                eprintln!("viewer {what} failed (retrying next poll)");
-                // Nothing else need wake us, so book the retry ourselves.
-                ctx.request_repaint_after(std::time::Duration::from_millis(50));
-            };
-            let scene = match flatten_node(&engine.store, root) {
-                Ok(v) => v,
-                Err(e) => return retry(&format!("flatten: {e}"), ctx),
-            };
-            let Some(tree) = TreeNode::from_node(&engine.store, root) else {
-                return retry("tree materialize", ctx);
-            };
-            if !tab.framed && scene.bounds.is_some() {
-                tab.orbit = Orbit::framed(scene.bounds);
-                tab.framed = true;
-            }
-            // Drop GPU buffers for meshes no longer shown (unbounded
-            // otherwise, e.g. while scrubbing t). Activity cards keep
-            // theirs alive too, or they'd thrash re-uploading.
-            let activity = &self.activity;
-            self.renderer
-                .prune_cache(&|h| scene.meshes.contains_key(h) || activity.keeps(h));
-            tab.scene = Some(SceneCache { root: tree, scene });
-            selection_reset = true;
-            self.needs_render = true;
-        }
-        tab.published = p;
-        if selection_reset {
-            self.set_selection(Vec::new());
-        }
-    }
-
-    /// Advance the `t` transport while playing: 1 unit/second, looping over
-    /// the declared range.
-    fn advance_transport(&mut self, ctx: &egui::Context) {
-        if !self.tab().playing {
-            return;
-        }
-        let Some(entry) = inputs::transport_entry(self.tab()) else {
-            self.tab_mut().playing = false;
-            return;
-        };
-        let dt = ctx.input(|i| i.stable_dt).min(0.25) as f64;
-        let (min, max) = (entry.minimum.unwrap_or(0.0), entry.maximum.unwrap_or(1.0));
-        let span = (max - min).max(1e-9);
-        let current = self
-            .tab()
-            .shown_value(Section::Cascade, &entry)
-            .as_f64()
-            .unwrap_or(min);
-        let next = min + (current - min + dt).rem_euclid(span);
-        self.apply_input_events(vec![inputs::Event::Set(
-            Section::Cascade,
-            entry.name,
-            serde_json::Number::from_f64(next).map(Value::Number).unwrap_or(Value::Null),
-        )]);
-        ctx.request_repaint();
+        let Self { core, tabs, active, .. } = self;
+        core.frame_scene(&mut tabs[*active]);
     }
 
     /// Turn panel interactions into the tab's new view, and hand it to the
     /// engine (latest-wins per slot).
     fn apply_input_events(&mut self, events: Vec<inputs::Event>) {
-        if events.is_empty() {
-            return;
+        let state = self.state();
+        if self.tabs[self.active].apply(&*state, events) {
+            self.save_tabs();
         }
-        let report = self.tab().published.report.clone();
-        let tab = self.tab_mut();
-        inputs::apply(tab, &report, events);
-        let (slot, view) = (tab.slot.clone(), tab.view());
-        self.state().set_view(&slot, view);
-        self.save_tabs();
     }
 
     // --- tabs ---
@@ -430,7 +254,7 @@ impl ViewerApp {
             return;
         }
         self.active = index;
-        self.needs_render = true;
+        self.core.needs_render = true;
         // The CLI's `status` selection and `"view": true` follow the tab the
         // user is looking at.
         self.state().set_selection(self.tab().selected.clone());
@@ -444,7 +268,7 @@ impl ViewerApp {
         self.state().set_view(&slot, tab.view());
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
-        self.needs_render = true;
+        self.core.needs_render = true;
         self.state().set_selection(Vec::new());
         self.state().set_active_slot(Some(self.tab().slot.clone()));
         self.save_tabs();
@@ -459,7 +283,7 @@ impl ViewerApp {
         if self.active >= self.tabs.len() {
             self.active = self.tabs.len() - 1;
         }
-        self.needs_render = true;
+        self.core.needs_render = true;
         self.state().set_selection(self.tab().selected.clone());
         self.state().set_active_slot(Some(self.tab().slot.clone()));
         self.save_tabs();
@@ -658,243 +482,6 @@ impl ViewerApp {
         }
     }
 
-    fn ensure_viewport(&mut self, frame: &mut eframe::Frame, size: [u32; 2]) {
-        if OffscreenTarget::ensure(&mut self.tex, frame, size) {
-            self.needs_render = true;
-        }
-    }
-
-    /// Render options for the current viewport — also what picking projects
-    /// with, so clicks land on exactly what was drawn.
-    fn view_opts(&self, size: [u32; 2]) -> RenderOptions {
-        let mut opts = RenderOptions::default_with(size[0], size[1]);
-        opts.camera = self.tab().orbit.camera();
-        opts.wireframe = self.wireframe;
-        opts.grid = self.grid;
-        if self.xray {
-            opts.opacity = XRAY_OPACITY;
-        }
-        opts
-    }
-
-    fn render_viewport(&mut self) {
-        let Some(tex) = &self.tex else { return };
-        let opts = self.view_opts(tex.size());
-        let tab = &self.tabs[self.active];
-        // No build yet (startup, or a project just opened): draw the empty
-        // scene, so the previous project isn't left on screen.
-        let empty;
-        let Some(scene) = &tab.scene else {
-            empty = RenderScene { instances: Vec::new(), meshes: Default::default(), bounds: None };
-            if let Err(e) = self.renderer.render_to_target(&empty, &opts, tex.view()) {
-                eprintln!("viewport render failed: {e}");
-            }
-            self.needs_render = false;
-            return;
-        };
-
-        // Highlight the selected instances by brightening their color.
-        let highlighted;
-        let render_scene = if tab.selected.is_empty() {
-            &scene.scene
-        } else {
-            let instances = scene
-                .scene
-                .instances
-                .iter()
-                .map(|inst| {
-                    let mut color = inst.color;
-                    if tab.selected.iter().any(|(sel, _)| selection_covers(sel, &inst.id)) {
-                        color = [
-                            color[0] * 0.4 + 0.6,
-                            color[1] * 0.4 + 0.45,
-                            color[2] * 0.4 + 0.1,
-                            color[3],
-                        ];
-                    }
-                    Instance {
-                        id: inst.id.clone(),
-                        name: inst.name.clone(),
-                        mesh: inst.mesh,
-                        world: inst.world,
-                        color,
-                    }
-                })
-                .collect();
-            highlighted = RenderScene {
-                instances,
-                meshes: scene.scene.meshes.clone(),
-                bounds: scene.scene.bounds,
-            };
-            &highlighted
-        };
-        if let Err(e) = self.renderer.render_to_target(render_scene, &opts, tex.view()) {
-            eprintln!("viewport render failed: {e}");
-        }
-        self.needs_render = false;
-    }
-
-    /// Ray through a viewport pixel (uv in 0..1, y down).
-    fn pick_ray(&self, uv: [f32; 2], aspect: f64) -> ([f64; 3], [f64; 3]) {
-        let orbit = &self.tab().orbit;
-        let (s, u, f) = orbit.basis();
-        let tan_y = (FOV_Y_DEG / 2.0).to_radians().tan();
-        let tan_x = tan_y * aspect;
-        let x = (uv[0] as f64 * 2.0 - 1.0) * tan_x;
-        let y = (1.0 - uv[1] as f64 * 2.0) * tan_y;
-        let dir = normalize([
-            f[0] + x * s[0] + y * u[0],
-            f[1] + x * s[1] + y * u[1],
-            f[2] + x * s[2] + y * u[2],
-        ]);
-        (orbit.eye(), dir)
-    }
-
-    fn viewport_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let avail = ui.available_size();
-        let (outer, response) = ui.allocate_exact_size(avail, egui::Sense::click_and_drag());
-        // The viewport sits in a sunken well; render at the inner size.
-        let rect = outer.shrink(2.0);
-        let ppp = ui.ctx().pixels_per_point();
-        let px = [
-            ((rect.width() * ppp) as u32).clamp(16, 8192),
-            ((rect.height() * ppp) as u32).clamp(16, 8192),
-        ];
-        self.ensure_viewport(frame, px);
-
-        // Input: orbit / pan / zoom / pick / frame.
-        let modifiers = ui.input(|i| i.modifiers);
-        if response.dragged_by(egui::PointerButton::Middle)
-            || (response.dragged_by(egui::PointerButton::Primary) && modifiers.shift)
-        {
-            let d = response.drag_delta();
-            let orbit = &mut self.tab_mut().orbit;
-            let (s, u, _f) = orbit.basis();
-            let k = orbit.distance
-                * (FOV_Y_DEG / 2.0).to_radians().tan()
-                * 2.0
-                / rect.height() as f64;
-            for i in 0..3 {
-                orbit.target[i] -= d.x as f64 * k * s[i];
-                orbit.target[i] += d.y as f64 * k * u[i];
-            }
-            self.needs_render = true;
-        } else if response.dragged_by(egui::PointerButton::Primary) {
-            let d = response.drag_delta();
-            let orbit = &mut self.tab_mut().orbit;
-            orbit.yaw -= d.x as f64 * 0.008;
-            orbit.pitch = (orbit.pitch + d.y as f64 * 0.008).clamp(-1.55, 1.55);
-            self.needs_render = true;
-        }
-        if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll.abs() > 0.0 {
-                let orbit = &mut self.tab_mut().orbit;
-                orbit.distance = (orbit.distance * (-scroll as f64 * 0.002).exp()).max(1e-3);
-                self.needs_render = true;
-            }
-        }
-        // Not while a dialog is up or a field has the caret — "F" is a letter
-        // in a path before it is a shortcut.
-        if self.dialog.is_none()
-            && self.add_tab.is_none()
-            && !ui.ctx().egui_wants_keyboard_input()
-            && ui.input(|i| i.key_pressed(egui::Key::F))
-        {
-            self.frame_scene();
-        }
-        if response.clicked()
-            && let Some(pos) = response.interact_pointer_pos()
-        {
-            let uv = [
-                ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
-                ((pos.y - rect.top()) / rect.height()).clamp(0.0, 1.0),
-            ];
-            let selection = if self.wireframe {
-                // Nothing is solid: hit the wires themselves, in screen space.
-                self.pick_wire_at([uv[0] as f64 * px[0] as f64, uv[1] as f64 * px[1] as f64], ppp)
-            } else {
-                let (origin, dir) =
-                    self.pick_ray(uv, rect.width() as f64 / rect.height() as f64);
-                self.pick_solid(origin, dir)
-            };
-            self.click_select(selection, modifiers.shift);
-        }
-
-        if self.needs_render {
-            self.render_viewport();
-        }
-        if let Some(tex) = &self.tex {
-            let image = egui::Image::new(tex.image(egui::Vec2::new(rect.width(), rect.height())));
-            image.paint_at(ui, rect);
-        }
-        theme::bevel(ui.painter(), outer, theme::Bevel::Sunken);
-        // Overlay hint.
-        ui.painter().text(
-            rect.left_top() + egui::vec2(8.0, 8.0),
-            egui::Align2::LEFT_TOP,
-            "drag orbit · shift/middle-drag pan · scroll zoom · click select (shift adds) · F frame selection",
-            egui::FontId::proportional(theme::UI_SIZE),
-            egui::Color32::from_white_alpha(60),
-        );
-    }
-
-    /// Nearest solid surface along the ray (shaded mode).
-    fn pick_solid(&self, origin: [f64; 3], dir: [f64; 3]) -> Option<(String, Option<String>)> {
-        let scene = self.tab().scene.as_ref()?;
-        let state = self.state();
-        let hit =
-            scene::raycast(&state.build_engine().kernel, &scene.scene.instances, origin, dir, 1e9)?;
-        Some((
-            hit.get("id")?.as_str()?.to_string(),
-            hit.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()),
-        ))
-    }
-
-    /// Nearest wire to a viewport pixel (wireframe mode). Objects behind are
-    /// selectable wherever the one in front has no wire over them.
-    fn pick_wire_at(
-        &self,
-        point_px: [f64; 2],
-        pixels_per_point: f32,
-    ) -> Option<(String, Option<String>)> {
-        let (scene, tex) = (self.tab().scene.as_ref()?, self.tex.as_ref()?);
-        let radius = PICK_RADIUS_PT * pixels_per_point as f64;
-        let hit = odm_render::pick_wire(&scene.scene, &self.view_opts(tex.size()), point_px, radius)?;
-        let inst = scene.scene.instances.get(hit.instance)?;
-        Some((inst.id.clone(), inst.name.clone()))
-    }
-
-    fn set_selection(&mut self, sel: Vec<(String, Option<String>)>) {
-        let state = self.state();
-        let tab = &mut self.tabs[self.active];
-        tab.selected = sel;
-        tab.tree.reveal(&tab.selected);
-        state.set_selection(tab.selected.clone());
-        self.needs_render = true;
-    }
-
-    fn click_select(&mut self, hit: Option<(String, Option<String>)>, additive: bool) {
-        let selected = std::mem::take(&mut self.tab_mut().selected);
-        let sel = click_selection(selected, hit, additive);
-        self.set_selection(sel);
-    }
-
-    fn tree_ui(&mut self, ui: &mut egui::Ui) {
-        let Tab { scene, tree, selected, .. } = &mut self.tabs[self.active];
-        let Some(scene) = scene.as_ref() else {
-            ui.label("no build yet");
-            return;
-        };
-        // Rows abut, so the dotted nesting lines run unbroken between them.
-        ui.spacing_mut().item_spacing.y = 0.0;
-        let mut tv = TreeUi { tree, selected, clicked: None };
-        tree_node_ui(ui, &scene.root, "", 0, &mut Vec::new(), true, &mut tv);
-        if let Some((id, name, additive)) = tv.clicked {
-            self.click_select(Some((id, name)), additive);
-        }
-    }
-
     /// Messages to and from the agent: transcript above, one input line below,
     /// the agent activity view faded behind the transcript.
     fn chat_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -1039,25 +626,7 @@ impl ViewerApp {
     /// project — what the agent said, and what the build said — so they share
     /// the space rather than stacking and squeezing the viewport.
     fn dock_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let logs = &self.tab().published.logs;
-        let error = self.tab().published.error.is_some();
-        let count = logs.len() + error as usize;
-        // The console's state is on its tab: red for a thrown error, amber
-        // for a warning logged, so a build that failed says so from the chat.
-        let console_color = if error {
-            theme::ERROR
-        } else if logs
-            .iter()
-            .any(|(_, l)| matches!(l.level, odm_js::LogLevel::Warn | odm_js::LogLevel::Error))
-        {
-            theme::WARN
-        } else {
-            theme::TEXT
-        };
-        let console = match count {
-            0 => "Console".to_owned(),
-            n => format!("Console ({n})"),
-        };
+        let (console, console_color) = console_tab(self.tab());
         let tabs = [("Chat".to_owned(), theme::TEXT), (console, console_color)];
         let selected = match self.dock {
             Dock::Chat => 0,
@@ -1068,45 +637,11 @@ impl ViewerApp {
         // never disagree within a frame.
         match self.dock {
             Dock::Chat => self.chat_ui(ui, frame),
-            Dock::Console => self.console_ui(ui),
+            Dock::Console => console_ui(ui, self.tab()),
         }
         if let Some(i) = clicked {
             self.dock = if i == 0 { Dock::Chat } else { Dock::Console };
         }
-    }
-
-    /// One console, browser-devtools style: the last build attempt's output in
-    /// order (latest-attempt semantics), and — when the build failed — the
-    /// thrown error as the final entry, which is where it fell
-    /// chronologically. Presentation-only merge: `error` stays its own field
-    /// everywhere else (tab badge, agent surfaces, last-good scene semantics).
-    fn console_ui(&mut self, ui: &mut egui::Ui) {
-        let logs = self.tab().published.logs.clone();
-        let error = self.tab().published.error.clone();
-        let size = egui::vec2(ui.available_width(), ui.available_height().max(24.0));
-        theme::list_box(ui, "console", size, egui::Vec2b::new(false, true), |ui| {
-            if logs.is_empty() && error.is_none() {
-                ui.label(
-                    egui::RichText::new("The build had nothing to say.").color(theme::WEAK_TEXT),
-                );
-            }
-            for (path, line) in logs.iter() {
-                let color = match line.level {
-                    odm_js::LogLevel::Error => theme::ERROR,
-                    odm_js::LogLevel::Warn => theme::WARN,
-                    odm_js::LogLevel::Debug => theme::WEAK_TEXT,
-                    odm_js::LogLevel::Log => theme::TEXT,
-                };
-                ui.label(
-                    egui::RichText::new(format!("{path}: {}", line.message))
-                        .monospace()
-                        .color(color),
-                );
-            }
-            if let Some(err) = &error {
-                ui.label(egui::RichText::new(err).monospace().color(theme::ERROR));
-            }
-        });
     }
 
     /// The whole window when no project is open: the menu bar, and the reason
@@ -1192,10 +727,18 @@ impl eframe::App for ViewerApp {
         if self.session.is_none() {
             return self.no_project_ui(ui);
         }
-        self.poll_published(ui.ctx());
-        self.advance_transport(ui.ctx());
+        let state = self.state();
+        {
+            let Self { core, tabs, active, renderer, activity, .. } = &mut *self;
+            core.poll_published(&*state, &mut tabs[*active], ui.ctx(), renderer, &|h| {
+                activity.keeps(h)
+            });
+            if core.advance_transport(ui.ctx(), &*state, &mut tabs[*active]) {
+                tabs::save(state.project(), tabs, *active);
+            }
+        }
         // Activity events are drained either way; the toggle drops them.
-        let events = self.state().take_activity();
+        let events = state.take_activity();
         if self.activity.enabled {
             self.activity.ingest(events);
             self.activity.tick(ui.ctx(), ui.input(|i| i.time));
@@ -1215,7 +758,10 @@ impl eframe::App for ViewerApp {
             .frame(theme::panel_frame())
             .show(ui, |ui| {
                 let size = ui.available_size();
-                theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| self.tree_ui(ui));
+                theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| {
+                    let Self { core, tabs, active, .. } = &mut *self;
+                    core.tree_ui(ui, &*state, &mut tabs[*active]);
+                });
             });
         theme::band(ui, left.response.rect);
         let right = egui::Panel::right("inputs")
@@ -1247,7 +793,11 @@ impl eframe::App for ViewerApp {
         theme::band(ui, dock.response.rect);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ui, |ui| self.viewport_ui(ui, frame));
+            .show(ui, |ui| {
+                let shortcuts = self.dialog.is_none() && self.add_tab.is_none();
+                let Self { core, tabs, active, renderer, .. } = &mut *self;
+                core.viewport_ui(ui, frame, renderer, &*state, &mut tabs[*active], shortcuts);
+            });
 
         self.add_tab_ui(ui.ctx());
         self.dialog_ui(ui.ctx());

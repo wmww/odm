@@ -6,7 +6,8 @@ license.workspace = true
 
 [lib]
 doctest = false
-# `icons.rs` has unit tests; flip to false if that ever stops being true.
+# state.rs, commands.rs and server.rs have unit tests; flip to false if that
+# ever stops being true.
 test = true
 
 [dependencies]
@@ -17,13 +18,12 @@ odm-js = { path = "../odm-js" }
 odm-build = { path = "../odm-build" }
 odm-prompt = { path = "../odm-prompt" }
 odm-render = { path = "../odm-render" }
+odm-viewer-core = { path = "../odm-viewer-core" }
 serde = { version = "1", features = ["derive"] }
 eframe = { version = "=0.35.0", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
 # Same pin eframe uses: the viewer drives its own winit event loop (see viewer.rs).
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
 notify = "=8.2.0"
-# Icon art (assets/icons); same version odm-render encodes renders with.
-png = "0.18"
 serde_json = "1"
 # Field paths in request shape errors ("rays[0].origin: invalid length…").
 serde_path_to_error = "0.1"

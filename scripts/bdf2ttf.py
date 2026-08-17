@@ -5,7 +5,7 @@ One pixel becomes a UPP x UPP square, so `upem = PIXEL_SIZE * UPP` and rendering
 the result at exactly PIXEL_SIZE px reproduces the original bitmap. Any other
 size is a blurry mess — the viewer pins the sizes in `theme.rs` to match.
 
-Used to build the viewer's UI fonts; see crates/odm-engine/assets/fonts/README.md
+Used to build the viewer's UI fonts; see crates/odm-viewer-core/assets/fonts/README.md
 for the sources and the exact commands.
 
     scripts/bdf2ttf.py in.bdf out.ttf "Family Name"
