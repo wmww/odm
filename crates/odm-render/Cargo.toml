@@ -12,6 +12,7 @@ odm-ir = { path = "../odm-ir" }
 odm-store = { path = "../odm-store" }
 wgpu = "=29.0.4"
 png = "0.18"
+font8x8 = { version = "0.3", default-features = false }
 bytemuck = "1"
 futures = "0.3"
 thiserror.workspace = true

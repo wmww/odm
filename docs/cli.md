@@ -88,8 +88,9 @@ the scene tree, measured exactly: names, bounds, counts — and, on the root ent
 
 render a PNG; prints its path and echoes the resolved camera (`eye`/`target`/`up` + `fov` or `ortho_height` — nudge and paste back).
 
-- `width` (number) — pixels, 16..=8192 (default 1024)
-- `height` (number) — pixels, 16..=8192 (default 768)
+- `width` (number) — pixels, 16..=8192 (default 1024; per tile of a `frames` sheet, 512)
+- `height` (number) — pixels, 16..=8192 (default 768; per tile of a `frames` sheet, 384)
+- `frames` (array of objects) — contact sheet: one tile per entry, each an object of render fields merged over this request (`inputs` merges by key) and captioned with what it overrides — e.g. `[{"inputs": {"t": 0}}, {"inputs": {"t": 1}}]` (animation moments) or `[{"look": "top"}, {"look": "front"}, {}]` (a drafting sheet; `{}` is the default view). Tiles share one auto-fit framing (the union of all frames' bounds), so scale is comparable across the sheet; a frame's own `focus`/`eye`/`zoom` still overrides its tile. `width`/`height`/`supersample`/`out`/`view`/`stats` stay whole-sheet fields
 - `out` (string) — output file (default under `.odm/renders/`); the CLI resolves it against its own cwd, and the engine refuses to overwrite project source files
 - `wireframe` (bool) — edges only, in each object's own color — surfaces are not drawn
 - `no_grid` (bool) — hide the ground grid
@@ -241,6 +242,29 @@ spelling the request accepts. "Slightly to the left" is a nudge of the
 echoed numbers pasted back; poll snapshots speak the same spelling, so
 the user's own view replays verbatim.
 
+**Contact sheets: `frames`.** One render, many tiles: `frames` is an
+array of partial requests, each merged over the base request (shallow
+per field; `inputs` merges by key) and rendered as one captioned tile,
+row-major in a near-square grid. Motion reads far better side by side
+than across separate files, and one sheet is one image to open. Every
+frame is explicit — no ranged sampling; write out the values you want.
+
+- Any per-frame field goes: `inputs` (animation moments, parameter
+  sweeps), `preset`, `path`, camera fields, `wireframe`/`opacity`.
+  `{}` is a tile of the base request unchanged. `width`/`height` (the
+  per-*tile* size, default 512×384 for sheets), `supersample`, `out`,
+  `view`, and `stats` shape the whole sheet and stay top-level.
+- **Tiles share one framing**: the default fit is computed from the
+  union of every frame's bounds, so scale is comparable across tiles
+  and motion doesn't wobble. A frame's own `focus`/`eye`/`zoom` still
+  overrides its tile, per parameter as usual.
+- Each tile is captioned with its overrides (`t=0.75`, `look=top`).
+  The response carries the shared resolved `camera`, plus a per-frame
+  one for any frame that overrode camera fields.
+- Every frame is an ordinary view build (individually memoized); a
+  failing frame fails the sheet naming the frame, e.g.
+  `frames[2] (t=1.5): …`.
+
 ```
 odm render                                                   # framed overview
 odm render '{"look": "top"}'                                 # plan view
@@ -251,6 +275,8 @@ odm render '{"opacity": 0.3}'                                # x-ray: see inside
 odm render '{"inputs": {"t": 2.5}, "out": "/tmp/frame.png"}' # one animation moment
 odm render '{"path": "parts/wheel.js", "inputs": {"radius": 12}}'  # one part alone
 odm render '{"eye": [60, -80, 40], "target": [0, 0, 10], "fov": 30}'  # exact framing
+odm render '{"frames": [{"inputs": {"t": 0}}, {"inputs": {"t": 0.75}}, {"inputs": {"t": 1.5}}]}'  # motion sheet
+odm render '{"frames": [{"look": "top"}, {"look": "front"}, {"look": "left"}, {}]}'  # drafting sheet
 ```
 
 Don't read dimensions off pixels — `inspect` is exact.

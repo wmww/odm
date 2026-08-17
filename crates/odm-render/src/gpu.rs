@@ -224,6 +224,17 @@ impl Renderer {
         scene: &RenderScene,
         opts: &RenderOptions,
     ) -> Result<Vec<u8>, RenderError> {
+        let rgba = self.render_rgba(scene, opts)?;
+        encode_png(&rgba, opts.width, opts.height)
+    }
+
+    /// The offscreen render as tightly packed RGBA (sheet tiles skip the
+    /// per-tile PNG round-trip).
+    pub fn render_rgba(
+        &mut self,
+        scene: &RenderScene,
+        opts: &RenderOptions,
+    ) -> Result<Vec<u8>, RenderError> {
         if opts.width == 0 || opts.height == 0 || opts.width > 8192 || opts.height > 8192 {
             return Err(RenderError::BadOptions(format!(
                 "image size {}x{} out of range (1..=8192)",
@@ -243,8 +254,7 @@ impl Renderer {
         let target_view = target.create_view(&Default::default());
 
         self.render_to_target(scene, opts, &target_view)?;
-        let rgba = self.read_back(&target, opts.width, opts.height)?;
-        encode_png(&rgba, opts.width, opts.height)
+        self.read_back(&target, opts.width, opts.height)
     }
 
     /// Intermediate targets for this render's internal (supersampled) size,
@@ -1152,7 +1162,7 @@ fn make_pipeline(
     })
 }
 
-fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, RenderError> {
+pub(crate) fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, RenderError> {
     let mut out = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut out, width, height);

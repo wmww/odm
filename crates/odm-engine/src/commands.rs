@@ -1,7 +1,7 @@
 //! The agent-facing command handlers, and (with `requests.rs`) the only
 //! place that speaks `serde_json::Value`.
 
-use crate::requests::{self, Look, Ray, RenderReq, Request, ViewSel};
+use crate::requests::{self, Look, Ray, RenderFrame, RenderReq, Request, ViewSel};
 use crate::scene;
 use crate::server::Conn;
 use crate::state::{EngineState, PollOutcome, Published};
@@ -10,10 +10,11 @@ use odm_build::{
 };
 use odm_ir::Node;
 use odm_js::LogLine;
-use odm_render::{Camera, Projection, RenderOptions, flatten_scene};
+use odm_render::{Camera, Projection, RenderOptions, RenderScene, flatten_scene, sheet};
 use odm_store::{Object, RootPin};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
+use std::sync::MutexGuard;
 use std::sync::atomic::Ordering;
 
 /// What a query targets: a doohickey path (default: `root.js`, when it
@@ -158,7 +159,7 @@ impl EngineState {
                 };
                 self.cmd_inspect(view, scope, r.stats)
             }
-            Request::Render(r) => self.cmd_render(r),
+            Request::Render(r, frames) => self.cmd_render(r, frames),
             Request::Raycast(r) => {
                 let view = ViewReq {
                     path: r.path,
@@ -394,21 +395,29 @@ impl EngineState {
         }
     }
 
-    fn cmd_render(&self, req: RenderReq) -> Result<Value, CmdError> {
-        let (width, height) = (req.width as u32, req.height as u32);
-        if !(16..=8192).contains(&width) || !(16..=8192).contains(&height) {
-            return Err(CmdError::bad_request("width/height must be in 16..=8192"));
+    fn cmd_render(
+        &self,
+        req: RenderReq,
+        frames: Option<Vec<RenderFrame>>,
+    ) -> Result<Value, CmdError> {
+        match frames {
+            None => self.render_single(req),
+            Some(frames) => self.render_sheet(req, frames),
         }
+    }
 
-        let mut camera = camera_from(&req)?;
-
+    /// One frame's inputs to the GPU: its built scene and its camera,
+    /// resolved through `focus` (which needs the scene). The pin keeps the
+    /// build result alive while the caller reads the scene.
+    fn frame_scene(&self, req: &RenderReq) -> Result<FrameScene, CmdError> {
+        let mut camera = camera_from(req)?;
         let view_req = ViewReq {
             path: req.path.clone(),
             inputs: req.inputs.clone(),
             preset: req.preset.clone(),
             view: req.view.clone(),
         };
-        let (_sync, view, result, report, _pin) = self.query_view(&view_req)?;
+        let (_sync, view, result, report, pin) = self.query_view(&view_req)?;
         let store = &self.build_engine().store;
         let scene = flatten_scene(store, result.root)
             .map_err(|e| CmdError::new("render", e.to_string()))?;
@@ -425,9 +434,18 @@ impl EngineState {
                 }
             }
         }
+        Ok(FrameScene { view, result, report, _pin: pin, scene, camera })
+    }
 
+    /// The non-camera image options a request asks for. The camera is the
+    /// caller's to set (the sheet path overlays the shared fit first).
+    fn tile_opts(
+        req: &RenderReq,
+        width: u32,
+        height: u32,
+        supersample: Option<f64>,
+    ) -> Result<RenderOptions, CmdError> {
         let mut opts = RenderOptions::default_with(width, height);
-        opts.camera = camera;
         opts.wireframe = req.wireframe;
         if req.no_grid {
             opts.grid = false;
@@ -438,28 +456,29 @@ impl EngineState {
             }
             opts.opacity = o as f32;
         }
-        if let Some(s) = req.supersample {
+        if let Some(s) = supersample {
             if s.fract() != 0.0 || !(1.0..=8.0).contains(&s) {
                 return Err(CmdError::bad_request("supersample must be an integer in 1..=8"));
             }
             opts.supersample = s as u32;
         }
+        Ok(opts)
+    }
 
-        let mut renderer_slot = self.renderer.lock().unwrap();
-        if renderer_slot.is_none() {
-            *renderer_slot = Some(
+    /// The one lazily-created GPU renderer, locked for this render.
+    fn renderer(&self) -> Result<MutexGuard<'_, Option<odm_render::Renderer>>, CmdError> {
+        let mut slot = self.renderer.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(
                 odm_render::Renderer::new()
                     .map_err(|e| CmdError::new("render", format!("renderer init: {e}")))?,
             );
         }
-        let renderer = renderer_slot.as_mut().unwrap();
-        let png = renderer
-            .render_png(&scene, &opts)
-            .map_err(|e| CmdError::new("render", e.to_string()))?;
-        // Drop GPU buffers for meshes not in this scene (unbounded otherwise).
-        renderer.prune_cache(&|h| scene.meshes.contains_key(h));
+        Ok(slot)
+    }
 
-        let out_path = match &req.out {
+    fn write_render(&self, out: &Option<String>, png: &[u8]) -> Result<PathBuf, CmdError> {
+        let out_path = match out {
             Some(p) => {
                 let path = PathBuf::from(p);
                 self.check_out_path(&path)?;
@@ -473,19 +492,156 @@ impl EngineState {
                 dir.join(format!("render-{n:04}.png"))
             }
         };
-        std::fs::write(&out_path, &png)
+        std::fs::write(&out_path, png)
             .map_err(|e| CmdError::new("render", format!("write {}: {e}", out_path.display())))?;
+        Ok(out_path)
+    }
 
+    fn render_single(&self, req: RenderReq) -> Result<Value, CmdError> {
+        let (width, height) = image_size(req.width, req.height, 1024, 768)?;
+        let fs = self.frame_scene(&req)?;
+        let mut opts = Self::tile_opts(&req, width, height, req.supersample)?;
+        opts.camera = fs.camera;
+
+        let mut slot = self.renderer()?;
+        let renderer = slot.as_mut().unwrap();
+        let png = renderer
+            .render_png(&fs.scene, &opts)
+            .map_err(|e| CmdError::new("render", e.to_string()))?;
+        // Drop GPU buffers for meshes not in this scene (unbounded otherwise).
+        renderer.prune_cache(&|h| fs.scene.meshes.contains_key(h));
+        drop(slot);
+
+        let out_path = self.write_render(&req.out, &png)?;
         let mut o = Map::new();
         o.insert("path".into(), json!(out_path.display().to_string()));
         o.insert("width".into(), json!(width));
         o.insert("height".into(), json!(height));
-        o.insert("instances".into(), json!(scene.instances.len()));
+        o.insert("instances".into(), json!(fs.scene.instances.len()));
         // Echo the camera actually used, in the request's own spelling —
         // "slightly to the left" is a nudge of these numbers pasted back.
-        let cam = opts.camera.resolve(scene.bounds, width as f64 / height as f64);
+        let cam = opts.camera.resolve(fs.scene.bounds, width as f64 / height as f64);
         o.insert("camera".into(), camera_json(cam.eye, cam.target, cam.up, &cam.projection));
-        Ok(view_response(&view, &result, &report, req.stats, o))
+        Ok(view_response(&fs.view, &fs.result, &fs.report, req.stats, o))
+    }
+
+    /// `frames`: one build + one tile per frame, composited into a captioned
+    /// contact sheet. Tiles share one framing — the default fit computed
+    /// from the union of every frame's bounds — so scale reads correctly
+    /// across the sheet; a frame's own `focus`/`eye`/`zoom` still overrides
+    /// its tile (per parameter, like any camera overlay).
+    fn render_sheet(&self, base: RenderReq, frames: Vec<RenderFrame>) -> Result<Value, CmdError> {
+        let (tw, th) = image_size(base.width, base.height, 512, 384)?;
+        let (cols, rows) = sheet::grid_shape(frames.len(), tw, th);
+        let (sw, sh) = sheet::sheet_size(tw, th, cols, rows);
+        if sw > 8192 || sh > 8192 {
+            return Err(CmdError::bad_request(format!(
+                "the sheet would be {sw}x{sh}, over the 8192px limit — fewer frames or \
+                 smaller tiles"
+            )));
+        }
+
+        // Build everything first: the shared framing needs every frame's
+        // bounds before the first tile renders.
+        let mut built = Vec::with_capacity(frames.len());
+        for (i, f) in frames.iter().enumerate() {
+            built.push(self.frame_scene(&f.req).map_err(|e| name_frame(i, f, e))?);
+        }
+        let union = built.iter().filter_map(|b| b.scene.bounds).reduce(|a, b| {
+            (
+                [a.0[0].min(b.0[0]), a.0[1].min(b.0[1]), a.0[2].min(b.0[2])],
+                [a.1[0].max(b.1[0]), a.1[1].max(b.1[1]), a.1[2].max(b.1[2])],
+            )
+        });
+
+        let mut slot = self.renderer()?;
+        let renderer = slot.as_mut().unwrap();
+        let mut tiles = Vec::with_capacity(frames.len());
+        let mut cameras = Vec::with_capacity(frames.len());
+        for (i, (f, fs)) in frames.iter().zip(&built).enumerate() {
+            let mut opts =
+                Self::tile_opts(&f.req, tw, th, base.supersample).map_err(|e| name_frame(i, f, e))?;
+            opts.camera = fs.camera.clone();
+            if opts.camera.fit.is_none() {
+                opts.camera.fit = union;
+            }
+            let rgba = renderer
+                .render_rgba(&fs.scene, &opts)
+                .map_err(|e| name_frame(i, f, CmdError::new("render", e.to_string())))?;
+            cameras.push(opts.camera.resolve(fs.scene.bounds, tw as f64 / th as f64));
+            tiles.push(sheet::Tile { rgba, caption: caption_for(&f.overrides) });
+        }
+        // Prune against the union of the frames' meshes, not tile by tile —
+        // tiles often share meshes.
+        renderer.prune_cache(&|h| built.iter().any(|b| b.scene.meshes.contains_key(h)));
+        drop(slot);
+
+        let png =
+            sheet::sheet_png(&tiles, tw, th).map_err(|e| CmdError::new("render", e.to_string()))?;
+        let out_path = self.write_render(&base.out, &png)?;
+
+        let mut o = Map::new();
+        let one_view = built.iter().all(|b| b.view.path == built[0].view.path);
+        if one_view {
+            o.insert("view".into(), json!(built[0].view.path));
+        }
+        o.insert("path".into(), json!(out_path.display().to_string()));
+        o.insert("width".into(), json!(sw));
+        o.insert("height".into(), json!(sh));
+        o.insert("tile".into(), json!([tw, th]));
+        o.insert("grid".into(), json!([cols, rows]));
+        // The shared camera is any tile that didn't override one: echo it
+        // once, and echo per-frame cameras only where a frame deviates.
+        let touches_camera = |ov: &Map<String, Value>| {
+            ov.keys().any(|k| CAMERA_FIELDS.contains(&k.as_str()))
+        };
+        if let Some(i) = frames.iter().position(|f| !touches_camera(&f.overrides)) {
+            let c = &cameras[i];
+            o.insert("camera".into(), camera_json(c.eye, c.target, c.up, &c.projection));
+        }
+        let mut frames_json = Vec::with_capacity(frames.len());
+        for (i, f) in frames.iter().enumerate() {
+            let mut e = Map::new();
+            e.insert("overrides".into(), Value::Object(f.overrides.clone()));
+            if !one_view {
+                e.insert("view".into(), json!(built[i].view.path));
+            }
+            if touches_camera(&f.overrides) {
+                let c = &cameras[i];
+                e.insert("camera".into(), camera_json(c.eye, c.target, c.up, &c.projection));
+            }
+            if base.stats {
+                e.insert("stats".into(), stats_json(&built[i].result.stats));
+            }
+            frames_json.push(Value::Object(e));
+        }
+        o.insert("frames".into(), Value::Array(frames_json));
+
+        // One warnings/logs channel for the sheet, deduped across frames —
+        // the same view at three times lints (and usually logs) identically.
+        let mut seen = std::collections::HashSet::new();
+        let warnings: Vec<&String> = built
+            .iter()
+            .flat_map(|b| b.report.errors.iter().chain(b.report.warnings.iter()))
+            .filter(|w| seen.insert((*w).clone()))
+            .collect();
+        if !warnings.is_empty() {
+            o.insert("warnings".into(), json!(warnings));
+        }
+        let mut seen = std::collections::HashSet::new();
+        let logs: Vec<Value> = built
+            .iter()
+            .filter(|b| !b.result.logs.is_empty())
+            .flat_map(|b| match logs_json(&b.result.logs) {
+                Value::Array(entries) => entries,
+                other => vec![other],
+            })
+            .filter(|l| seen.insert(l.to_string()))
+            .collect();
+        if !logs.is_empty() {
+            o.insert("logs".into(), Value::Array(logs));
+        }
+        Ok(Value::Object(o))
     }
 
     /// The engine never writes ODM project files: reject `out` targets that
@@ -728,6 +884,61 @@ fn view_response(
     Value::Object(o)
 }
 
+/// Everything one frame of a render needs from the build side: the built
+/// scene and the camera resolved through `focus`. `_pin` keeps the store
+/// result alive while the scene is read.
+struct FrameScene {
+    view: View,
+    result: PassResult,
+    report: InputReport,
+    _pin: RootPin,
+    scene: RenderScene,
+    camera: Camera,
+}
+
+/// The request fields that place or project the camera — a frame that
+/// overrides any of them gets its own camera echo in the response.
+const CAMERA_FIELDS: &[&str] =
+    &["look", "focus", "zoom", "ortho", "eye", "target", "up", "fov", "ortho_height"];
+
+fn image_size(w: Option<f64>, h: Option<f64>, dw: u32, dh: u32) -> Result<(u32, u32), CmdError> {
+    let (w, h) = (w.unwrap_or(dw as f64) as u32, h.unwrap_or(dh as f64) as u32);
+    if !(16..=8192).contains(&w) || !(16..=8192).contains(&h) {
+        return Err(CmdError::bad_request("width/height must be in 16..=8192"));
+    }
+    Ok((w, h))
+}
+
+/// Errors from inside a sheet name the frame: index plus its overrides.
+fn name_frame(i: usize, f: &RenderFrame, mut e: CmdError) -> CmdError {
+    let label = caption_for(&f.overrides);
+    e.message = match label.is_empty() {
+        true => format!("frames[{i}]: {}", e.message),
+        false => format!("frames[{i}] ({label}): {}", e.message),
+    };
+    e
+}
+
+/// A frame's caption: its overrides as `k=v` pairs, `inputs` entries bare
+/// (`t=0.75`, not `inputs={..}`), strings unquoted. Empty for the `{}` tile.
+fn caption_for(overrides: &Map<String, Value>) -> String {
+    let compact = |v: &Value| match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let mut parts = Vec::new();
+    for (k, v) in overrides {
+        if k == "inputs"
+            && let Value::Object(m) = v
+        {
+            parts.extend(m.iter().map(|(ik, iv)| format!("{ik}={}", compact(iv))));
+        } else {
+            parts.push(format!("{k}={}", compact(v)));
+        }
+    }
+    parts.join("  ")
+}
+
 /// The six drafting views: keyword → gaze direction. Z-up; `front` looks
 /// along +y (the camera stands at -y), `right` along -x.
 const LOOKS: &[(&str, [f64; 3])] = &[
@@ -909,7 +1120,7 @@ mod tests {
     fn cam(body: &str) -> Result<Camera, String> {
         let req = format!(r#"{{"cmd": "render", {}}}"#, body);
         match requests::parse(serde_json::from_str(&req).unwrap()) {
-            Ok(Request::Render(r)) => camera_from(&r).map_err(|e| e.message().to_string()),
+            Ok(Request::Render(r, _)) => camera_from(&r).map_err(|e| e.message().to_string()),
             Ok(_) => unreachable!(),
             Err(e) => panic!("parse: {}", e.message()),
         }

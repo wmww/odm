@@ -10,6 +10,7 @@ mod flatten;
 mod gpu;
 mod grid;
 pub mod math;
+pub mod sheet;
 mod wire;
 
 pub use camera::{Camera, Projection, ResolvedCamera};

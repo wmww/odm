@@ -3,8 +3,6 @@
 From the first live agent test (swing set, 2026-08-14) and the design
 discussions that followed. Cross-references note where plans touch.
 
-- `render-frames.md` — contact-sheet renders: `frames` as an array of
-  partial requests merged over the base, one captioned tiled PNG.
 - `camera-nodes.md` — shelved: cameras as JS-built scene nodes (named,
   animatable views); the camera overlay pipeline it needs landed
   2026-08-17, so it now waits only on a demonstrated need.
@@ -35,4 +33,8 @@ send-time per-message poll snapshots; the standing rules are in
 `notes/agent-surface.md`'s render camera section); `mesh-f64.md` (landed
 2026-08-17 — `Mesh.positions` f64 via MeshGL64, three generators emit
 Float64 positions, f32 only at GPU upload; the standing invariant and the
-tripwire-test convention are in notes/architecture.md's odm-kernel entry).
+tripwire-test convention are in notes/architecture.md's odm-kernel entry);
+`render-frames.md` (landed 2026-08-17 — `frames` contact sheets: partial
+requests merged over the base, shared union-bounds framing, captioned
+tiles; standing rules in `notes/agent-surface.md`'s contact sheets
+section).

@@ -16,7 +16,10 @@ use serde_json::{Map, Value};
 pub(crate) enum Request {
     Status,
     Inspect(InspectReq),
-    Render(RenderReq),
+    /// A plain render, or — when `frames` was given — a contact sheet: each
+    /// frame is the base request with that frame's overrides merged over it
+    /// (done here in [`parse`], so commands see ready per-frame requests).
+    Render(RenderReq, Option<Vec<RenderFrame>>),
     Raycast(RaycastReq),
     Clearance(ClearanceReq),
     Poll(PollReq),
@@ -69,11 +72,11 @@ pub(crate) struct RenderReq {
     pub inputs: Map<String, Value>,
     pub preset: Option<String>,
     pub view: Option<ViewSel>,
-    // Sizes stay f64: JSON numbers may carry a `.0`.
-    #[serde(default = "default_width")]
-    pub width: f64,
-    #[serde(default = "default_height")]
-    pub height: f64,
+    // Sizes stay f64: JSON numbers may carry a `.0`. Ungiven stays visible
+    // (None) because the default depends on the request: 1024x768 for one
+    // render, 512x384 per tile of a `frames` sheet.
+    pub width: Option<f64>,
+    pub height: Option<f64>,
     pub out: Option<String>,
     #[serde(default)]
     pub wireframe: bool,
@@ -113,11 +116,11 @@ pub(crate) enum Look {
     Vector([f64; 3]),
 }
 
-fn default_width() -> f64 {
-    1024.0
-}
-fn default_height() -> f64 {
-    768.0
+/// One expanded frame of a `frames` render: the merged request plus the
+/// overrides as written (captions and the response echo those).
+pub(crate) struct RenderFrame {
+    pub overrides: Map<String, Value>,
+    pub req: RenderReq,
 }
 
 #[derive(Deserialize)]
@@ -280,8 +283,20 @@ const SPECS: &[CommandSpec] = &[
                   (`eye`/`target`/`up` + `fov` or `ortho_height` — nudge and paste back)",
         view: true,
         fields: &[
-            f("width", "number", "pixels, 16..=8192 (default 1024)"),
-            f("height", "number", "pixels, 16..=8192 (default 768)"),
+            f("width", "number", "pixels, 16..=8192 (default 1024; per tile of a `frames` sheet, 512)"),
+            f("height", "number", "pixels, 16..=8192 (default 768; per tile of a `frames` sheet, 384)"),
+            f(
+                "frames",
+                "array of objects",
+                "contact sheet: one tile per entry, each an object of render fields merged over \
+                 this request (`inputs` merges by key) and captioned with what it overrides — \
+                 e.g. `[{\"inputs\": {\"t\": 0}}, {\"inputs\": {\"t\": 1}}]` (animation moments) \
+                 or `[{\"look\": \"top\"}, {\"look\": \"front\"}, {}]` (a drafting sheet; `{}` is \
+                 the default view). Tiles share one auto-fit framing (the union of all frames' \
+                 bounds), so scale is comparable across the sheet; a frame's own \
+                 `focus`/`eye`/`zoom` still overrides its tile. `width`/`height`/`supersample`/\
+                 `out`/`view`/`stats` stay whole-sheet fields",
+            ),
             f(
                 "out",
                 "string",
@@ -453,6 +468,69 @@ fn removed_field(cmd: &str, field: &str) -> Option<&'static str> {
     }
 }
 
+// Field names are vetted, so serde only ever fails on value shape;
+// path_to_error says where, the message says what was expected.
+fn de<T: serde::de::DeserializeOwned>(cmd: &str, body: Map<String, Value>) -> Result<T, CmdError> {
+    serde_path_to_error::deserialize(Value::Object(body)).map_err(|e| {
+        let path = e.path().to_string();
+        CmdError::bad_request(match path.as_str() {
+            "." => format!("{cmd}: {}", e.inner()),
+            _ => format!("{cmd}.{path}: {}", e.inner()),
+        })
+    })
+}
+
+/// Expand `frames` into per-frame requests: each frame object validated
+/// against the render spec, then merged over the base request (shallow per
+/// field; `inputs` merges by key). Fields that shape the whole sheet may
+/// not vary per frame.
+fn expand_frames(base: &Map<String, Value>, frames: Value) -> Result<Vec<RenderFrame>, CmdError> {
+    let bad = |m: String| CmdError::bad_request(m);
+    let Value::Array(list) = frames else {
+        return Err(bad("`frames` must be an array of frame objects".into()));
+    };
+    if list.is_empty() {
+        return Err(bad("`frames` needs at least one frame".into()));
+    }
+    const WHOLE: &[&str] = &["frames", "width", "height", "supersample", "out", "view", "stats"];
+    let spec = SPECS.iter().find(|s| s.name == "render").unwrap();
+    let mut out = Vec::with_capacity(list.len());
+    for (i, v) in list.into_iter().enumerate() {
+        let Value::Object(overrides) = v else {
+            return Err(bad(format!("frames[{i}] must be an object of render fields")));
+        };
+        for key in overrides.keys() {
+            if WHOLE.contains(&key.as_str()) {
+                return Err(bad(format!(
+                    "frames[{i}]: `{key}` shapes the whole sheet — give it at the top level"
+                )));
+            }
+            if !spec.fields.iter().chain(VIEW_FIELDS).any(|f| f.name == key) {
+                if let Some(hint) = removed_field("render", key) {
+                    return Err(bad(format!("frames[{i}]: {hint}")));
+                }
+                return Err(bad(format!("frames[{i}]: render has no field {key:?}")));
+            }
+        }
+        let mut merged = base.clone();
+        for (k, v) in overrides.iter() {
+            if k == "inputs"
+                && let Some(Value::Object(base_inputs)) = merged.get_mut("inputs")
+                && let Value::Object(frame_inputs) = v
+            {
+                for (ik, iv) in frame_inputs {
+                    base_inputs.insert(ik.clone(), iv.clone());
+                }
+                continue;
+            }
+            merged.insert(k.clone(), v.clone());
+        }
+        let req = de("render", merged).map_err(|e| bad(format!("frames[{i}]: {}", e.message())))?;
+        out.push(RenderFrame { overrides, req });
+    }
+    Ok(out)
+}
+
 /// Parse one request against the spec table, then serde. All errors are
 /// `bad-request` with enough in the message to fix the call.
 pub(crate) fn parse(req: Value) -> Result<Request, CmdError> {
@@ -491,24 +569,16 @@ pub(crate) fn parse(req: Value) -> Result<Request, CmdError> {
             }));
         }
     }
-    // Field names are vetted, so serde only ever fails on value shape;
-    // path_to_error says where, the message says what was expected.
-    fn de<T: serde::de::DeserializeOwned>(
-        cmd: &str,
-        body: Map<String, Value>,
-    ) -> Result<T, CmdError> {
-        serde_path_to_error::deserialize(Value::Object(body)).map_err(|e| {
-            let path = e.path().to_string();
-            CmdError::bad_request(match path.as_str() {
-                "." => format!("{cmd}: {}", e.inner()),
-                _ => format!("{cmd}.{path}: {}", e.inner()),
-            })
-        })
-    }
     Ok(match cmd {
         "status" => Request::Status,
         "inspect" => Request::Inspect(de(cmd, obj)?),
-        "render" => Request::Render(de(cmd, obj)?),
+        "render" => {
+            let frames = match obj.remove("frames") {
+                None => None,
+                Some(v) => Some(expand_frames(&obj, v)?),
+            };
+            Request::Render(de(cmd, obj)?, frames)
+        }
         "raycast" => Request::Raycast(de(cmd, obj)?),
         "clearance" => Request::Clearance(de(cmd, obj)?),
         "poll" => Request::Poll(de(cmd, obj)?),
@@ -575,7 +645,10 @@ mod tests {
             other => panic!("{:?}", other.err()),
         }
         match parse_str(r#"{"cmd":"render","width":800}"#) {
-            Ok(Request::Render(r)) => assert_eq!((r.width, r.height), (800.0, 768.0)),
+            Ok(Request::Render(r, frames)) => {
+                assert_eq!((r.width, r.height), (Some(800.0), None));
+                assert!(frames.is_none());
+            }
             other => panic!("{:?}", other.err()),
         }
         // Numbers may arrive as JSON floats.
@@ -612,7 +685,7 @@ mod tests {
     #[test]
     fn look_is_keyword_or_vector_and_ortho_is_tristate() {
         match parse_str(r#"{"cmd":"render","look":"top"}"#) {
-            Ok(Request::Render(r)) => {
+            Ok(Request::Render(r, _)) => {
                 assert!(matches!(&r.look, Some(Look::Named(s)) if s == "top"));
                 assert_eq!(r.ortho, None);
             }
@@ -620,7 +693,7 @@ mod tests {
         }
         assert!(matches!(
             parse_str(r#"{"cmd":"render","look":[0,1,0],"ortho":true}"#),
-            Ok(Request::Render(r))
+            Ok(Request::Render(r, _))
                 if matches!(r.look, Some(Look::Vector([0.0, 1.0, 0.0]))) && r.ortho == Some(true)
         ));
         // The wrong JSON type names both accepted shapes.
@@ -629,6 +702,52 @@ mod tests {
         // `direction` is deleted; the error teaches its replacement.
         let e = parse_str(r#"{"cmd":"render","direction":[0,0,-1]}"#).err().unwrap();
         assert!(e.contains("look"), "{e}");
+    }
+
+    #[test]
+    fn frames_merge_over_the_base() {
+        let req = r#"{"cmd":"render","path":"a.js","inputs":{"x":1,"t":9},"zoom":2,
+                      "frames":[{"inputs":{"t":0}},{"inputs":{"t":1},"path":"b.js","zoom":3},{}]}"#;
+        let frames = match parse_str(req) {
+            Ok(Request::Render(base, Some(frames))) => {
+                // The base keeps its own fields; expansion doesn't consume them.
+                assert_eq!(base.path.as_deref(), Some("a.js"));
+                frames
+            }
+            other => panic!("{:?}", other.err()),
+        };
+        assert_eq!(frames.len(), 3);
+        // `inputs` merges by key; other fields shallow-override.
+        assert_eq!(frames[0].req.inputs["x"], 1);
+        assert_eq!(frames[0].req.inputs["t"], 0);
+        assert_eq!(frames[0].req.path.as_deref(), Some("a.js"));
+        assert_eq!(frames[0].req.zoom, Some(2.0));
+        assert_eq!(frames[1].req.inputs["t"], 1);
+        assert_eq!(frames[1].req.path.as_deref(), Some("b.js"));
+        assert_eq!(frames[1].req.zoom, Some(3.0));
+        // `{}` is the base itself; overrides echo what was written.
+        assert_eq!(frames[2].req.inputs["t"], 9);
+        assert!(frames[2].overrides.is_empty());
+        assert_eq!(frames[1].overrides["path"], "b.js");
+    }
+
+    #[test]
+    fn frames_reject_whole_sheet_fields_and_typos() {
+        let e = parse_str(r#"{"cmd":"render","frames":[{"width":99}]}"#).err().unwrap();
+        assert!(e.contains("frames[0]") && e.contains("whole sheet"), "{e}");
+        let e = parse_str(r#"{"cmd":"render","frames":[{},{"frames":[]}]}"#).err().unwrap();
+        assert!(e.contains("frames[1]") && e.contains("whole sheet"), "{e}");
+        let e = parse_str(r#"{"cmd":"render","frames":[{"typo":1}]}"#).err().unwrap();
+        assert!(e.contains("frames[0]") && e.contains("typo"), "{e}");
+        let e = parse_str(r#"{"cmd":"render","frames":[{"direction":[0,0,1]}]}"#).err().unwrap();
+        assert!(e.contains("frames[0]") && e.contains("look"), "{e}");
+        let e = parse_str(r#"{"cmd":"render","frames":[]}"#).err().unwrap();
+        assert!(e.contains("at least one"), "{e}");
+        let e = parse_str(r#"{"cmd":"render","frames":[5]}"#).err().unwrap();
+        assert!(e.contains("frames[0]") && e.contains("object"), "{e}");
+        // Value-shape errors in a frame name the frame.
+        let e = parse_str(r#"{"cmd":"render","frames":[{"opacity":"x"}]}"#).err().unwrap();
+        assert!(e.contains("frames[0]"), "{e}");
     }
 
     #[test]
@@ -736,6 +855,7 @@ mod tests {
                 "rays" => json!([{"origin": [0.0, 0.0, 9.0], "dir": [0.0, 0.0, -1.0]}]),
                 "pairs" => json!([["seat", "chainL"]]),
                 "fields" => json!(["name", "bounds"]),
+                "frames" => json!([{"inputs": {"t": 0.0}}, {}]),
                 "look" => json!("top"),
                 _ if f.ty == "number" => json!(32.0),
                 _ if f.ty == "bool" => json!(true),

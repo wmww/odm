@@ -120,9 +120,44 @@ aspect)`; the viewer's orbit camera is just a fully-given one.
   `[-1,-1,-1]` degenerately stacks projected edges of axis-aligned
   models. No name for the default view.
 - Camera nodes (plans/camera-nodes.md, shelved) slot in later as
-  another *source of defaults* in the same overlay; render-frames'
-  shared framing = compute the fitted defaults once from the union of
-  the frames' bounds.
+  another *source of defaults* in the same overlay.
+
+## Contact sheets: `frames` (landed 2026-08-17)
+
+From plans/render-frames.md. `render` takes `frames`: an array of
+partial requests, each merged over the base (shallow per field,
+`inputs` by key — expansion lives in `requests.rs::expand_frames`, so
+commands.rs sees ready per-frame `RenderReq`s) and rendered as one
+captioned tile. Explicit only — no ranged sampling, no cartesian form;
+writing the values costs tokens ~nothing vs reading tiles.
+
+- **Shared framing**: every frame builds first, then tiles whose camera
+  has no `fit` get `fit = union of all frames' bounds`. Works across
+  mixed per-frame `look`s because `Camera::resolve` fits a bounding
+  *sphere* — fitted distance/height are direction-independent. A
+  frame's `focus` (own fit) or `eye`/`zoom` opts out per parameter,
+  through the normal overlay — no new mechanism.
+- Whole-sheet fields, rejected inside a frame: `frames` (no recursion),
+  `width`/`height` (per-tile size; sheet default 512×384 — `RenderReq`
+  sizes became `Option<f64>` so given-ness survives to commands),
+  `supersample`, `out`, `view`, `stats`. Base's `view` propagates into
+  every merged frame, so `view: true` + frames sweeps the user's tab.
+- Compositing is CPU-side in `odm_render::sheet`: pixel-near-square
+  grid (aspect-aware, row-major, last row may be short), 2px gutters,
+  caption strip under each tile stamped with the frame's overrides
+  (`t=0.75`, `look=top`; `{}` tile blank) via the `font8x8` crate
+  (public domain, dep-free) at 2× — survives image-reader downscaling.
+  Long captions truncate with `..`.
+- Validation: per-tile 16..=8192 as before, plus the *sheet* must fit
+  8192 per side (that's the only frame-count cap). Errors name the
+  frame: `frames[2] (t=1.5): …`.
+- Response: sheet path, `tile`, `grid` [cols, rows], per-frame
+  `overrides` echo, the shared resolved `camera` (from the first frame
+  that didn't override camera fields), per-frame `camera` where a frame
+  did, warnings/logs deduped across frames, `stats` per frame when
+  asked. GPU mesh cache is pruned once against the union of frames.
+- Docs-only per policy (spec-table entry + docs/cli.md section); the
+  prompt is unchanged.
 
 ## Standing cuts (don't reintroduce)
 
