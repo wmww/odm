@@ -9,6 +9,9 @@ odm-cli = { path = "../odm-cli" }
 odm-engine = { path = "../odm-engine" }
 anyhow.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [[bin]]
 name = "odm"
 path = "src/main.rs"

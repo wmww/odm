@@ -37,7 +37,19 @@ fn main() {
     }
 }
 
+/// Client commands die quietly on a closed pipe (`odm docs … | head`), like any
+/// CLI. Not for `run`: the engine must outlive whatever reads its stdout.
+fn restore_sigpipe() {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
 fn dispatch(args: &[String]) -> anyhow::Result<i32> {
+    if args.first().map(String::as_str) != Some("run") {
+        restore_sigpipe();
+    }
     match args.first().map(String::as_str) {
         None => {
             print!("{}", usage());
