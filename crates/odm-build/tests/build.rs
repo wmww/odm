@@ -614,6 +614,74 @@ fn failed_build_logs_reach_the_pass() {
     assert_eq!(lines, vec!["root.js: before the boom".to_string()]);
 }
 
+/// Pure failures are memoized: a broken file must not re-run every pass,
+/// and a hit replays the identical error + logs (error and logs are part
+/// of a build's output, by construction).
+#[test]
+fn failures_are_memoized() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "root.js",
+        r#"
+        export default function build(ctx) {
+            console.log('before the boom');
+            throw new Error('boom');
+        }
+        "#,
+    );
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    let pass = e.start_pass(&sync, View::of("root.js"));
+    let err = e.build_view(&pass).unwrap_err();
+    assert_eq!(err.kind, FailureKind::Js);
+    assert_eq!(builds(&e), 1);
+    let logs1: Vec<String> = pass.take_logs().iter().map(|(_, l)| l.message.clone()).collect();
+
+    // Fresh pass: memo hit, identical error, logs replayed, no re-run.
+    let pass2 = e.start_pass(&sync, View::of("root.js"));
+    let err2 = e.build_view(&pass2).unwrap_err();
+    assert_eq!(builds(&e), 1, "failure must not re-run");
+    assert_eq!(err2, err, "replayed failure is identical");
+    let logs2: Vec<String> = pass2.take_logs().iter().map(|(_, l)| l.message.clone()).collect();
+    assert_eq!(logs2, logs1, "logs replay on a failure hit");
+
+    // Fixing the file invalidates the failure entry.
+    write(dir.path(), "root.js", "export default () => odm.box(1)");
+    let sync = e.sync().unwrap();
+    assert!(e.build_view(&e.start_pass(&sync, View::of("root.js"))).is_ok());
+    assert_eq!(builds(&e), 2);
+}
+
+/// A parent that fails *because* an invoked child failed memoizes too, with
+/// the child as an ordinary failed-invoke dep: fixing the child invalidates
+/// the parent's failure entry.
+#[test]
+fn memoized_failure_invalidates_when_child_fixed() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "root.js", "export default (ctx) => ctx.invoke('bad.js', {})");
+    write(dir.path(), "bad.js", "export default () => { throw new Error('nested boom'); }");
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    let err = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap_err();
+    assert!(err.message.contains("nested boom"), "{err:?}");
+    assert_eq!(builds(&e), 2, "root + bad");
+
+    // Both failures replay from the memo.
+    let err2 = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap_err();
+    assert_eq!(builds(&e), 2, "neither re-runs");
+    assert_eq!(err2, err);
+
+    // Child fixed: root's failure entry has the child failure as a dep and
+    // must invalidate.
+    write(dir.path(), "bad.js", "export default () => odm.sphere(2)");
+    let sync = e.sync().unwrap();
+    assert!(e.build_view(&e.start_pass(&sync, View::of("root.js"))).is_ok());
+    assert_eq!(builds(&e), 4, "child + root rebuilt");
+}
+
 #[test]
 fn bounded_recursion_is_allowed() {
     let dir = tempfile::tempdir().unwrap();

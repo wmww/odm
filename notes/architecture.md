@@ -147,7 +147,13 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   In-flight registry (wait-for-in-flight + wait-graph cycle detection);
   cancellation (token + TerminateExecution post-module-eval). Cycle check is
   keyed on (path, args-hash, env-hash) so bounded recursion works; memo
-  entries carry console logs and replay them on hits. Passes run
+  entries carry console logs and replay them on hits. Entries store
+  success-or-failure (`MemoOutput`): pure failures (`Js`, `BadOutput`)
+  memoize with the deps recorded up to the throw and replay kind + message
+  + logs byte-identically (error + logs are part of a build's output by
+  construction); `Cancelled`/`Internal` (not values of the function) and
+  `Cycle` (message embeds the chain) never memoize, and failure entries
+  pin no GC output. Passes run
   concurrently across threads (each CLI connection + the build loop); the
   registry's cross-thread dedup/cycle machinery is what makes that safe
   (`concurrent_same_pass_dedups`, `commands_overlap_an_in_flight_build`).
@@ -499,8 +505,8 @@ agent-agnostic and enough.
   `health` map (value + generation; older generation ⇔ reported with
   `stale: true`). Failures-only in every surface; a file's absence claims
   nothing, and per the per-view axiom an ok default view never precludes a
-  slot failing at other inputs. Broken files are the expensive case until
-  failures are memoized (issues/memoize-failures.md).
+  slot failing at other inputs. Broken files replay from the failure memo,
+  so repeated sweeps of them are cheap.
 - **Engine host warnings are transcript entries** (`Who::Engine`): watcher
   creation/watch failures, open-time odm.toml/prompt-sync warnings (queued
   right after `EngineState` construction — `session::OpenScan`), server

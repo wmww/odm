@@ -4,7 +4,9 @@ use crate::sources::{ProjectSnapshot, ScanError, Source, scan_project};
 use odm_ir::{Hash, Hasher, hash_json};
 use odm_js::{ApiVersion, BuildError, BuildInput, Invoker, JsEnv, LogLine, run_build};
 use odm_kernel::{CancelToken, Kernel};
-use odm_store::{Dep, GenerationId, InvokeOutcome, MemoEntry, MemoKey, Store};
+use odm_store::{
+    Dep, GenerationId, InvokeOutcome, MemoEntry, MemoFailureKind, MemoKey, MemoOutput, Store,
+};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -496,7 +498,18 @@ impl BuildEngine {
                     let mut logs = pass.logs.lock().unwrap();
                     logs.extend(entry.logs.iter().map(|l| (path.to_string(), l.clone())));
                 }
-                return Ok(entry.output);
+                return match entry.output {
+                    MemoOutput::Output(h) => Ok(h),
+                    // Failures replay like outputs: same kind + message as
+                    // the original run (same identity for callers' deps).
+                    MemoOutput::Failure { kind, message } => {
+                        let kind = match kind {
+                            MemoFailureKind::Js => FailureKind::Js,
+                            MemoFailureKind::BadOutput => FailureKind::BadOutput,
+                        };
+                        Err(fail(path, kind, message))
+                    }
+                };
             }
             match self.registry.acquire(rkey, &|| pass.is_cancelled()) {
                 Acquire::Owner => break,
@@ -607,21 +620,13 @@ impl BuildEngine {
                 let mut logs = pass.logs.lock().unwrap();
                 logs.extend(out.logs.iter().map(|l| (path.to_string(), l.clone())));
                 drop(logs);
-                // The pre-recorded declaration deps subsume the ops' own
-                // records of the same keys.
-                let mut deps = pre_deps;
-                for d in out.deps {
-                    match &d {
-                        Dep::Cascade { key, .. }
-                            if deps.iter().any(
-                                |p| matches!(p, Dep::Cascade { key: k, .. } if k == key),
-                            ) => {}
-                        _ => deps.push(d),
-                    }
-                }
                 self.store.memo_insert(
                     key,
-                    MemoEntry { deps, output: out.output, logs: out.logs },
+                    MemoEntry {
+                        deps: merge_deps(pre_deps, out.deps),
+                        output: MemoOutput::Output(out.output),
+                        logs: out.logs,
+                    },
                 );
                 Ok(out.output)
             }
@@ -630,15 +635,31 @@ impl BuildEngine {
                 // it surfaces next to the error, never embedded in it.
                 if !e.logs.is_empty() {
                     let mut logs = pass.logs.lock().unwrap();
-                    logs.extend(e.logs.into_iter().map(|l| (path.to_string(), l)));
+                    logs.extend(e.logs.iter().map(|l| (path.to_string(), l.clone())));
                 }
-                let kind = match &e.error {
-                    BuildError::Js(_) => FailureKind::Js,
-                    BuildError::Cancelled => FailureKind::Cancelled,
-                    BuildError::BadOutput(_) => FailureKind::BadOutput,
-                    BuildError::Internal(_) => FailureKind::Internal,
+                // Pure failures (a function of code+args+environment) are
+                // memoized like outputs; Cancelled is not a value of the
+                // function and Internal is environmental.
+                let (kind, memoize) = match &e.error {
+                    BuildError::Js(_) => (FailureKind::Js, Some(MemoFailureKind::Js)),
+                    BuildError::Cancelled => (FailureKind::Cancelled, None),
+                    BuildError::BadOutput(_) => {
+                        (FailureKind::BadOutput, Some(MemoFailureKind::BadOutput))
+                    }
+                    BuildError::Internal(_) => (FailureKind::Internal, None),
                 };
-                Err(fail(path, kind, e.error.to_string()))
+                let message = e.error.to_string();
+                if let Some(kind) = memoize {
+                    self.store.memo_insert(
+                        key,
+                        MemoEntry {
+                            deps: merge_deps(pre_deps, e.deps),
+                            output: MemoOutput::Failure { kind, message: message.clone() },
+                            logs: e.logs,
+                        },
+                    );
+                }
+                Err(fail(path, kind, message))
             }
         }
     }
@@ -686,6 +707,20 @@ impl BuildEngine {
         }
         true
     }
+}
+
+/// Combine the scheduler's pre-recorded declaration deps with the run's
+/// recorded deps; the pre-recorded cascade deps subsume the ops' own
+/// records of the same keys.
+fn merge_deps(mut deps: Vec<Dep>, run: Vec<Dep>) -> Vec<Dep> {
+    for d in run {
+        match &d {
+            Dep::Cascade { key, .. }
+                if deps.iter().any(|p| matches!(p, Dep::Cascade { key: k, .. } if k == key)) => {}
+            _ => deps.push(d),
+        }
+    }
+    deps
 }
 
 /// One frame of the in-progress build chain, for cycle detection.

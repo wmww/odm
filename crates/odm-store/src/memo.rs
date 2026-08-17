@@ -92,11 +92,28 @@ pub struct LogLine {
     pub message: String,
 }
 
+/// Failure kinds that are pure — a function of (code, args, environment) —
+/// and therefore memoizable. Cancelled/Internal (environmental) and Cycle
+/// (message embeds the in-progress chain) are never stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MemoFailureKind {
+    Js,
+    BadOutput,
+}
+
+/// What a memoized build produced: an output object, or a failure that
+/// replays (kind + message) exactly like success logs replay.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum MemoOutput {
+    /// Hash of the build output object in the store.
+    Output(Hash),
+    Failure { kind: MemoFailureKind, message: String },
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MemoEntry {
     pub deps: Vec<Dep>,
-    /// Hash of the build output object in the store.
-    pub output: Hash,
+    pub output: MemoOutput,
     /// Console output of the original run, replayed on memo hits so
     /// `console.log` doesn't vanish when nothing changed.
     pub logs: Vec<LogLine>,

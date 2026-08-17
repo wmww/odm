@@ -44,7 +44,6 @@ tiles; standing rules in `notes/agent-surface.md`'s contact sheets
 section); `js-diagnostics.md` (landed 2026-08-17 — failed-invoke deps,
 log-replay rollback, log-level enum + one console pane, engine warnings
 in the transcript, headless thread parity, poll `builds`/`health` with
-`events` follow wakes, the health sweep; standing rules in
-`notes/agent-surface.md`'s async-diagnostics section, mechanics in
-notes/architecture.md; the deferred failure-memoization follow-up is
-issues/memoize-failures.md).
+`events` follow wakes, the health sweep, and — landed as a follow-up —
+failure memoization; standing rules in `notes/agent-surface.md`'s
+async-diagnostics section, mechanics in notes/architecture.md).

@@ -37,8 +37,8 @@ impl Object {
 /// timeline playback after a scrub stays free.
 pub const MEMO_PER_KEY: usize = 64;
 /// Max memo entries across all keys; past it, globally least-recently-used
-/// entries are evicted (each entry pins its output — and transitively its
-/// meshes — against GC, so the cache must be bounded).
+/// entries are evicted (each success entry pins its output — and
+/// transitively its meshes — against GC, so the cache must be bounded).
 pub const MEMO_CAP: usize = 4096;
 
 struct MemoSlot {
@@ -270,8 +270,14 @@ impl Store {
             }
         }
         {
+            // Failure entries pin no output.
             let memo = self.memo.read().unwrap();
-            pending.extend(memo.map.values().flat_map(|v| v.iter().map(|s| s.entry.output)));
+            pending.extend(memo.map.values().flat_map(|v| {
+                v.iter().filter_map(|s| match s.entry.output {
+                    crate::MemoOutput::Output(h) => Some(h),
+                    crate::MemoOutput::Failure { .. } => None,
+                })
+            }));
         }
         pending.extend(self.pins.lock().unwrap().keys().copied());
 

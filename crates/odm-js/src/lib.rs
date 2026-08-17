@@ -59,6 +59,9 @@ pub enum BuildError {
 pub struct FailedBuild {
     pub error: BuildError,
     pub logs: Vec<LogLine>,
+    /// Deps recorded up to the failure, so the scheduler can memoize pure
+    /// failures with entries that validate like any other.
+    pub deps: Vec<Dep>,
 }
 
 impl std::fmt::Display for FailedBuild {
@@ -69,7 +72,7 @@ impl std::fmt::Display for FailedBuild {
 
 impl From<BuildError> for FailedBuild {
     fn from(error: BuildError) -> FailedBuild {
-        FailedBuild { error, logs: Vec::new() }
+        FailedBuild { error, logs: Vec::new(), deps: Vec::new() }
     }
 }
 
@@ -222,6 +225,7 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
     let failed = |error: BuildError, session: &mut SessionState| FailedBuild {
         error,
         logs: std::mem::take(&mut session.logs),
+        deps: std::mem::take(&mut session.deps),
     };
     // Cancelled kernel ops surface as JS exceptions; prefer the Cancelled signal.
     if let Some(tok) = &session.cancel
@@ -365,5 +369,9 @@ fn js_error(path: &str, mut session: SessionState, msg: String) -> FailedBuild {
     } else {
         BuildError::Js(format!("{path}: {msg}"))
     };
-    FailedBuild { error, logs: std::mem::take(&mut session.logs) }
+    FailedBuild {
+        error,
+        logs: std::mem::take(&mut session.logs),
+        deps: std::mem::take(&mut session.deps),
+    }
 }

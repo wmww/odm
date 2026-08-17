@@ -1,5 +1,5 @@
 use odm_ir::{Canonical, Hash, Mesh, Node};
-use odm_store::{Dep, MEMO_CAP, MEMO_PER_KEY, MemoEntry, MemoKey, Object, Store};
+use odm_store::{Dep, MEMO_CAP, MEMO_PER_KEY, MemoEntry, MemoKey, MemoOutput, Object, Store};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -85,7 +85,7 @@ fn memo_output_survives_gc() {
         key,
         MemoEntry {
             deps: vec![Dep::Cascade { key: "t".into(), value: Hash::of_bytes(b"0.0") }],
-            output: out,
+            output: MemoOutput::Output(out),
             logs: vec![],
         },
     );
@@ -95,6 +95,29 @@ fn memo_output_survives_gc() {
     store.memo_clear();
     store.gc();
     assert!(!store.contains(out));
+}
+
+/// A memoized failure pins nothing: whatever the failed build put in the
+/// store before throwing is unreachable and sweeps.
+#[test]
+fn memo_failure_pins_no_output() {
+    let store = Store::new();
+    let partial = store.put(mesh_obj(4.0));
+    let key = MemoKey { code: Hash::of_bytes(b"code"), args: Hash::of_bytes(b"args") };
+    store.memo_insert(
+        key,
+        MemoEntry {
+            deps: vec![],
+            output: MemoOutput::Failure {
+                kind: odm_store::MemoFailureKind::Js,
+                message: "boom".into(),
+            },
+            logs: vec![],
+        },
+    );
+    store.gc();
+    assert!(!store.contains(partial), "failure entries are not gc roots");
+    assert!(store.memo_get(&key).is_some(), "the entry itself survives");
 }
 
 /// The hazard a pin exists for: a memo entry pins a one-off build's output
@@ -130,7 +153,7 @@ fn memo_round_trip() {
             cascade: serde_json::Map::new(),
             outcome: odm_store::InvokeOutcome::Output(Hash::of_bytes(b"o")),
         }],
-        output: Hash::of_bytes(b"out"),
+        output: MemoOutput::Output(Hash::of_bytes(b"out")),
         logs: vec![],
     };
     store.memo_insert(key, entry.clone());
@@ -143,7 +166,7 @@ fn memo_round_trip() {
 fn t_entry(seed: u64) -> MemoEntry {
     MemoEntry {
         deps: vec![Dep::Cascade { key: "t".into(), value: Hash::of_bytes(&seed.to_le_bytes()) }],
-        output: Hash::of_bytes(&(!seed).to_le_bytes()),
+        output: MemoOutput::Output(Hash::of_bytes(&(!seed).to_le_bytes())),
         logs: vec![],
     }
 }
@@ -154,8 +177,8 @@ fn memo_keeps_entries_per_environment() {
     let key = MemoKey { code: Hash::of_bytes(b"c"), args: Hash::of_bytes(b"a") };
     let out0 = store.put(mesh_obj(0.0));
     let out1 = store.put(mesh_obj(1.0));
-    let e0 = MemoEntry { output: out0, ..t_entry(0) };
-    let e1 = MemoEntry { output: out1, ..t_entry(1) };
+    let e0 = MemoEntry { output: MemoOutput::Output(out0), ..t_entry(0) };
+    let e1 = MemoEntry { output: MemoOutput::Output(out1), ..t_entry(1) };
 
     store.memo_insert(key, e0.clone());
     store.memo_insert(key, e1.clone());
