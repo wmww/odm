@@ -12,6 +12,11 @@ discussions that followed. Cross-references note where plans touch.
   crate, alacritty_terminal, $SHELL at the project dir; not
   agent-specific, nothing runs by default). Tab placement means no
   overlap with agent-activity-view's chat-area real estate.
+- `js-diagnostics.md` — diagnostics surfacing (from the deleted issue,
+  claims re-validated 2026-08-17): fix duplicate log replay on late
+  memo invalidation, host warnings into the transcript, log-level enum,
+  and per-slot build status on poll with transition wakes for
+  `--follow`.
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
   separating translation. Corrects clearance.md's premise: manifold-csg
