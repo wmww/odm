@@ -14,6 +14,10 @@ discussions that followed. Cross-references note where plans touch.
   demonstrated need.
 - `agent-activity-view.md` — viewer cards showing the agent's last CLI
   action (render/raycast/inspect) behind the chat transcript.
+- `terminal.md` — terminal emulator tabs in the viewer (new `odm-term`
+  crate, alacritty_terminal, $SHELL at the project dir; not
+  agent-specific, nothing runs by default). Tab placement means no
+  overlap with agent-activity-view's chat-area real estate.
 - `signed-distance.md` — `clearance` upgraded to signed `distance`:
   exact positive gap (+closest points), penetration as a guaranteed
   separating translation. Corrects clearance.md's premise: manifold-csg
