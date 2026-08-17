@@ -546,6 +546,48 @@ fn logs_are_collected_per_pass() {
     assert!(lines2.contains(&"part.js: part building".to_string()), "{lines2:?}");
 }
 
+/// A late validation failure must not double-report the already-validated
+/// subtree: root's entry replays dep A's logs while validating, then dep B
+/// invalidates it and the rerun replays A again — the first replay rolls
+/// back. Counted, not `contains`: the duplicate passes a contains check.
+#[test]
+fn late_invalidation_does_not_duplicate_logs() {
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        "root.js",
+        r#"
+        export default function build(ctx) {
+            return odm.group(ctx.invoke('a.js', {}), ctx.invoke('b.js', {}));
+        }
+        "#,
+    );
+    write(
+        dir.path(),
+        "a.js",
+        "export default (ctx) => { console.log('a says hi'); return odm.box(1); }",
+    );
+    const B: &str = "export default (ctx) => odm.box(2);";
+    write(dir.path(), "b.js", B);
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
+
+    // B changes behavior: root's memo entry validates dep A (replaying its
+    // log), then invalidates on B and reruns.
+    write(dir.path(), "b.js", &B.replace("box(2)", "box(3)"));
+    let sync = e.sync().unwrap();
+    let result = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
+    let count = result.logs.iter().filter(|(_, l)| l.message == "a says hi").count();
+    assert_eq!(count, 1, "one replay, not one per validation attempt: {:?}", result.logs);
+    // a.js: hit once (the validation attempt's hit rolled back with the
+    // logs); b.js: rebuilt during validation (real work, kept in `built`),
+    // then hit on the rerun.
+    assert_eq!(result.stats.memo_hits, 2, "one hit each for a.js and b.js: {:?}", result.stats);
+    assert_eq!(result.stats.built.get("b.js").map(|(runs, _)| *runs), Some(1));
+}
+
 #[test]
 fn failed_build_logs_reach_the_pass() {
     let dir = tempfile::tempdir().unwrap();

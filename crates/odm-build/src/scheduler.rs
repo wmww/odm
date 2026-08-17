@@ -465,12 +465,28 @@ impl BuildEngine {
         loop {
             // Candidates are MRU-first; a candidate recorded under another
             // environment fails fast on its (up-front) cascade deps.
-            if let Some(entry) = self
-                .store
-                .memo_candidates(&key)
-                .into_iter()
-                .find(|e| self.validate(pass, chain, path, args_hash, &env, e))
-            {
+            if let Some(entry) = self.store.memo_candidates(&key).into_iter().find(|e| {
+                // Validation replays/reruns children via get_or_build; if a
+                // later dep then invalidates the entry, roll their logs (and
+                // hit counts) back — the rerun re-invokes the same children
+                // and would otherwise report everything twice. Safe: one
+                // pass's build tree is strictly single-threaded (nested
+                // invokes are inline, LIFO), so the marks are stable.
+                let logs_mark = pass.logs.lock().unwrap().len();
+                let hits_mark = pass.stats.lock().unwrap().memo_hits;
+                if self.validate(pass, chain, path, args_hash, &env, e) {
+                    return true;
+                }
+                pass.logs.lock().unwrap().truncate(logs_mark);
+                let mut stats = pass.stats.lock().unwrap();
+                let extra = stats.memo_hits - hits_mark;
+                stats.memo_hits = hits_mark;
+                drop(stats);
+                // Children actually *rebuilt* during the failed validation
+                // keep their run counts and time — that work was real.
+                self.stats.memo_hits.fetch_sub(extra, Ordering::Relaxed);
+                false
+            }) {
                 self.store.memo_promote(&key, &entry);
                 self.stats.memo_hits.fetch_add(1, Ordering::Relaxed);
                 pass.stats.lock().unwrap().memo_hits += 1;
