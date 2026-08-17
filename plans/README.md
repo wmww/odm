@@ -14,7 +14,9 @@ discussions that followed. Cross-references note where plans touch.
   overlap with agent-activity-view's chat-area real estate.
 - `js-diagnostics.md` — diagnostics surfacing (from the deleted issue;
   rethink pass 2026-08-17): fix duplicate log replay on late memo
-  invalidation, host warnings into the transcript, log-level enum,
+  invalidation, host warnings into the transcript, log-level enum + the
+  viewer's error/console panes merged devtools-style (thrown error =
+  last console entry),
   headless gains the build loop + watcher (precondition — nothing
   publishes headless today), per-slot build values on poll with
   value-change wakes for `--follow`, a failures-only health sweep over

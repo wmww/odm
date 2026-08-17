@@ -132,7 +132,7 @@ than riding any build result.
   Viewer-local render eprintlns (`viewer/mod.rs`) stay out of scope — the
   viewer is its own surface.
 
-## 3. Log levels: normalize, don't weaponize
+## 3. Log levels: normalize; one console for errors + logs
 
 Confirmed: `LogLine.level` is a freeform `String` set only by the shim
 (`framework/odm/index.js:683-693` — `log`/`debug`/`warn`/`error`, `info`
@@ -141,13 +141,30 @@ by string match with silent fallback (`viewer/mod.rs:1032-1037`); nothing
 filters; `console.error` doesn't fail builds (docs promise this —
 `docs/api/doohickeys.md:86-89`).
 
-**Decision:** this is mostly working as intended. Do only:
+**Decision:** the levels themselves are mostly working as intended. Do:
 - Make the level an enum (`Log`/`Debug`/`Warn`/`Error`) in
   `odm-store::LogLine`, converted at the `op_log` boundary (unknown →
   `Log`); viewer match becomes exhaustive. Levels are part of the
   memoized log output, so the enum lives store-side; on the CLI wire it
   still serializes as the same lowercase strings (`logs_json`), so no
   surface change. Contract instead of convention, no behavior change.
+- **One console pane, browser-devtools style** (decided 2026-08-17): the
+  viewer's two per-tab panes — "Build error" (`viewer/mod.rs:1005-1014`)
+  and "Console" (:1016-1045) — merge into one. The build's console lines
+  render in order, all levels together as today, and when the build
+  failed the thrown error is appended as a final error-styled entry
+  (`path: message`, monospace, JS stack included) — the throw *is*
+  chronologically the end of that build's output, exactly where a
+  browser console puts an uncaught exception. Presentation-only merge:
+  `Published.error` stays its own field — the agent surfaces (`status`,
+  `builds`, `CmdError`), last-good scene semantics, and the tab strip's
+  red label (the badge) all keep depending on error-vs-logs being
+  distinct data; only the user-facing rendering unifies. One fixed-height
+  collapsing section, open by default, shown whenever there are lines or
+  an error; header "Console (N)", red on a failed build, amber when any
+  warn/error line. Engine-host warnings deliberately do *not* land here
+  (item 2 puts them in the chat panel): the console is per-view build
+  output, warnings are session events.
 - Explicitly **keep**: no level filtering (1000-line cap is the only
   limit), `console.error` never fails or flags a build.
 
