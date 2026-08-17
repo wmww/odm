@@ -52,8 +52,9 @@ impl WebApp {
                 &[
                     theme::MenuEntry::item(Action::Frame, framing).shortcut("F"),
                     theme::MenuEntry::separator(),
-                    theme::MenuEntry::check(Action::Wireframe, "Wireframe", self.core.wireframe),
-                    theme::MenuEntry::check(Action::Xray, "X-Ray", self.core.xray),
+                    theme::MenuEntry::check(Action::Wireframe, "Wireframe", self.core.wireframe)
+                        .shortcut("W"),
+                    theme::MenuEntry::check(Action::Xray, "X-Ray", self.core.xray).shortcut("X"),
                     theme::MenuEntry::check(Action::Grid, "Grid", self.core.grid),
                 ],
             );

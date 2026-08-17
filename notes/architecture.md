@@ -220,7 +220,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (per-tab state; persistence stays with the host), and `Viewer` — the
   shared per-tab machinery (poll published → flatten + tree snapshot,
   viewport paint, orbit/pan/zoom, solid/wire picking, frame, transport,
-  the app-wide wireframe/x-ray/grid toggles). Parameterized over the
+  the app-wide wireframe/x-ray/grid toggles). Viewport keys (gated off
+  while a text field or host chrome holds the keyboard): F frame, X
+  x-ray, W wireframe. Parameterized over the
   `Engine` trait: `set_view` (submit a view for a slot, latest-wins),
   `published` (the slot's last result — `Published` is defined here,
   state.rs re-exports it), `store`, `raycast`, `set_selection` (hosts

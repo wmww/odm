@@ -46,8 +46,8 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
                 &[
                     MenuEntry::item(Action::Frame, framing).shortcut("F"),
                     MenuEntry::separator(),
-                    MenuEntry::check(Action::Wireframe, "Wireframe", app.core.wireframe),
-                    MenuEntry::check(Action::Xray, "X-Ray", app.core.xray),
+                    MenuEntry::check(Action::Wireframe, "Wireframe", app.core.wireframe).shortcut("W"),
+                    MenuEntry::check(Action::Xray, "X-Ray", app.core.xray).shortcut("X"),
                     MenuEntry::check(Action::Grid, "Grid", app.core.grid),
                     MenuEntry::check(Action::Activity, "Agent Activity", app.activity.enabled),
                 ],

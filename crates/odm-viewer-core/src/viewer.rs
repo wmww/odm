@@ -383,11 +383,19 @@ impl Viewer {
         }
         // Not while a field has the caret — "F" is a letter in a path before
         // it is a shortcut.
-        if shortcuts
-            && !ui.ctx().egui_wants_keyboard_input()
-            && ui.input(|i| i.key_pressed(egui::Key::F))
-        {
-            self.frame_scene(tab);
+        if shortcuts && !ui.ctx().egui_wants_keyboard_input() {
+            let pressed = |k| ui.input(|i| i.key_pressed(k));
+            if pressed(egui::Key::F) {
+                self.frame_scene(tab);
+            }
+            if pressed(egui::Key::X) {
+                self.xray = !self.xray;
+                self.needs_render = true;
+            }
+            if pressed(egui::Key::W) {
+                self.wireframe = !self.wireframe;
+                self.needs_render = true;
+            }
         }
         if response.clicked()
             && let Some(pos) = response.interact_pointer_pos()
