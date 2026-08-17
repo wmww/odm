@@ -591,6 +591,14 @@ mod tests {
         assert!(out.contains("\"count\": 3,") || out.contains("\"count\": 3}"), "{out}");
         // Relative precision: a genuinely tiny value is not snapped to zero.
         assert!(out.contains("3e-13"), "{out}");
+
+        // Vector components round too: on the one-line path, and on the
+        // broken-apart path once the array outgrows the line budget.
+        let flat_out = pretty(&json!({ "position": [25.600000000000005, -1e-16, 12.5] }));
+        assert!(flat_out.contains("[25.6, -1e-16, 12.5]"), "{flat_out}");
+        let broken = pretty(&json!({ "matrix": vec![25.600000000000005; 24] }));
+        assert!(broken.lines().count() > 3, "{broken}");
+        assert!(broken.contains("25.6") && !broken.contains("25.60"), "{broken}");
     }
 
     #[test]
