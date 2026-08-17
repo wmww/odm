@@ -1,0 +1,21 @@
+# Repo task runner (`cargo xtask …`, alias in .cargo/config.toml). One task
+# so far: build-web-template — the wasm half of `odm export --web`, kept out
+# of normal builds because its Manifold lane needs clang + wasm-ld +
+# wasm-cxx-shim (see crates/odm-web).
+[package]
+name = "xtask"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+# For TEMPLATE_STAMP — the same compile-time content hash the exporter
+# checks, so a freshly built template always matches a freshly built odm.
+odm-export = { path = "../odm-export" }
+anyhow.workspace = true
+serde_json = "1"

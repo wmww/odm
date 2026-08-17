@@ -1,0 +1,28 @@
+# Native half of the web export (plans/web-export.md): the bundler,
+# manifest writer, and template lookup behind `odm export --web`. The
+# browser half (the template) is crates/odm-web, built by xtask only.
+[package]
+name = "odm-export"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+# unit tests live in src/transform.rs and src/bundle.rs
+test = true
+
+[dependencies]
+odm-ir = { path = "../odm-ir" }
+odm-store = { path = "../odm-store" }
+odm-kernel = { path = "../odm-kernel" }
+odm-build = { path = "../odm-build" }
+odm-js = { path = "../odm-js" }
+serde_json = "1"
+include_dir = "0.7"
+
+[build-dependencies]
+blake3.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

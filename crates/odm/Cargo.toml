@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 odm-cli = { path = "../odm-cli" }
 odm-engine = { path = "../odm-engine" }
+odm-export = { path = "../odm-export" }
 anyhow.workspace = true
 
 [target.'cfg(unix)'.dependencies]

@@ -11,6 +11,7 @@ fn usage() -> String {
 odm — CAD/3D modelling for agents
 
 usage: odm run [<project-dir>] [--headless]        serve a project
+       odm export --web <out-dir> [<project-dir>]  export a static web viewer
        odm [--project <dir>] <command> [options]   query a running engine
 
 A project is a directory with an `odm.toml` in it. Client commands take the
@@ -56,12 +57,77 @@ fn dispatch(args: &[String]) -> anyhow::Result<i32> {
             Ok(2)
         }
         Some("run") => run_engine(&args[1..]),
+        Some("export") => export_site(&args[1..]),
         _ if odm_cli::is_help(args) => {
             print!("{}", usage());
             Ok(0)
         }
         _ => odm_cli::run(args),
     }
+}
+
+/// `odm export --web <out-dir> [<project-dir>] [--view <path>] [--template
+/// <dir>] [--force]` — standalone (no engine needed): sources + framework +
+/// the prebuilt web template are all it reads.
+fn export_site(args: &[String]) -> anyhow::Result<i32> {
+    let mut out: Option<PathBuf> = None;
+    let mut project: Option<PathBuf> = None;
+    let mut opts = odm_export::ExportOptions::default();
+    let mut web = false;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--web" => {
+                web = true;
+                out = Some(PathBuf::from(
+                    it.next().ok_or_else(|| anyhow::anyhow!("--web takes the output directory"))?,
+                ));
+            }
+            "--view" => {
+                opts.view_path = Some(
+                    it.next().ok_or_else(|| anyhow::anyhow!("--view takes a doohickey path"))?.clone(),
+                );
+            }
+            "--template" => {
+                opts.template = Some(PathBuf::from(
+                    it.next().ok_or_else(|| anyhow::anyhow!("--template takes a directory"))?,
+                ));
+            }
+            "--force" => opts.force = true,
+            "--help" | "-h" => {
+                print!("{}", usage());
+                return Ok(0);
+            }
+            other if !other.starts_with('-') => {
+                if project.is_some() {
+                    bail!("export takes at most one project dir");
+                }
+                project = Some(PathBuf::from(other));
+            }
+            other => bail!("unknown option {other} for export; run `odm --help`"),
+        }
+    }
+    if !web {
+        bail!("export needs --web <out-dir> (the only export target so far)");
+    }
+    let out = out.expect("set with --web");
+    // Same resolution as `run`: the dir named, or cwd — never an ancestor.
+    let project = match project {
+        Some(p) => odm_cli::project_dir(p)?,
+        None => odm_cli::project_dir(std::env::current_dir()?)?,
+    };
+    let report = odm_export::export_web(&project, &out, &opts).map_err(|e| anyhow::anyhow!(e))?;
+    for w in &report.warnings {
+        eprintln!("warning: {w}");
+    }
+    println!(
+        "exported {} ({} doohickeys) to {}",
+        project.display(),
+        report.files,
+        report.out.display()
+    );
+    println!("serve it with any static file server, e.g.: python -m http.server -d {}", report.out.display());
+    Ok(0)
 }
 
 fn run_engine(args: &[String]) -> anyhow::Result<i32> {
