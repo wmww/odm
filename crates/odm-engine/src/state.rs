@@ -7,10 +7,10 @@ use crate::session::AgentQuestion;
 use odm_build::{BuildEngine, FailureKind, InputReport, PassResult, SyncResult, View};
 use odm_js::{JsEnv, LogLine};
 use odm_kernel::Kernel;
-use odm_render::Renderer;
+use odm_render::{RenderScene, Renderer};
 use odm_store::{Object, Store};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -89,6 +89,41 @@ pub struct TranscriptEntry {
     pub view: Option<Value>,
 }
 
+/// An agent CLI action the viewer can visualize (the activity view). Events
+/// are self-contained — they carry flattened scenes / pixels, never store
+/// hashes, so memo eviction and GC can't invalidate them.
+pub struct ActivityEvent {
+    pub seq: u64,
+    /// e.g. "raycast wheel.js", "render root.js".
+    pub caption: String,
+    pub kind: ActivityKind,
+}
+
+pub enum ActivityKind {
+    Raycast {
+        scene: Arc<RenderScene>,
+        origin: [f64; 3],
+        dir: [f64; 3],
+        /// World-space hit position, if the ray hit.
+        hit: Option<[f64; 3]>,
+    },
+    Inspect {
+        scene: Arc<RenderScene>,
+        /// Node id within the scene ("" = root).
+        node: String,
+        /// The node's world AABB.
+        bounds: Option<([f64; 3], [f64; 3])>,
+    },
+    Render {
+        rgba: Arc<Vec<u8>>,
+        width: u32,
+        height: u32,
+    },
+}
+
+/// Bounds activity memory: pushes past this drop the oldest event.
+const ACTIVITY_CAP: usize = 8;
+
 /// One taken message: transcript index, text, send-time view snapshot.
 pub(crate) type PolledMessage = (usize, String, Option<Value>);
 
@@ -139,6 +174,9 @@ pub struct EngineState {
     /// Viewer selection, in the order it was picked: (node id, name).
     pub(crate) selection: Mutex<Vec<(String, Option<String>)>>,
     chat: Chat,
+    /// Agent actions awaiting the viewer's activity view, oldest first.
+    activity: Mutex<VecDeque<ActivityEvent>>,
+    activity_seq: AtomicU64,
     /// Wakes the viewer when `published` changes (unset when headless).
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// Set by [`EngineState::stop`]; the loops below check it and return.
@@ -172,6 +210,8 @@ impl EngineState {
             queue: BuildQueue::default(),
             selection: Mutex::new(Vec::new()),
             chat: Chat::default(),
+            activity: Mutex::new(VecDeque::new()),
+            activity_seq: AtomicU64::new(0),
             wake: Mutex::new(None),
             stopping: AtomicBool::new(false),
             on_stop: Mutex::new(Vec::new()),
@@ -323,6 +363,32 @@ impl EngineState {
 
     pub fn set_selection(&self, sel: Vec<(String, Option<String>)>) {
         *self.selection.lock().unwrap() = sel;
+    }
+
+    /// Whether a viewer is showing this engine (its wake hook is registered).
+    /// Headless runs skip activity capture entirely.
+    pub(crate) fn viewer_attached(&self) -> bool {
+        self.wake.lock().unwrap().is_some()
+    }
+
+    /// Queue an agent action for the activity view. No-op when headless.
+    pub(crate) fn push_activity(&self, caption: String, kind: ActivityKind) {
+        if !self.viewer_attached() {
+            return;
+        }
+        let seq = self.activity_seq.fetch_add(1, Ordering::SeqCst);
+        let mut q = self.activity.lock().unwrap();
+        if q.len() >= ACTIVITY_CAP {
+            q.pop_front();
+        }
+        q.push_back(ActivityEvent { seq, caption, kind });
+        drop(q);
+        self.wake();
+    }
+
+    /// Drain queued activity events, oldest first (the viewer's `ui` pass).
+    pub fn take_activity(&self) -> Vec<ActivityEvent> {
+        self.activity.lock().unwrap().drain(..).collect()
     }
 
     /// A message from the user, queued for the next `odm poll`. `view` is
@@ -860,6 +926,33 @@ pub(crate) mod tests {
         assert_eq!(v["messages"][0]["text"], "look at this");
         assert_eq!(v["messages"][0]["view"], snap);
         assert_eq!(v["messages"][1], json!({"text": "also"}));
+    }
+
+    fn render_event() -> ActivityKind {
+        ActivityKind::Render { rgba: Arc::new(vec![0; 4]), width: 1, height: 1 }
+    }
+
+    #[test]
+    fn activity_is_dropped_when_headless() {
+        let state = engine();
+        state.push_activity("render root.js".into(), render_event());
+        assert!(state.take_activity().is_empty(), "no viewer, no events");
+    }
+
+    #[test]
+    fn activity_queues_caps_and_drains() {
+        let state = engine();
+        state.set_wake(Arc::new(|| {}));
+        for i in 0..(ACTIVITY_CAP + 3) {
+            state.push_activity(format!("render {i}.js"), render_event());
+        }
+        let events = state.take_activity();
+        assert_eq!(events.len(), ACTIVITY_CAP, "oldest events drop past the cap");
+        // Oldest-first, seqs contiguous, the first 3 gone.
+        let seqs: Vec<u64> = events.iter().map(|e| e.seq).collect();
+        assert_eq!(seqs, (3..(ACTIVITY_CAP as u64 + 3)).collect::<Vec<_>>());
+        assert_eq!(events[0].caption, "render 3.js");
+        assert!(state.take_activity().is_empty(), "drain empties the queue");
     }
 
     #[test]

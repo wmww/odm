@@ -15,7 +15,7 @@ mod wire;
 
 pub use camera::{Camera, Projection, ResolvedCamera};
 pub use flatten::{DEFAULT_COLOR, flatten_node, flatten_scene, mesh_aabb, node_id};
-pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, Renderer};
+pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, Renderer, encode_png};
 pub use wire::{WireHit, mesh_edges, pick_wire};
 
 /// Re-exported so the viewer uses the exact same wgpu version.
@@ -67,6 +67,16 @@ pub struct RenderScene {
     pub bounds: Option<([f64; 3], [f64; 3])>,
 }
 
+/// A world-space segment drawn over the scene with the wire pipeline:
+/// screen-space `WIRE_WIDTH_PX` wide, depth-tested like wires.
+#[derive(Clone, Copy, Debug)]
+pub struct OverlaySeg {
+    pub a: [f64; 3],
+    pub b: [f64; 3],
+    /// Linear RGBA.
+    pub color: [f32; 4],
+}
+
 pub struct RenderOptions {
     pub width: u32,
     pub height: u32,
@@ -88,6 +98,9 @@ pub struct RenderOptions {
     /// off; there is no AA otherwise). The internal target must fit the
     /// device's max texture dimension.
     pub supersample: u32,
+    /// Extra segments drawn after the scene geometry (ray visualizations,
+    /// markers).
+    pub overlays: Vec<OverlaySeg>,
 }
 
 impl RenderOptions {
@@ -102,6 +115,7 @@ impl RenderOptions {
             opacity: 1.0,
             peel_layers: 4,
             supersample: 1,
+            overlays: Vec::new(),
         }
     }
 }

@@ -4,7 +4,7 @@
 use crate::requests::{self, Look, Ray, RenderFrame, RenderReq, Request, ViewSel};
 use crate::scene;
 use crate::server::Conn;
-use crate::state::{EngineState, PollOutcome, Published};
+use crate::state::{ActivityKind, EngineState, PollOutcome, Published};
 use odm_build::{
     BuildFailure, FailureKind, InputReport, PassResult, SyncResult, View, check_input_names,
 };
@@ -14,7 +14,7 @@ use odm_render::{Camera, Projection, RenderOptions, RenderScene, flatten_scene, 
 use odm_store::{Object, RootPin};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
-use std::sync::MutexGuard;
+use std::sync::{Arc, MutexGuard};
 use std::sync::atomic::Ordering;
 
 /// What a query targets: a doohickey path (default: `root.js`, when it
@@ -505,13 +505,26 @@ impl EngineState {
 
         let mut slot = self.renderer()?;
         let renderer = slot.as_mut().unwrap();
-        let png = renderer
-            .render_png(&fs.scene, &opts)
-            .map_err(|e| CmdError::new("render", e.to_string()))?;
+        // With a viewer attached, keep the RGBA for the activity view; the
+        // headless path skips the extra copy and encodes directly.
+        let render_err = |e: odm_render::RenderError| CmdError::new("render", e.to_string());
+        let (png, rgba) = if self.viewer_attached() {
+            let rgba = renderer.render_rgba(&fs.scene, &opts).map_err(render_err)?;
+            let png = odm_render::encode_png(&rgba, width, height).map_err(render_err)?;
+            (png, Some(rgba))
+        } else {
+            (renderer.render_png(&fs.scene, &opts).map_err(render_err)?, None)
+        };
         // Drop GPU buffers for meshes not in this scene (unbounded otherwise).
         renderer.prune_cache(&|h| fs.scene.meshes.contains_key(h));
         drop(slot);
 
+        if let Some(rgba) = rgba {
+            self.push_activity(
+                format!("render {}", fs.view.path),
+                ActivityKind::Render { rgba: Arc::new(rgba), width, height },
+            );
+        }
         let out_path = self.write_render(&req.out, &png)?;
         let mut o = Map::new();
         o.insert("path".into(), json!(out_path.display().to_string()));
@@ -747,6 +760,17 @@ impl EngineState {
                 }
             }
         }
+        // Activity view: one extra flatten per inspect, viewer-attached only
+        // (commands run at build quiescence, so this is cheap enough).
+        if self.viewer_attached()
+            && let Ok(scene) = odm_render::flatten_node(&engine.store, &root)
+        {
+            let bounds = scene::subtree_bounds(&engine.store, &root, addr).ok().flatten();
+            self.push_activity(
+                format!("inspect {}", view.path),
+                ActivityKind::Inspect { scene: Arc::new(scene), node: id, bounds },
+            );
+        }
         let mut o = Map::new();
         o.insert("node".into(), node);
         Ok(view_response(&view, &result, &report, stats, o))
@@ -756,8 +780,10 @@ impl EngineState {
         let (_sync, view, result, report, _pin) = self.query_view(&req)?;
         let root = self.root_node(&result)?;
         let engine = self.build_engine();
-        let scene = odm_render::flatten_node(&engine.store, &root)
-            .map_err(|e| CmdError::new("internal", e.to_string()))?;
+        let scene = Arc::new(
+            odm_render::flatten_node(&engine.store, &root)
+                .map_err(|e| CmdError::new("internal", e.to_string()))?,
+        );
         let hits: Vec<Value> = rays
             .iter()
             .map(|r| {
@@ -765,6 +791,21 @@ impl EngineState {
                     .unwrap_or(Value::Null)
             })
             .collect();
+        for (ray, hit) in rays.iter().zip(&hits) {
+            let hit_pos = hit.get("point").and_then(|p| {
+                let v: Vec<f64> = p.as_array()?.iter().filter_map(Value::as_f64).collect();
+                <[f64; 3]>::try_from(v).ok()
+            });
+            self.push_activity(
+                format!("raycast {}", view.path),
+                ActivityKind::Raycast {
+                    scene: scene.clone(),
+                    origin: ray.origin,
+                    dir: ray.dir,
+                    hit: hit_pos,
+                },
+            );
+        }
         let mut o = Map::new();
         o.insert("hits".into(), json!(hits));
         Ok(view_response(&view, &result, &report, stats, o))
@@ -1116,6 +1157,78 @@ fn logs_json(logs: &[(String, LogLine)]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The agent-facing query commands feed the viewer's activity view —
+    /// but only when a viewer is attached.
+    #[test]
+    fn agent_commands_push_activity_events() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("root.js"),
+            "export default function build(ctx) { return odm.box([1, 1, 1]); }",
+        )
+        .unwrap();
+        let state =
+            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
+        let mut conn = Conn::new(state.clone());
+
+        // Headless: no viewer, no events.
+        let v = state.handle(json!({"cmd": "inspect"}), &mut conn);
+        assert_eq!(v["ok"], json!(true), "{v}");
+        assert!(state.take_activity().is_empty(), "headless pushes nothing");
+
+        state.set_wake(Arc::new(|| {}));
+        let v = state.handle(json!({"cmd": "inspect"}), &mut conn);
+        assert_eq!(v["ok"], json!(true), "{v}");
+        let events = state.take_activity();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].caption, "inspect root.js");
+        match &events[0].kind {
+            ActivityKind::Inspect { scene, node, bounds } => {
+                assert!(!scene.instances.is_empty(), "event scene is flattened and populated");
+                assert_eq!(node, "");
+                assert!(bounds.is_some(), "a box has world bounds");
+            }
+            _ => panic!("expected an inspect event"),
+        }
+
+        let v = state.handle(
+            json!({"cmd": "raycast", "rays": [
+                {"origin": [0.25, 0.25, 10.0], "dir": [0, 0, -1]},
+                {"origin": [100.0, 100.0, 10.0], "dir": [0, 0, -1]},
+            ]}),
+            &mut conn,
+        );
+        assert_eq!(v["ok"], json!(true), "{v}");
+        let events = state.take_activity();
+        assert_eq!(events.len(), 2, "one event per ray");
+        assert_eq!(events[0].caption, "raycast root.js");
+        let hits: Vec<bool> = events
+            .iter()
+            .map(|e| match &e.kind {
+                ActivityKind::Raycast { hit, .. } => hit.is_some(),
+                _ => panic!("expected raycast events"),
+            })
+            .collect();
+        assert_eq!(hits, [true, false], "hit position rides the event");
+
+        // Render events need a GPU adapter; skip quietly without one.
+        let v = state.handle(json!({"cmd": "render", "width": 64, "height": 48}), &mut conn);
+        if v["ok"] == json!(true) {
+            let events = state.take_activity();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].caption, "render root.js");
+            match &events[0].kind {
+                ActivityKind::Render { rgba, width, height } => {
+                    assert_eq!((*width, *height), (64, 48));
+                    assert_eq!(rgba.len(), 64 * 48 * 4);
+                }
+                _ => panic!("expected a render event"),
+            }
+        } else {
+            eprintln!("render event check skipped (no GPU?): {v}");
+        }
+    }
 
     fn cam(body: &str) -> Result<Camera, String> {
         let req = format!(r#"{{"cmd": "render", {}}}"#, body);

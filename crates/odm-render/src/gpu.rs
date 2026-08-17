@@ -463,7 +463,7 @@ impl Renderer {
         // Slot alpha is the *effective* alpha: node alpha x render opacity.
         let opacity = opts.opacity.clamp(0.0, 1.0);
         let n_inst = scene.instances.len();
-        let n_slots = n_inst + 2;
+        let n_slots = n_inst + 2 + opts.overlays.len();
         let stride = self.instance_stride as usize;
         let mut inst_data = vec![0u8; n_slots * stride];
         fn write_slot(
@@ -512,6 +512,11 @@ impl Renderer {
         ];
         write_slot(&mut inst_data, stride, grid_minor_slot, &identity, &GRID_MINOR_COLOR, &minor_params);
         write_slot(&mut inst_data, stride, grid_major_slot, &identity, &GRID_MAJOR_COLOR, &grid_params);
+        // Overlay segments: one slot each (own color), wire width.
+        let overlay_base_slot = grid_major_slot + 1;
+        for (j, seg) in opts.overlays.iter().enumerate() {
+            write_slot(&mut inst_data, stride, overlay_base_slot + j, &identity, &seg.color, &wire_params);
+        }
 
         let inst_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("instances"),
@@ -545,12 +550,26 @@ impl Renderer {
             (minor, g.minor.len() as u32 / 6, major, g.major.len() as u32 / 6)
         });
 
+        // Overlay endpoints: one WIRE_STRIDE instance per segment.
+        let overlay_buf = (!opts.overlays.is_empty()).then(|| {
+            let mut ends: Vec<f32> = Vec::with_capacity(opts.overlays.len() * 6);
+            for seg in &opts.overlays {
+                ends.extend(seg.a.iter().map(|&p| p as f32));
+                ends.extend(seg.b.iter().map(|&p| p as f32));
+            }
+            self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("overlays"),
+                contents: bytemuck::cast_slice(&ends),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
+
         // Wireframe mode has no fills at all; its wires are line geometry.
         let translucent_set = if opts.wireframe { Vec::new() } else { translucent_set };
         // All line geometry is translucent by construction (analytic AA
         // coverage alpha), so it composites through the peeler like any
         // translucent surface — "wire behind grid" just works.
-        let has_lines = grid_bufs.is_some() || opts.wireframe;
+        let has_lines = grid_bufs.is_some() || opts.wireframe || overlay_buf.is_some();
 
         let t = self.targets.as_ref().expect("ensure_targets ran");
         let mut encoder =
@@ -650,6 +669,13 @@ impl Renderer {
                         pass.set_bind_group(1, &inst_bg, &[(i * stride) as u32]);
                         pass.set_vertex_buffer(0, wire_buf.slice(..));
                         pass.draw(0..4, 0..*wire_count);
+                    }
+                }
+                if let Some(buf) = &overlay_buf {
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    for j in 0..opts.overlays.len() {
+                        pass.set_bind_group(1, &inst_bg, &[((overlay_base_slot + j) * stride) as u32]);
+                        pass.draw(0..4, j as u32..j as u32 + 1);
                     }
                 }
             };
@@ -1162,7 +1188,7 @@ fn make_pipeline(
     })
 }
 
-pub(crate) fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, RenderError> {
+pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, RenderError> {
     let mut out = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut out, width, height);

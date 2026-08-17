@@ -97,6 +97,7 @@ fn option_variants_render() {
         opacity: 1.0,
         peel_layers: 4,
         supersample: 1,
+        overlays: Vec::new(),
     };
     renderer.render_png(&scene, &opts).unwrap();
 
@@ -308,6 +309,26 @@ fn transparent_background_png_alpha() {
     // A corner shows pure transparent background.
     let (_, _, pixels) = decode(&png);
     assert_eq!(&pixels[..4], &[0, 0, 0, 0], "empty pixels stay fully transparent");
+}
+
+#[test]
+fn overlay_segments_draw_depth_tested() {
+    let Some(mut renderer) = renderer_or_skip() else { return };
+    // Opaque red slab; a green overlay above it and a blue one below it,
+    // both crossing the image center. Top-down: green wins, blue is hidden.
+    let (store, root) = stacked_scene(&[(0.0, [1.0, 0.0, 0.0, 1.0])]);
+    let scene = flatten_scene(&store, root).unwrap();
+    let mut opts = top_down_opts(160, 160);
+    opts.overlays = vec![
+        odm_render::OverlaySeg { a: [-5.0, 0.0, 2.0], b: [5.0, 0.0, 2.0], color: [0.0, 1.0, 0.0, 1.0] },
+        odm_render::OverlaySeg { a: [0.0, -5.0, -2.0], b: [0.0, 5.0, -2.0], color: [0.0, 0.0, 1.0, 1.0] },
+    ];
+    let png = renderer.render_png(&scene, &opts).unwrap();
+    let [r, g, b, _] = center_pixel(&png);
+    assert!(g > 180 && b < 60, "overlay above the slab must show green, got {:?}", [r, g, b]);
+
+    let png2 = renderer.render_png(&scene, &opts).unwrap();
+    assert_eq!(png, png2, "overlay renders must be byte-identical");
 }
 
 #[test]
