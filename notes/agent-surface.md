@@ -81,6 +81,48 @@ grammar. Standing decisions:
   unbuilt: heuristic, false-positives on grounded/intentionally-gapped
   parts.
 
+## Render camera: one parameter set (landed 2026-08-17)
+
+From plans/render-camera.md. A camera is target + gaze direction (or
+eye) + distance + up + projection + fov/ortho_height; every request
+field is independently given or defaulted, and the defaults are the
+auto fit of the framed bounds. No `Auto | Explicit` modes —
+`odm_render::Camera` is a struct of Options with one `resolve(bounds,
+aspect)`; the viewer's orbit camera is just a fully-given one.
+
+- `look` keywords (`top/bottom/front/back/left/right`) are the six
+  drafting views and imply **ortho** by spelling; a `look` *vector* is
+  perspective. `ortho` is tri-state and beats the implication both
+  ways. Keyword→axis: `front` gazes along +y, `right` along −x,
+  `top` along −z (Z-up; matches Blender/CAD drafting).
+- `focus: "<node>"` fits that subtree's bounds (camera only — the whole
+  scene still draws); `zoom` scales *fitted* values only.
+- Over-determined combos are errors, not precedence: `eye`+`look`,
+  `eye`+`zoom`, `zoom`+`ortho_height`, `eye`==`target`. A parameter of
+  the other projection (`fov` when ortho, `ortho_height` when
+  perspective) errors instead of being silently ignored — the old
+  surface's sin.
+- Every render response echoes the resolved `camera` —
+  `eye`/`target`/`up` + `fov` or `ortho`+`ortho_height`, the request's
+  own spelling, f32-shortest-rounded (mesh data is f32; kills the
+  17-digit noise). Paste-back re-renders byte-identically (verified).
+- Poll messages each carry `view` (was one top-level `view` per poll):
+  tab path + inputs + selection + `camera` in the same spelling,
+  **stamped by the viewer at send time** (per design-decisions "sent,
+  not sampled") — a poll can collect long after the send.
+- Prompt teaches the `look` keywords only (it replaced the
+  `direction`+`ortho` pair); `focus`/`zoom`/`eye`/`target`/`up`/`fov`/
+  `ortho_height` are docs-only.
+- `direction` is deleted; `requests.rs::removed_field` (new mechanism,
+  parallel to removed commands) redirects it to `look`.
+- The default direction stays the skewed `[-1,-1.4,-0.9]` — equal-angle
+  `[-1,-1,-1]` degenerately stacks projected edges of axis-aligned
+  models. No name for the default view.
+- Camera nodes (plans/camera-nodes.md, shelved) slot in later as
+  another *source of defaults* in the same overlay; render-frames'
+  shared framing = compute the fitted defaults once from the union of
+  the frames' bounds.
+
 ## Standing cuts (don't reintroduce)
 
 - No standalone `sync` command: every command syncs first; `status` is the

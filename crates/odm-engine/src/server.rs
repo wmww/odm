@@ -243,7 +243,7 @@ mod tests {
         wait_until("the poll to notice", || state.listeners() == 0);
 
         // A message sent now must survive for the *next* poll.
-        state.send_message("still here?".into());
+        state.send_message("still here?".into(), None);
         let mut client = UnixStream::connect(&sock).unwrap();
         client.write_all(b"{\"cmd\":\"poll\"}\n").unwrap();
         let mut reply = String::new();
@@ -269,7 +269,7 @@ mod tests {
         let mut reader = BufReader::new(client.try_clone().unwrap());
 
         for (i, text) in ["first", "second"].iter().enumerate() {
-            state.send_message((*text).into());
+            state.send_message((*text).into(), None);
             client.write_all(b"{\"cmd\":\"poll\"}\n").unwrap();
             let mut reply = String::new();
             reader.read_line(&mut reply).unwrap();
@@ -294,7 +294,7 @@ mod tests {
     fn an_acknowledged_message_is_retired() {
         let state = engine();
         let (_dir, sock) = serving(&state);
-        state.send_message("hello".into());
+        state.send_message("hello".into(), None);
 
         let mut client = UnixStream::connect(&sock).unwrap();
         let mut reader = BufReader::new(client.try_clone().unwrap());

@@ -20,9 +20,7 @@ use crate::theme;
 use eframe::egui;
 use odm_render::math::{cross, normalize};
 use odm_render::wgpu;
-use odm_render::{
-    Camera, Instance, Projection, RenderOptions, RenderScene, Renderer, flatten_node,
-};
+use odm_render::{Camera, Instance, RenderOptions, RenderScene, Renderer, flatten_node};
 use odm_store::Object;
 use serde_json::Value;
 use std::sync::Arc;
@@ -89,11 +87,12 @@ impl Orbit {
     }
 
     fn camera(&self) -> Camera {
-        Camera::Explicit {
-            eye: self.eye(),
-            target: self.target,
-            up: [0.0, 0.0, 1.0],
-            projection: Projection::Perspective { fov_y_deg: FOV_Y_DEG },
+        Camera {
+            eye: Some(self.eye()),
+            target: Some(self.target),
+            up: Some([0.0, 0.0, 1.0]),
+            fov_y_deg: Some(FOV_Y_DEG),
+            ..Camera::default()
         }
     }
 
@@ -938,12 +937,38 @@ impl ViewerApp {
         if input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             let text = self.chat_input.trim().to_owned();
             if !text.is_empty() {
-                self.state().send_message(text);
+                // Stamped now: the snapshot must be what the user sees as
+                // they hit Enter, not whatever a later poll happens to find.
+                let snapshot = self.view_snapshot();
+                self.state().send_message(text, Some(snapshot));
             }
             self.chat_input.clear();
             // Enter sends *and* keeps the caret, so a reply can follow.
             input.request_focus();
         }
+    }
+
+    /// What the user is looking at, attached to each chat message they send:
+    /// the tab's view (path + set inputs), their selection, and the camera —
+    /// in the render request's explicit spelling, so the agent replays this
+    /// exact view by pasting the numbers into `odm render`.
+    fn view_snapshot(&self) -> Value {
+        let tab = self.tab();
+        let mut inputs = tab.set_args.clone();
+        inputs.extend(tab.set_cascade.clone());
+        let orbit = &tab.orbit;
+        serde_json::json!({
+            "slot": tab.slot,
+            "path": tab.path,
+            "inputs": inputs,
+            "selection": crate::commands::selection_json(&tab.selected),
+            "camera": crate::commands::camera_json(
+                orbit.eye(),
+                orbit.target,
+                [0.0, 0.0, 1.0],
+                &odm_render::Projection::Perspective { fov_y_deg: FOV_Y_DEG },
+            ),
+        })
     }
 
     fn bottom_ui(&mut self, ui: &mut egui::Ui) {

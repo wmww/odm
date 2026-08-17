@@ -83,16 +83,34 @@ pub(crate) struct RenderReq {
     pub opacity: Option<f64>,
     /// Render k x larger internally, box-downsample at the end.
     pub supersample: Option<f64>,
-    #[serde(default)]
-    pub ortho: bool,
+    // One camera parameter set, no modes: each field is independently given
+    // or defaulted by fitting the framed bounds (commands.rs::camera_from).
+    pub look: Option<Look>,
+    pub focus: Option<String>,
+    pub zoom: Option<f64>,
+    /// Tri-state: explicit beats what `look` implies (keyword = ortho).
+    pub ortho: Option<bool>,
     pub eye: Option<[f64; 3]>,
     pub target: Option<[f64; 3]>,
     pub up: Option<[f64; 3]>,
-    pub direction: Option<[f64; 3]>,
     pub fov: Option<f64>,
     pub ortho_height: Option<f64>,
     #[serde(default)]
     pub stats: bool,
+}
+
+/// `look`: one of the six drafting-view keywords, or a gaze vector —
+/// unambiguous by JSON type. Keyword validity is checked in `camera_from`,
+/// where the error can list them.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(
+    untagged,
+    expecting = "a view keyword (\"top\", \"bottom\", \"front\", \"back\", \"left\", \
+                 \"right\") or a direction [x,y,z]"
+)]
+pub(crate) enum Look {
+    Named(String),
+    Vector([f64; 3]),
 }
 
 fn default_width() -> f64 {
@@ -258,7 +276,8 @@ const SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "render",
-        summary: "render a PNG; prints its path",
+        summary: "render a PNG; prints its path and echoes the resolved camera \
+                  (`eye`/`target`/`up` + `fov` or `ortho_height` — nudge and paste back)",
         view: true,
         fields: &[
             f("width", "number", "pixels, 16..=8192 (default 1024)"),
@@ -288,21 +307,38 @@ const SPECS: &[CommandSpec] = &[
                  demand, none by default (integer 1..=8; k\u{d7}width/height must fit \
                  the GPU's texture limit)",
             ),
-            f("ortho", "bool", "orthographic projection"),
             f(
-                "direction",
-                "[x,y,z]",
-                "auto-framed camera looking along this vector (`[0,0,-1]` = top view); \
-                 default isometric",
+                "look",
+                "keyword | [x,y,z]",
+                "`\"top\"`/`\"bottom\"`/`\"front\"`/`\"back\"`/`\"left\"`/`\"right\"` — the six \
+                 axis-aligned drafting views, orthographic; or gaze along a vector, \
+                 perspective (`front` looks along +y, `top` along -z); default a framed \
+                 perspective overview",
             ),
-            f("eye", "[x,y,z]", "explicit camera position (pairs with `target`)"),
-            f("target", "[x,y,z]", "explicit look-at point (default `[0,0,0]`)"),
-            f("up", "[x,y,z]", "camera up (default `[0,0,1]`)"),
-            f("fov", "number", "perspective field of view in degrees (default 45)"),
+            f(
+                "focus",
+                "string",
+                "frame this node's subtree (name or index path, as `inspect` addresses \
+                 nodes); the rest of the scene is still drawn",
+            ),
+            f("zoom", "number", "factor on the auto-fitted distance/height: 2 = twice as close"),
+            f(
+                "ortho",
+                "bool",
+                "projection override; beats what `look` implies in either direction",
+            ),
+            f("eye", "[x,y,z]", "camera position; alone, it looks at the (focused) center"),
+            f("target", "[x,y,z]", "look-at point (default the framed bounds' center)"),
+            f("up", "[x,y,z]", "camera up (default `[0,0,1]`; `[0,1,0]` looking straight up/down)"),
+            f(
+                "fov",
+                "number",
+                "perspective field of view in degrees (default 45; the auto fit adapts to it)",
+            ),
             f(
                 "ortho_height",
                 "number",
-                "with `ortho` and an explicit camera: view height in world units",
+                "orthographic view height in world units (default fits the framed bounds)",
             ),
         ],
         js_twin: None,
@@ -405,6 +441,18 @@ fn removed(cmd: &str) -> Option<&'static str> {
     })
 }
 
+/// Fields that no longer exist, same idea as [`removed`].
+fn removed_field(cmd: &str, field: &str) -> Option<&'static str> {
+    match (cmd, field) {
+        ("render", "direction") => Some(
+            "`direction` is now `look`: the same vector, or a keyword — \
+             `{\"look\": \"top\"}` is the old `{\"direction\": [0,0,-1], \"ortho\": true}` \
+             (keywords imply ortho; `\"ortho\": false` overrides)",
+        ),
+        _ => None,
+    }
+}
+
 /// Parse one request against the spec table, then serde. All errors are
 /// `bad-request` with enough in the message to fix the call.
 pub(crate) fn parse(req: Value) -> Result<Request, CmdError> {
@@ -430,6 +478,9 @@ pub(crate) fn parse(req: Value) -> Result<Request, CmdError> {
     };
     for key in obj.keys() {
         if !known(key) {
+            if let Some(hint) = removed_field(cmd, key) {
+                return Err(bad(hint.to_string()));
+            }
             let mut fields: Vec<&str> = spec.fields.iter().map(|f| f.name).collect();
             if spec.view {
                 fields.extend(VIEW_FIELDS.iter().map(|f| f.name));
@@ -559,6 +610,28 @@ mod tests {
     }
 
     #[test]
+    fn look_is_keyword_or_vector_and_ortho_is_tristate() {
+        match parse_str(r#"{"cmd":"render","look":"top"}"#) {
+            Ok(Request::Render(r)) => {
+                assert!(matches!(&r.look, Some(Look::Named(s)) if s == "top"));
+                assert_eq!(r.ortho, None);
+            }
+            other => panic!("{:?}", other.err()),
+        }
+        assert!(matches!(
+            parse_str(r#"{"cmd":"render","look":[0,1,0],"ortho":true}"#),
+            Ok(Request::Render(r))
+                if matches!(r.look, Some(Look::Vector([0.0, 1.0, 0.0]))) && r.ortho == Some(true)
+        ));
+        // The wrong JSON type names both accepted shapes.
+        let e = parse_str(r#"{"cmd":"render","look":5}"#).err().unwrap();
+        assert!(e.contains("keyword") && e.contains("[x,y,z]"), "{e}");
+        // `direction` is deleted; the error teaches its replacement.
+        let e = parse_str(r#"{"cmd":"render","direction":[0,0,-1]}"#).err().unwrap();
+        assert!(e.contains("look"), "{e}");
+    }
+
+    #[test]
     fn removed_commands_are_redirected() {
         let e = parse_str(r#"{"cmd":"build"}"#).err().unwrap();
         assert!(e.contains("inspect") && e.contains("stats"), "{e}");
@@ -663,6 +736,7 @@ mod tests {
                 "rays" => json!([{"origin": [0.0, 0.0, 9.0], "dir": [0.0, 0.0, -1.0]}]),
                 "pairs" => json!([["seat", "chainL"]]),
                 "fields" => json!(["name", "bounds"]),
+                "look" => json!("top"),
                 _ if f.ty == "number" => json!(32.0),
                 _ if f.ty == "bool" => json!(true),
                 _ if f.ty == "[x,y,z]" => json!([1.0, 2.0, 3.0]),

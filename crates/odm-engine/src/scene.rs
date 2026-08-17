@@ -107,6 +107,42 @@ fn collect_names(store: &Store, node: &Node, out: &mut Vec<String>) {
     }
 }
 
+/// World AABB of a node's whole subtree (render `focus` frames this), or
+/// None when it holds no geometry. Errors are `locate`'s (agent-facing).
+pub fn subtree_bounds(store: &Store, root: &Node, addr: &str) -> Result<Option<Aabb>, String> {
+    let (_, node, parent) = locate(store, root, addr)?;
+    Ok(bounds_walk(store, &node, &parent))
+}
+
+fn bounds_walk(store: &Store, node: &Node, parent: &Mat4) -> Option<Aabb> {
+    let world = world_of(node, parent);
+    let mut agg: Option<Aabb> = node
+        .mesh
+        .and_then(|h| match store.get(h).as_deref() {
+            Some(Object::Mesh(m)) => mesh_aabb(m),
+            _ => None,
+        })
+        .map(|(min, max)| world_aabb(min, max, &world));
+    for &c in &node.children {
+        let child = child_node(store, c)?;
+        merge_bounds(&mut agg, bounds_walk(store, &child, &world));
+    }
+    agg
+}
+
+fn merge_bounds(agg: &mut Option<Aabb>, other: Option<Aabb>) {
+    match (&mut *agg, other) {
+        (_, None) => {}
+        (None, b) => *agg = b,
+        (Some((amin, amax)), Some((bmin, bmax))) => {
+            for k in 0..3 {
+                amin[k] = amin[k].min(bmin[k]);
+                amax[k] = amax[k].max(bmax[k]);
+            }
+        }
+    }
+}
+
 // --- fields -------------------------------------------------------------
 
 /// Which per-node fields `inspect` prints. `id`, `children` and `repeat` are

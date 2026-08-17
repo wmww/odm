@@ -5,13 +5,9 @@ discussions that followed. Cross-references note where plans touch.
 
 - `render-frames.md` — contact-sheet renders: `frames` as an array of
   partial requests merged over the base, one captioned tiled PNG.
-- `render-camera.md` — one camera parameter set (defaults = auto fit,
-  request fields overlay): `look` keywords/vector, `focus`, `zoom`,
-  resolved camera echoed in responses and poll snapshots. Reworked
-  2026-08-17; land before render-frames.
 - `camera-nodes.md` — shelved: cameras as JS-built scene nodes (named,
-  animatable views); waits on render-camera's overlay pipeline and a
-  demonstrated need.
+  animatable views); the camera overlay pipeline it needs landed
+  2026-08-17, so it now waits only on a demonstrated need.
 - `agent-activity-view.md` — viewer cards showing the agent's last CLI
   action (render/raycast/inspect) behind the chat transcript.
 - `terminal.md` — terminal emulator tabs in the viewer (new `odm-term`
@@ -38,4 +34,7 @@ in `notes/agent-surface.md`); `renderer-transparency.md` (executed
 notes/architecture.md's odm-render entry); `clearance.md` (landed
 2026-08-16 — `odm clearance` + `a.clearance(b)`, tiers 1+2 only; the tier
 rationale and the deferred exact-distance tier are in
-`notes/agent-surface.md`).
+`notes/agent-surface.md`); `render-camera.md` (landed 2026-08-17 — one
+camera parameter set with `look`/`focus`/`zoom`, resolved-camera echo,
+send-time per-message poll snapshots; the standing rules are in
+`notes/agent-surface.md`'s render camera section).

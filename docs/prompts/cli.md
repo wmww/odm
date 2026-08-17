@@ -75,14 +75,18 @@ their boxes touch). Details: `odm docs cli`.
 Request fields: `width`/`height` in pixels (default 1024×768), `out`
 (default under `.odm/renders/`), `wireframe: true` (edges only, in
 each object's own color — surfaces are not drawn), `no_grid`,
-`opacity` (0..1: x-ray, everything translucent), `ortho`,
-`direction` (auto-framed view along that vector; default isometric).
-Exact camera placement exists too: `odm docs cli`.
+`opacity` (0..1: x-ray, everything translucent), `look` (`"top"`,
+`"bottom"`, `"front"`, `"back"`, `"left"`, `"right"` — orthographic
+drafting views — or a vector to gaze along; default a framed
+overview). The camera always frames the model, and every response
+echoes the resolved `camera` — nudge its numbers and paste them back
+for exact placement. More (`focus` on one part, `zoom`, `eye`, …):
+`odm docs cli`.
 
 ```
-odm render                                                   # framed isometric
-odm render '{"direction": [0, 0, -1], "ortho": true}'        # top view (plan)
-odm render '{"direction": [-1, 0, 0], "ortho": true}'        # side elevation
+odm render                                                   # framed overview
+odm render '{"look": "top"}'                                 # plan view
+odm render '{"look": "left"}'                                # side elevation
 odm render '{"wireframe": true, "width": 1600}'              # inspect topology
 odm render '{"opacity": 0.3}'                                # x-ray: see inside
 odm render '{"inputs": {"t": 2.5}, "out": "/tmp/frame.png"}' # one animation moment
@@ -98,10 +102,11 @@ you collect them with `odm poll`:
 
 - `odm poll` blocks until at least one message is queued, then prints
   them all — `{"ok": true, "messages": [{"text": "..."}, ...]}` — and
-  exits. If messages are already waiting it returns immediately. The
-  response's `view` field is a snapshot of what the user was looking at
-  (viewer tab path, its input values, their selection) — context for
-  the words next to it.
+  exits. If messages are already waiting it returns immediately. Each
+  message carries a `view` snapshot of what the user was looking at
+  when they sent it: viewer tab path, its input values, their
+  selection, and the camera — paste `view.camera` into `odm render` to
+  see exactly what they saw.
 - It also exits (nonzero) if the engine goes away, so it never hangs
   forever. `--timeout <sec>` additionally bounds the wait, exiting with
   `"messages": []` — use it if your harness limits how long a command
@@ -133,8 +138,9 @@ the user's own messages. Use it to answer questions and report what you
 did — the rebuilt scene speaks for itself, so keep it short. Don't use
 `say` for progress narration on every edit.
 
-When the user refers to a part ("make *this* one longer"), the poll's
-`view.selection` has it — clicked parts appear as `{id, name}`, in pick
-order (shift-click selects several); `odm status` shows the current
-list on demand. To query exactly what the user is seeing (their tab,
-their input values), add `"view": true` to any scene query.
+When the user refers to a part ("make *this* one longer"), the
+message's `view.selection` has it — clicked parts appear as
+`{id, name}`, in pick order (shift-click selects several); `odm
+status` shows the current list on demand. To query exactly what the
+user is seeing (their tab, their input values), add `"view": true` to
+any scene query.

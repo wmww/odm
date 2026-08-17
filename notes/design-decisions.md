@@ -51,11 +51,13 @@ state at an arbitrary tool-call moment — users move fast and
 unexpectedly (especially the 3D camera), so state sampled when a tool
 call happens to fire carries little signal and can silently be about
 the wrong thing. Prefer, in order: attach state to a user action (the
-poll snapshot — what the user saw *when they sent the message*, ideally
-stamped at send time, replayable manually from plain numbers), or don't
-use view state at all. Applied 2026-08-17: render adopting the viewer
-tab's camera was designed then dropped for this reason (see
-plans/render-camera.md). Accepted survivors, deliberately: `view: true`
+poll snapshot — what the user saw *when they sent the message*, stamped
+at send time, replayable manually from plain numbers), or don't use
+view state at all. Applied 2026-08-17: render adopting the viewer
+tab's camera was designed then dropped for this reason; instead each
+poll message carries a send-time `view` snapshot including the camera
+(see notes/agent-surface.md, render camera section). Accepted
+survivors, deliberately: `view: true`
 adopts a tab's path+inputs (slow-moving, visible in the tab bar) and
 `status` reports selection (an explicit state-report command). Don't
 add more samplers.

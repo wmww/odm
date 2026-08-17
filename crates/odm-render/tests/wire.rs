@@ -2,7 +2,7 @@
 
 use odm_ir::{Node, Transform};
 use odm_render::{
-    Camera, DEFAULT_COLOR, Projection, RenderOptions, Renderer, WIRE_WIDTH_PX, flatten_scene,
+    Camera, DEFAULT_COLOR, RenderOptions, Renderer, WIRE_WIDTH_PX, flatten_scene,
     pick_wire,
 };
 use odm_store::{Object, Store};
@@ -52,11 +52,13 @@ fn stacked_scene() -> (std::sync::Arc<Store>, odm_ir::Hash) {
 
 fn ortho_opts() -> RenderOptions {
     let mut opts = RenderOptions::default_with(PX, PX);
-    opts.camera = Camera::Explicit {
-        eye: [0.0, 0.0, 20.0],
-        target: [0.0, 0.0, 0.0],
-        up: [0.0, 1.0, 0.0],
-        projection: Projection::Orthographic { height: 10.0 },
+    opts.camera = Camera {
+        eye: Some([0.0, 0.0, 20.0]),
+        target: Some([0.0, 0.0, 0.0]),
+        up: Some([0.0, 1.0, 0.0]),
+        ortho: true,
+        ortho_height: Some(10.0),
+        ..Camera::default()
     };
     opts
 }

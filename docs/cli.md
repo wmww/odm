@@ -86,7 +86,7 @@ the scene tree, measured exactly: names, bounds, counts — and, on the root ent
 
 ### render
 
-render a PNG; prints its path.
+render a PNG; prints its path and echoes the resolved camera (`eye`/`target`/`up` + `fov` or `ortho_height` — nudge and paste back).
 
 - `width` (number) — pixels, 16..=8192 (default 1024)
 - `height` (number) — pixels, 16..=8192 (default 768)
@@ -95,13 +95,15 @@ render a PNG; prints its path.
 - `no_grid` (bool) — hide the ground grid
 - `opacity` (number) — x-ray, 0..=1: multiplies every object's alpha, so everything turns translucent and interiors show through
 - `supersample` (number) — render k× larger internally and box-downsample: anti-aliasing on demand, none by default (integer 1..=8; k×width/height must fit the GPU's texture limit)
-- `ortho` (bool) — orthographic projection
-- `direction` ([x,y,z]) — auto-framed camera looking along this vector (`[0,0,-1]` = top view); default isometric
-- `eye` ([x,y,z]) — explicit camera position (pairs with `target`)
-- `target` ([x,y,z]) — explicit look-at point (default `[0,0,0]`)
-- `up` ([x,y,z]) — camera up (default `[0,0,1]`)
-- `fov` (number) — perspective field of view in degrees (default 45)
-- `ortho_height` (number) — with `ortho` and an explicit camera: view height in world units
+- `look` (keyword | [x,y,z]) — `"top"`/`"bottom"`/`"front"`/`"back"`/`"left"`/`"right"` — the six axis-aligned drafting views, orthographic; or gaze along a vector, perspective (`front` looks along +y, `top` along -z); default a framed perspective overview
+- `focus` (string) — frame this node's subtree (name or index path, as `inspect` addresses nodes); the rest of the scene is still drawn
+- `zoom` (number) — factor on the auto-fitted distance/height: 2 = twice as close
+- `ortho` (bool) — projection override; beats what `look` implies in either direction
+- `eye` ([x,y,z]) — camera position; alone, it looks at the (focused) center
+- `target` ([x,y,z]) — look-at point (default the framed bounds' center)
+- `up` ([x,y,z]) — camera up (default `[0,0,1]`; `[0,1,0]` looking straight up/down)
+- `fov` (number) — perspective field of view in degrees (default 45; the auto fit adapts to it)
+- `ortho_height` (number) — orthographic view height in world units (default fits the framed bounds)
 
 ### raycast
 
@@ -208,16 +210,42 @@ everything turns translucent and interiors show through.
 anti-aliasing on demand; there is none by default. The internal
 k×width/height must fit the GPU's texture limit.
 
-Camera, auto-framed (the model always fits the frame): the default is
-an isometric perspective; `direction` looks along that vector; `ortho`
-makes either orthographic. Explicit placement (when framing must be
-exact): `eye` + `target` (+ `up`), with `fov` or `ortho` +
-`ortho_height`.
+**Camera: one parameter set, no modes.** A camera is target + gaze
+direction + distance + up + projection; every parameter is
+independently either given or defaulted, and the defaults frame the
+scene (or the `focus` node) so the model always fits. With no camera
+fields you get a framed perspective overview from a deliberately
+skewed direction. Any single field alone is meaningful: `eye` alone
+looks at the framed center from there, `fov` alone adapts the fit to
+the lens, `eye` + `ortho` fits the ortho height for you.
+
+- `look` — `"top"`, `"bottom"`, `"front"`, `"back"`, `"left"`,
+  `"right"`: the six axis-aligned drafting views, orthographic (that's
+  why you type the word); or a vector to gaze along, perspective.
+  `front` looks along +y, `top` along −z. `ortho` overrides the implied
+  projection in either direction: `{"look": "top", "ortho": false}` is
+  a perspective top-down.
+- `focus` — frame one node's subtree (addressed as `inspect` addresses
+  nodes); the rest of the scene is still drawn.
+- `zoom` — factor on the fitted distance/height: 2 = twice as close.
+- `eye`, `target`, `up`, `fov`, `ortho_height` — exact placement,
+  each usable alone; the others stay defaulted.
+
+Over-determined combinations are errors, not precedence rules:
+`eye`+`look`, `eye`+`zoom`, `zoom`+`ortho_height`, `fov` on an
+orthographic camera, `ortho_height` on a perspective one.
+
+Every response echoes the **resolved camera** — `camera`:
+`eye`/`target`/`up` plus `fov` or `ortho` + `ortho_height`, the same
+spelling the request accepts. "Slightly to the left" is a nudge of the
+echoed numbers pasted back; poll snapshots speak the same spelling, so
+the user's own view replays verbatim.
 
 ```
-odm render                                                   # framed isometric
-odm render '{"direction": [0, 0, -1], "ortho": true}'        # top view (plan)
-odm render '{"direction": [-1, 0, 0], "ortho": true}'        # side elevation
+odm render                                                   # framed overview
+odm render '{"look": "top"}'                                 # plan view
+odm render '{"look": "left"}'                                # side elevation
+odm render '{"look": [-1, 0, -0.4], "focus": "seat"}'        # frame one part
 odm render '{"wireframe": true, "width": 1600}'              # inspect topology
 odm render '{"opacity": 0.3}'                                # x-ray: see inside
 odm render '{"inputs": {"t": 2.5}, "out": "/tmp/frame.png"}' # one animation moment
@@ -286,10 +314,13 @@ engine until collected with `odm poll`:
 
 - `odm poll` blocks until at least one message is queued, then prints
   them all — `{"ok": true, "messages": [{"text": "..."}, ...]}` — and
-  exits. If messages are already waiting it returns immediately. The
-  response's `view` field is a snapshot of what the user was looking at
-  (viewer tab path, its input values, their selection) — context for
-  the words next to it.
+  exits. If messages are already waiting it returns immediately. Each
+  message carries a `view` field: a snapshot of what the user was
+  looking at **when they sent it** (viewer tab path, its input values,
+  their selection, and the camera — in the same `eye`/`target`/`up`/
+  `fov` spelling `render` accepts, so pasting it into a render replays
+  their exact view). Stamped at send time: the user may have moved on
+  by the time you poll.
 - It also exits (nonzero) if the engine goes away, so it never hangs
   forever. `--timeout <sec>` additionally bounds the wait, exiting with
   `"messages": []` — use it if your harness limits how long a command
@@ -309,7 +340,7 @@ engine until collected with `odm poll`:
 the user's own messages. Everything after `say` is the message — no
 quoting rules.
 
-When the user refers to a part ("make *this* one longer"), the poll's
-`view.selection` has it — clicked parts appear as `{id, name}`, in pick
-order (shift-click selects several). On demand, `odm status` shows the
-same list on the active view slot.
+When the user refers to a part ("make *this* one longer"), the
+message's `view.selection` has it — clicked parts appear as
+`{id, name}`, in pick order (shift-click selects several). On demand,
+`odm status` shows the current list on the active view slot.

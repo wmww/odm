@@ -1,7 +1,7 @@
 //! The agent-facing command handlers, and (with `requests.rs`) the only
 //! place that speaks `serde_json::Value`.
 
-use crate::requests::{self, Ray, RenderReq, Request, ViewSel};
+use crate::requests::{self, Look, Ray, RenderReq, Request, ViewSel};
 use crate::scene;
 use crate::server::Conn;
 use crate::state::{EngineState, PollOutcome, Published};
@@ -393,6 +393,8 @@ impl EngineState {
             return Err(CmdError::bad_request("width/height must be in 16..=8192"));
         }
 
+        let mut camera = camera_from(&req)?;
+
         let view_req = ViewReq {
             path: req.path.clone(),
             inputs: req.inputs.clone(),
@@ -404,8 +406,21 @@ impl EngineState {
         let scene = flatten_scene(store, result.root)
             .map_err(|e| CmdError::new("render", e.to_string()))?;
 
+        // `focus`: frame that node's subtree, everything still drawn.
+        if let Some(addr) = &req.focus {
+            let root = self.root_node(&result)?;
+            match scene::subtree_bounds(store, &root, addr).map_err(CmdError::bad_request)? {
+                Some(b) => camera.fit = Some(b),
+                None => {
+                    return Err(CmdError::bad_request(format!(
+                        "focus node {addr:?} has no geometry to frame"
+                    )));
+                }
+            }
+        }
+
         let mut opts = RenderOptions::default_with(width, height);
-        opts.camera = camera_from(&req);
+        opts.camera = camera;
         opts.wireframe = req.wireframe;
         if req.no_grid {
             opts.grid = false;
@@ -459,6 +474,10 @@ impl EngineState {
         o.insert("width".into(), json!(width));
         o.insert("height".into(), json!(height));
         o.insert("instances".into(), json!(scene.instances.len()));
+        // Echo the camera actually used, in the request's own spelling —
+        // "slightly to the left" is a nudge of these numbers pasted back.
+        let cam = opts.camera.resolve(scene.bounds, width as f64 / height as f64);
+        o.insert("camera".into(), camera_json(cam.eye, cam.target, cam.up, &cam.projection));
         Ok(view_response(&view, &result, &report, req.stats, o))
     }
 
@@ -640,23 +659,23 @@ impl EngineState {
                 return Err(CmdError::new("stopped", "engine is shutting down"));
             }
         };
-        let messages: Vec<Value> =
-            taken.iter().map(|(_, text)| json!({ "text": text })).collect();
-        conn.hold(taken.into_iter().map(|(i, _)| i));
-        // A snapshot of what the user is looking at travels with their
-        // words: the active view (path + inputs) and their selection —
-        // "make this longer" arrives with "this" attached.
-        let view = self.active_view().map(|(slot, view)| {
-            let mut inputs = view.args.clone();
-            inputs.extend(view.cascade.clone());
-            json!({
-                "slot": slot,
-                "path": view.path,
-                "inputs": inputs,
-                "selection": selection_json(&self.selection.lock().unwrap()),
+        // Each message carries the snapshot of what the user was looking at
+        // *when they sent it* (tab path + inputs, selection, camera) —
+        // "make this longer" arrives with "this" attached, stamped at send
+        // time because a poll can collect long after the send.
+        let messages: Vec<Value> = taken
+            .iter()
+            .map(|(_, text, view)| {
+                let mut o = Map::new();
+                o.insert("text".into(), json!(text));
+                if let Some(v) = view {
+                    o.insert("view".into(), v.clone());
+                }
+                Value::Object(o)
             })
-        });
-        Ok(json!({ "messages": messages, "view": view }))
+            .collect();
+        conn.hold(taken.into_iter().map(|(i, _, _)| i));
+        Ok(json!({ "messages": messages }))
     }
 
     fn cmd_say(&self, text: &str) -> Result<Value, CmdError> {
@@ -702,24 +721,136 @@ fn view_response(
     Value::Object(o)
 }
 
-fn camera_from(req: &RenderReq) -> Camera {
-    if let Some(eye) = req.eye {
-        let projection = if req.ortho {
-            Projection::Orthographic { height: req.ortho_height.unwrap_or(10.0) }
-        } else {
-            Projection::Perspective { fov_y_deg: req.fov.unwrap_or(45.0) }
-        };
-        return Camera::Explicit {
-            eye,
-            target: req.target.unwrap_or([0.0, 0.0, 0.0]),
-            up: req.up.unwrap_or([0.0, 0.0, 1.0]),
-            projection,
-        };
+/// The six drafting views: keyword → gaze direction. Z-up; `front` looks
+/// along +y (the camera stands at -y), `right` along -x.
+const LOOKS: &[(&str, [f64; 3])] = &[
+    ("top", [0.0, 0.0, -1.0]),
+    ("bottom", [0.0, 0.0, 1.0]),
+    ("front", [0.0, 1.0, 0.0]),
+    ("back", [0.0, -1.0, 0.0]),
+    ("left", [1.0, 0.0, 0.0]),
+    ("right", [-1.0, 0.0, 0.0]),
+];
+
+/// The request's camera fields as one overlay set (everything but `focus`,
+/// which needs the built scene). Over-determined combinations are errors,
+/// not precedence puzzles; a parameter of the other projection is loud, not
+/// silently ignored.
+fn camera_from(req: &RenderReq) -> Result<Camera, CmdError> {
+    let bad = |m: &str| Err(CmdError::bad_request(m));
+    let mut cam = Camera::default();
+
+    // `look`: a keyword is a drafting view (and implies ortho), a vector a
+    // perspective gaze. Explicit `ortho` beats either implication.
+    let mut implied_ortho = false;
+    match &req.look {
+        Some(Look::Named(name)) => match LOOKS.iter().find(|(n, _)| n == name) {
+            Some((_, dir)) => {
+                cam.direction = Some(*dir);
+                implied_ortho = true;
+            }
+            None => {
+                let names: Vec<&str> = LOOKS.iter().map(|(n, _)| *n).collect();
+                return Err(CmdError::bad_request(format!(
+                    "no view named {name:?}; views: {} (or a direction [x,y,z])",
+                    names.join(", ")
+                )));
+            }
+        },
+        Some(Look::Vector(v)) => {
+            if *v == [0.0; 3] {
+                return bad("`look` direction must not be zero");
+            }
+            cam.direction = Some(*v);
+        }
+        None => {}
     }
-    Camera::Auto { direction: req.direction.unwrap_or(Camera::DEFAULT_DIR), ortho: req.ortho }
+    cam.ortho = req.ortho.unwrap_or(implied_ortho);
+
+    if req.eye.is_some() && req.look.is_some() {
+        return bad("`eye` and `look` both aim the camera — give one (`eye` + `target` is exact)");
+    }
+    if req.eye.is_some() && req.zoom.is_some() {
+        return bad("`zoom` scales the auto-fitted distance, but `eye` fixes it — move `eye`");
+    }
+    if let (Some(eye), Some(target)) = (req.eye, req.target)
+        && eye == target
+    {
+        return bad("`eye` and `target` coincide");
+    }
+    if let Some(fov) = req.fov {
+        if cam.ortho {
+            return bad(
+                "`fov` is a perspective parameter, and this camera is orthographic (`look` \
+                 keywords imply ortho; `\"ortho\": false` overrides)",
+            );
+        }
+        if !(fov > 0.0 && fov < 180.0) {
+            return bad("fov must be in (0, 180) degrees");
+        }
+        cam.fov_y_deg = Some(fov);
+    }
+    if let Some(h) = req.ortho_height {
+        if !cam.ortho {
+            return bad(
+                "`ortho_height` is an orthographic parameter — add `\"ortho\": true` or use \
+                 a `look` keyword",
+            );
+        }
+        if !(h > 0.0 && h.is_finite()) {
+            return bad("ortho_height must be a positive number");
+        }
+        cam.ortho_height = Some(h);
+    }
+    if let Some(z) = req.zoom {
+        if !(z > 0.0 && z.is_finite()) {
+            return bad("zoom must be a positive number");
+        }
+        if req.ortho_height.is_some() {
+            return bad("`zoom` and `ortho_height` both set the ortho view size — give one");
+        }
+        cam.zoom = Some(z);
+    }
+    if let Some(up) = req.up {
+        if up == [0.0; 3] {
+            return bad("`up` must not be zero");
+        }
+        cam.up = Some(up);
+    }
+    cam.eye = req.eye;
+    cam.target = req.target;
+    Ok(cam)
 }
 
-fn selection_json(sel: &[(String, Option<String>)]) -> Value {
+/// A camera in the render request's explicit spelling — the render echo and
+/// the poll snapshot speak it identically, so numbers paste straight back
+/// into `odm render`. f32-shortest rounding: fitted values inherit f32 mesh
+/// noise that would otherwise print 17 digits.
+pub(crate) fn camera_json(
+    eye: [f64; 3],
+    target: [f64; 3],
+    up: [f64; 3],
+    projection: &Projection,
+) -> Value {
+    let clean = |v: f64| (v as f32).to_string().parse::<f64>().unwrap_or(v);
+    let clean3 = |v: [f64; 3]| json!([clean(v[0]), clean(v[1]), clean(v[2])]);
+    let mut o = Map::new();
+    o.insert("eye".into(), clean3(eye));
+    o.insert("target".into(), clean3(target));
+    o.insert("up".into(), clean3(up));
+    match projection {
+        Projection::Perspective { fov_y_deg } => {
+            o.insert("fov".into(), json!(clean(*fov_y_deg)));
+        }
+        Projection::Orthographic { height } => {
+            o.insert("ortho".into(), json!(true));
+            o.insert("ortho_height".into(), json!(clean(*height)));
+        }
+    }
+    Value::Object(o)
+}
+
+pub(crate) fn selection_json(sel: &[(String, Option<String>)]) -> Value {
     Value::Array(sel.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect())
 }
 
@@ -759,4 +890,107 @@ fn logs_json(logs: &[(String, LogLine)]) -> Value {
             .map(|(path, l)| json!({ "doohickey": path, "level": l.level, "message": l.message }))
             .collect(),
     )
+}
+
+/// The camera overlay: request fields → one `Camera`, no modes. Resolution
+/// against bounds is covered in odm-render; this is the request-level half —
+/// implication, overrides, and the over-determined errors.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cam(body: &str) -> Result<Camera, String> {
+        let req = format!(r#"{{"cmd": "render", {}}}"#, body);
+        match requests::parse(serde_json::from_str(&req).unwrap()) {
+            Ok(Request::Render(r)) => camera_from(&r).map_err(|e| e.message().to_string()),
+            Ok(_) => unreachable!(),
+            Err(e) => panic!("parse: {}", e.message()),
+        }
+    }
+
+    #[test]
+    fn look_keywords_are_ortho_drafting_views() {
+        let c = cam(r#""look": "top""#).unwrap();
+        assert_eq!(c.direction, Some([0.0, 0.0, -1.0]));
+        assert!(c.ortho);
+        let c = cam(r#""look": "front""#).unwrap();
+        assert_eq!(c.direction, Some([0.0, 1.0, 0.0]));
+        // Explicit ortho beats the implication, both ways.
+        assert!(!cam(r#""look": "top", "ortho": false"#).unwrap().ortho);
+        assert!(cam(r#""look": [1, 0, 0], "ortho": true"#).unwrap().ortho);
+        // Vectors are perspective.
+        let c = cam(r#""look": [0, 0, -1]"#).unwrap();
+        assert_eq!(c.direction, Some([0.0, 0.0, -1.0]));
+        assert!(!c.ortho);
+        // A typo'd keyword fails loudly, listing the views.
+        let e = cam(r#""look": "topp""#).unwrap_err();
+        assert!(e.contains("top") && e.contains("front"), "{e}");
+    }
+
+    #[test]
+    fn no_fields_is_the_framed_default() {
+        let c = cam(r#""width": 640"#).unwrap();
+        assert!(c.direction.is_none() && c.eye.is_none() && !c.ortho && c.fit.is_none());
+    }
+
+    #[test]
+    fn each_parameter_stands_alone() {
+        assert_eq!(cam(r#""eye": [60, -80, 40]"#).unwrap().eye, Some([60.0, -80.0, 40.0]));
+        assert!(cam(r#""eye": [1, 2, 3], "ortho": true"#).unwrap().ortho_height.is_none());
+        assert_eq!(cam(r#""fov": 20"#).unwrap().fov_y_deg, Some(20.0));
+        assert_eq!(cam(r#""zoom": 2"#).unwrap().zoom, Some(2.0));
+    }
+
+    #[test]
+    fn over_determined_combos_are_errors() {
+        for (body, needle) in [
+            (r#""eye": [1, 2, 3], "look": "top""#, "eye"),
+            (r#""eye": [1, 2, 3], "zoom": 2"#, "zoom"),
+            (r#""zoom": 2, "ortho": true, "ortho_height": 5"#, "ortho_height"),
+            (r#""eye": [1, 2, 3], "target": [1, 2, 3]"#, "coincide"),
+            (r#""fov": 30, "look": "top""#, "ortho"),
+            (r#""fov": 30, "ortho": true"#, "ortho"),
+            (r#""ortho_height": 5"#, "ortho"),
+        ] {
+            let e = cam(body).unwrap_err();
+            assert!(e.contains(needle), "{body}: {e}");
+        }
+    }
+
+    #[test]
+    fn bad_values_are_rejected() {
+        for body in [
+            r#""look": [0, 0, 0]"#,
+            r#""up": [0, 0, 0]"#,
+            r#""zoom": 0"#,
+            r#""zoom": -1"#,
+            r#""fov": 0"#,
+            r#""fov": 180"#,
+            r#""ortho": true, "ortho_height": 0"#,
+        ] {
+            assert!(cam(body).is_err(), "{body} should be rejected");
+        }
+    }
+
+    #[test]
+    fn camera_json_speaks_the_request_spelling() {
+        let v = camera_json(
+            [1.0, 2.0, 3.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            &Projection::Perspective { fov_y_deg: 45.0 },
+        );
+        assert_eq!(v, json!({"eye": [1.0, 2.0, 3.0], "target": [0.0, 0.0, 0.0],
+                             "up": [0.0, 0.0, 1.0], "fov": 45.0}));
+        let v = camera_json(
+            // f32 mesh noise cleans up to what the model says.
+            [-25.600000023841858, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            &Projection::Orthographic { height: 12.0 },
+        );
+        assert_eq!(v["eye"][0], json!(-25.6));
+        assert_eq!(v["ortho"], json!(true));
+        assert_eq!(v["ortho_height"], json!(12.0));
+    }
 }

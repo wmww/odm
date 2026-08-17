@@ -9,6 +9,7 @@ use odm_js::{JsEnv, LogLine};
 use odm_kernel::Kernel;
 use odm_render::Renderer;
 use odm_store::{Object, Store};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -81,13 +82,20 @@ pub struct TranscriptEntry {
     /// The viewer dims anything not yet `Done`, so a message the agent never
     /// received is visibly still waiting rather than silently gone.
     pub delivery: Delivery,
+    /// User lines only: what the user was looking at *when they sent it*
+    /// (tab, inputs, selection, camera — built by the viewer, so headless
+    /// messages carry none). Stamped at send time, not when a poll collects
+    /// it: the user may have moved on by then.
+    pub view: Option<Value>,
 }
+
+/// One taken message: transcript index, text, send-time view snapshot.
+pub(crate) type PolledMessage = (usize, String, Option<Value>);
 
 /// How a blocked poll ended.
 pub(crate) enum PollOutcome {
-    /// Messages, as (transcript index, text). They are `InFlight` until the
-    /// caller confirms or returns them.
-    Messages(Vec<(usize, String)>),
+    /// Messages `InFlight` until the caller confirms or returns them.
+    Messages(Vec<PolledMessage>),
     TimedOut,
     /// The client hung up while we waited. Nothing was taken.
     Disconnected,
@@ -314,9 +322,11 @@ impl EngineState {
         *self.selection.lock().unwrap() = sel;
     }
 
-    /// A message from the user, queued for the next `odm poll`.
-    pub fn send_message(&self, text: String) {
-        let entry = TranscriptEntry { who: Who::User, text, delivery: Delivery::Pending };
+    /// A message from the user, queued for the next `odm poll`. `view` is
+    /// the send-time snapshot of what they were looking at (the viewer
+    /// builds it; None when there is no viewer).
+    pub fn send_message(&self, text: String, view: Option<Value>) {
+        let entry = TranscriptEntry { who: Who::User, text, delivery: Delivery::Pending, view };
         self.chat.lines.lock().unwrap().push(entry);
         self.chat.cv.notify_all();
         self.wake();
@@ -324,7 +334,7 @@ impl EngineState {
 
     /// A message from the agent (`odm say`): transcript only, nothing to queue.
     pub fn say(&self, text: String) {
-        let entry = TranscriptEntry { who: Who::Agent, text, delivery: Delivery::Done };
+        let entry = TranscriptEntry { who: Who::Agent, text, delivery: Delivery::Done, view: None };
         self.chat.lines.lock().unwrap().push(entry);
         self.wake();
     }
@@ -352,13 +362,13 @@ impl EngineState {
             if peer.is_gone() {
                 return PollOutcome::Disconnected;
             }
-            let taken: Vec<(usize, String)> = lines
+            let taken: Vec<PolledMessage> = lines
                 .iter_mut()
                 .enumerate()
                 .filter(|(_, e)| e.delivery == Delivery::Pending)
                 .map(|(i, e)| {
                     e.delivery = Delivery::InFlight;
-                    (i, e.text.clone())
+                    (i, e.text.clone(), e.view.clone())
                 })
                 .collect();
             if !taken.is_empty() {
@@ -633,7 +643,7 @@ pub(crate) mod tests {
 
     fn texts(outcome: PollOutcome) -> Vec<String> {
         match outcome {
-            PollOutcome::Messages(m) => m.into_iter().map(|(_, t)| t).collect(),
+            PollOutcome::Messages(m) => m.into_iter().map(|(_, t, _)| t).collect(),
             PollOutcome::TimedOut => vec![],
             PollOutcome::Disconnected => panic!("disconnected"),
             PollOutcome::Stopped => panic!("stopped"),
@@ -648,8 +658,8 @@ pub(crate) mod tests {
     fn a_poll_takes_the_whole_queue() {
         let state = engine();
         let peer = Peer::default();
-        state.send_message("one".into());
-        state.send_message("two".into());
+        state.send_message("one".into(), None);
+        state.send_message("two".into(), None);
         assert_eq!(texts(state.poll_messages(None, &peer)), ["one", "two"]);
         // Taken, but not the agent's until it says so.
         assert_eq!(deliveries(&state), [Delivery::InFlight; 2]);
@@ -668,7 +678,7 @@ pub(crate) mod tests {
                 while state.listeners() == 0 {
                     std::thread::yield_now();
                 }
-                state.send_message("hello".into());
+                state.send_message("hello".into(), None);
             });
         }
         assert_eq!(texts(state.poll_messages(None, &Peer::default())), ["hello"]);
@@ -728,7 +738,7 @@ pub(crate) mod tests {
         // Whatever else the engine is doing, chat answers. A regression here
         // hangs (see issues/engine-serializes-commands.md), hence `within`.
         let _busy = state.cmd_lock.lock().unwrap();
-        state.send_message("hi".into());
+        state.send_message("hi".into(), None);
         let replies = within({
             let state = state.clone();
             move || {
@@ -736,10 +746,7 @@ pub(crate) mod tests {
                 (polled, state.handle(json!({"cmd": "say", "text": "ok"}), &mut conn))
             }
         });
-        assert_eq!(
-            replies.0,
-            json!({"ok": true, "messages": [{"text": "hi"}], "view": null})
-        );
+        assert_eq!(replies.0, json!({"ok": true, "messages": [{"text": "hi"}]}));
         assert_eq!(replies.1, json!({"ok": true}));
         state.with_transcript(|t| assert_eq!(t.len(), 2));
     }
@@ -749,7 +756,7 @@ pub(crate) mod tests {
     #[test]
     fn an_unacknowledged_delivery_is_returned() {
         let state = engine();
-        state.send_message("make it longer".into());
+        state.send_message("make it longer".into(), None);
 
         let mut conn = Conn::new(state.clone());
         let polled = state.handle(json!({"cmd": "poll"}), &mut conn);
@@ -765,7 +772,7 @@ pub(crate) mod tests {
     #[test]
     fn an_ack_retires_the_messages() {
         let state = engine();
-        state.send_message("hi".into());
+        state.send_message("hi".into(), None);
         let mut conn = Conn::new(state.clone());
         state.handle(json!({"cmd": "poll"}), &mut conn);
         assert_eq!(state.handle(json!({"cmd": "ack"}), &mut conn), json!({"ok": true, "acked": 1}));
@@ -773,6 +780,21 @@ pub(crate) mod tests {
         // Acked messages stay acked when the connection ends.
         drop(conn);
         assert_eq!(deliveries(&state), [Delivery::Done]);
+    }
+
+    /// The view snapshot rides the message it was stamped on — per message,
+    /// not per poll, and absent when there was no viewer to build one.
+    #[test]
+    fn a_message_carries_its_send_time_snapshot() {
+        let state = engine();
+        let mut conn = Conn::new(state.clone());
+        let snap = json!({"path": "root.js", "camera": {"eye": [1.0, 2.0, 3.0]}});
+        state.send_message("look at this".into(), Some(snap.clone()));
+        state.send_message("also".into(), None);
+        let v = state.handle(json!({"cmd": "poll"}), &mut conn);
+        assert_eq!(v["messages"][0]["text"], "look at this");
+        assert_eq!(v["messages"][0]["view"], snap);
+        assert_eq!(v["messages"][1], json!({"text": "also"}));
     }
 
     #[test]

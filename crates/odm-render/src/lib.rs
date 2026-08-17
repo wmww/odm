@@ -12,7 +12,7 @@ mod grid;
 pub mod math;
 mod wire;
 
-pub use camera::{Camera, Projection};
+pub use camera::{Camera, Projection, ResolvedCamera};
 pub use flatten::{DEFAULT_COLOR, flatten_node, flatten_scene, mesh_aabb, node_id};
 pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, Renderer};
 pub use wire::{WireHit, mesh_edges, pick_wire};
@@ -94,7 +94,7 @@ impl RenderOptions {
         RenderOptions {
             width,
             height,
-            camera: Camera::Auto { direction: Camera::DEFAULT_DIR, ortho: false },
+            camera: Camera::default(),
             wireframe: false,
             grid: true,
             background: [0.055, 0.058, 0.065, 1.0],

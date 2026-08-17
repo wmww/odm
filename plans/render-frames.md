@@ -23,15 +23,16 @@ odm render '{"frames": [{"look": "top"}, {"look": "front"}, {"look": "left"}, {}
 
 Any per-frame field goes: multiple inputs at once (aspect-ratio sweeps),
 `preset` (compare presets), camera (`look` — a drafting sheet of the
-canonical views, with `{}` as the default overview tile; see
-`render-camera.md`). Merge is shallow per field except `inputs`, which
-merges by key over the base's.
+canonical views, with `{}` as the default overview tile; the camera
+parameter set landed 2026-08-17, see notes/agent-surface.md). Merge is
+shallow per field except `inputs`, which merges by key over the base's.
 
 - **Shared framing.** The default camera fits per-scene bounds; fitting
   each tile separately makes scale jump between tiles and motion read
   wrong. Build every frame, union their bounds, compute the default fit
-  once from the union (in render-camera.md's overlay pipeline, the shared
-  part is the *defaults*). Per-frame `look`/`ortho` still apply per tile;
+  once from the union (in the landed camera overlay pipeline, the shared
+  part is the *defaults* — `Camera::fit` set from the union does it).
+  Per-frame `look`/`ortho` still apply per tile;
   a tile giving its own placement (`eye`/`zoom`/`focus`) opts out of the
   shared fit for that parameter.
 - **Captions.** Each tile captioned with its frame's overrides

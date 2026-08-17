@@ -3,8 +3,8 @@
 Cameras as scene nodes, built in JS like any geometry — named, with the
 same properties as the render camera parameter set (target, direction or
 eye, projection, fov, …). Shelved until a live session wants a camera
-that outlives one request; requires render-camera.md's overlay pipeline
-first.
+that outlives one request. The overlay pipeline it builds on landed
+2026-08-17 (notes/agent-surface.md, render camera section).
 
 ## Why it might earn its place
 - A saved way to look at the model survives between agent sessions as

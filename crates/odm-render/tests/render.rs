@@ -1,5 +1,5 @@
 use odm_ir::{Color, Node, Transform};
-use odm_render::{Camera, Projection, RenderOptions, Renderer, flatten_scene};
+use odm_render::{Camera, RenderOptions, Renderer, flatten_scene};
 use odm_store::{Object, Store};
 
 /// Store with a colored cube + cylinder scene; returns (store, root hash).
@@ -70,9 +70,9 @@ fn option_variants_render() {
     let (store, root) = demo_scene();
     let scene = flatten_scene(&store, root).unwrap();
 
-    // Ortho auto camera.
+    // Ortho auto-framed camera.
     let mut opts = RenderOptions::default_with(160, 120);
-    opts.camera = Camera::Auto { direction: [0.0, 0.0, -1.0], ortho: true };
+    opts.camera = Camera { direction: Some([0.0, 0.0, -1.0]), ortho: true, ..Camera::default() };
     renderer.render_png(&scene, &opts).unwrap();
 
     // Wireframe (edges only).
@@ -84,11 +84,12 @@ fn option_variants_render() {
     let opts = RenderOptions {
         width: 160,
         height: 120,
-        camera: Camera::Explicit {
-            eye: [5.0, 5.0, 4.0],
-            target: [0.0, 0.0, 0.0],
-            up: [0.0, 0.0, 1.0],
-            projection: Projection::Perspective { fov_y_deg: 35.0 },
+        camera: Camera {
+            eye: Some([5.0, 5.0, 4.0]),
+            target: Some([0.0, 0.0, 0.0]),
+            up: Some([0.0, 0.0, 1.0]),
+            fov_y_deg: Some(35.0),
+            ..Camera::default()
         },
         wireframe: false,
         grid: false,
@@ -134,7 +135,7 @@ fn stacked_scene(layers: &[(f64, [f32; 4])]) -> (std::sync::Arc<Store>, odm_ir::
 
 fn top_down_opts(width: u32, height: u32) -> RenderOptions {
     let mut opts = RenderOptions::default_with(width, height);
-    opts.camera = Camera::Auto { direction: [0.0, 0.0, -1.0], ortho: true };
+    opts.camera = Camera { direction: Some([0.0, 0.0, -1.0]), ortho: true, ..Camera::default() };
     opts.grid = false;
     opts.background = [0.0, 0.0, 0.0, 1.0];
     opts
