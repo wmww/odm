@@ -162,7 +162,7 @@ impl Viewer {
             return false;
         };
         let dt = ctx.input(|i| i.stable_dt).min(0.25) as f64;
-        let (min, max) = (entry.minimum.unwrap_or(0.0), entry.maximum.unwrap_or(1.0));
+        let (min, max) = (entry.minimum().unwrap_or(0.0), entry.maximum().unwrap_or(1.0));
         let span = (max - min).max(1e-9);
         let current = tab.shown_value(Section::Cascade, &entry).as_f64().unwrap_or(min);
         let next = min + (current - min + dt).rem_euclid(span);

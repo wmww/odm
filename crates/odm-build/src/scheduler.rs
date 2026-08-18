@@ -835,16 +835,17 @@ fn cascade_note(meta: &Meta) -> String {
 }
 
 /// The declaration table `ctx.input` routes and hydrates with:
-/// `{ name: { cascade, type } }`.
+/// `{ name: { cascade, schema } }` — `schema` is the authored declaration
+/// (defaults normalized), which the framework walks to hydrate extension
+/// types and fill nested defaults at any depth.
 fn decls_json(meta: &Meta) -> Value {
     let mut m = Map::new();
     for (name, input) in &meta.inputs {
         let mut entry = Map::new();
         entry.insert("cascade".into(), Value::Bool(input.cascade));
-        entry.insert(
-            "type".into(),
-            input.type_name().map(|t| Value::String(t.into())).unwrap_or(Value::Null),
-        );
+        let mut schema = input.authored.clone();
+        schema.remove("cascade");
+        entry.insert("schema".into(), Value::Object(schema));
         m.insert(name.clone(), Value::Object(entry));
     }
     Value::Object(m)

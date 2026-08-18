@@ -32,7 +32,13 @@ export const meta = {
     },
     hole: {
       type: 'object',
-      properties: { r: { type: 'number', minimum: 0.5 }, depth: { type: 'number', minimum: 0.5 } },
+      properties: {
+        r: { type: 'number', minimum: 0.5 },
+        depth: { type: 'number', minimum: 0.5 },
+        // A nested default: an absent `at` is filled in at normalization,
+        // and a vector3 hydrates inside the object.
+        at: { type: 'vector3', default: [68, -28, 0] },
+      },
       required: ['r', 'depth'],
       default: { r: 6, depth: 6 },
       description: 'bore in the plate; a depth past the thickness cuts through',
@@ -75,7 +81,7 @@ export default function build(ctx) {
     .translate(-plate.x / 2, -plate.y / 2, -thickness);
   const bore = odm
     .cylinder(hole.r, hole.depth, { center: false })
-    .translate(plate.x / 2 - 22, -plate.y / 2 + 17, -hole.depth);
+    .translate(hole.at.x, hole.at.y, -hole.depth); // hole.at: a THREE.Vector3 at depth
   const base = slab.subtract(bore).color(ctx.input('tint')).name('plate');
 
   const tower = ctx

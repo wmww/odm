@@ -592,9 +592,21 @@ function reviveValue(v) {
 // ---------- build context ----------
 
 // Declaration-driven hydration: the wire carries canonical JSON; ctx.input
-// returns real THREE instances for the extension types. Colors stay in
-// their wire form (hex string or [r, g, b]) — exactly what .color() takes.
-function hydrate(type, v) {
+// walks the declared schema and returns real THREE instances at every
+// extension-typed position (any depth), fills absent object properties from
+// their declared defaults, and selects union branches by tag. Colors stay
+// in their wire form (hex string or [r, g, b]) — exactly what .color()
+// takes. Plain args arrive already normalized and default-filled by the
+// engine; cascade values arrive as provided, so the fill here is what makes
+// both channels read the same.
+function hydrate(schema, v) {
+  if (!schema || typeof schema !== 'object') return reviveValue(v);
+  if (schema.variants && v && typeof v === 'object' && !Array.isArray(v)) {
+    const tag = schema.tag ?? 'kind';
+    const body = schema.variants[v[tag]];
+    if (body) return hydrateObject(body.properties, v);
+  }
+  const type = schema.type;
   const nums = (v, n) => {
     if (Array.isArray(v) && v.length === n) return v;
     // Tolerate the {x, y, z} object form (e.g. hand-written cascade values).
@@ -613,11 +625,36 @@ function hydrate(type, v) {
       return new THREE.Quaternion(...nums(v, 4));
     case 'matrix4':
       return new THREE.Matrix4().fromArray(Array.isArray(v) ? v : v.elements);
-    default:
-      // 'solid' arrives as a tagged handle that reviveValue turns back into
-      // a Solid; plain JSON values may carry nested Solids too.
-      return reviveValue(v);
   }
+  if (type === 'array' && schema.items && Array.isArray(v)) {
+    return v.map((el) => hydrate(schema.items, el));
+  }
+  if (type === 'object' && v && typeof v === 'object' && !Array.isArray(v)) {
+    if (schema.properties) return hydrateObject(schema.properties, v);
+    if (schema.additionalProperties) {
+      const out = {};
+      for (const [k, val] of Object.entries(v)) out[k] = hydrate(schema.additionalProperties, val);
+      return out;
+    }
+  }
+  // 'solid' arrives as a tagged handle that reviveValue turns back into
+  // a Solid; plain JSON values may carry nested Solids too.
+  return reviveValue(v);
+}
+
+// An object value against a properties map: hydrate declared keys, revive
+// the rest (a union's tag, pass-through extras), fill absent declared
+// defaults.
+function hydrateObject(props, v) {
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    const p = props?.[k];
+    out[k] = p ? hydrate(p, val) : reviveValue(val);
+  }
+  for (const [k, p] of Object.entries(props ?? {})) {
+    if (!(k in out) && p.default !== undefined) out[k] = hydrate(p, p.default);
+  }
+  return out;
 }
 
 function makeCtx(argsJson, decls) {
@@ -648,7 +685,7 @@ function makeCtx(argsJson, decls) {
       } else {
         raw = args[name];
       }
-      return hydrate(decl.type, raw);
+      return hydrate(decl.schema, raw);
     },
     /**
      * Build another doohickey and get its output as an Instance.

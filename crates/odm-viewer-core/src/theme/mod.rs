@@ -408,6 +408,20 @@ pub fn reset_button(ui: &mut Ui, id: egui::Id, rect: Rect) -> Response {
     response
 }
 
+/// A square icon button that removes something (an array element, a map
+/// entry): raised, pressing like any button, a [`cross`] for its glyph.
+pub fn remove_button(ui: &mut Ui, id: egui::Id, rect: Rect) -> Response {
+    let rect = Rect::from_min_size(snap(ui, rect.min), rect.size());
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let pressed = response.is_pointer_button_down_on();
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::ZERO, FACE);
+    bevel(p, rect, if pressed { Bevel::Sunken } else { Bevel::Raised });
+    let nudge = if pressed { 1.0 } else { 0.0 };
+    cross(p, snap(ui, rect.center() + vec2(nudge, nudge)), TEXT);
+    response
+}
+
 /// Snap a position to whole physical pixels. Bitmap art (icons, text) placed
 /// off the pixel grid blurs, and layout arithmetic lands on halves easily.
 pub fn snap(ui: &Ui, pos: Pos2) -> Pos2 {

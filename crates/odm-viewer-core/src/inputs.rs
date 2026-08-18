@@ -5,8 +5,15 @@
 //!
 //! Every input is one block: its name on a row of its own, its control(s)
 //! beneath — a check box being the exception, since a box wants its label
-//! beside it. `t` is an input like any other; it only gets a play button
-//! stapled to its row.
+//! beside it. Structure recurses: an entry's schema is walked and every
+//! node renders — objects as labelled property blocks, arrays and maps as
+//! element lists with Add/remove, unions as a tag radio plus the active
+//! variant's rows — with leaves drawing exactly the top-level controls,
+//! addressed by *path*. Anything unrenderable falls back to a JSON text
+//! field for that subtree. Edits stay whole-value: a leaf edit splices
+//! into a clone of the shown top-level value and emits one `Event::Set`.
+//! `t` is an input like any other; it only gets a play button stapled to
+//! its row.
 //!
 //! Invariant: the panel is a pure render of (report, tab set values). The
 //! only other state is `Tab::edit` — the buffer of the text field currently
@@ -17,11 +24,12 @@ use crate::tab::{Section, Tab};
 use crate::theme;
 use eframe::egui;
 use odm_build::{InputKind, InputReport, ReportEntry};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// One panel interaction.
 pub enum Event {
-    /// Set an input (JSON value) on one channel.
+    /// Set an input (JSON value) on one channel. Always the whole top-level
+    /// value, however deep the edit that produced it.
     Set(Section, String, Value),
     /// Clear an input back to its declared default.
     Clear(Section, String),
@@ -34,25 +42,44 @@ pub enum Event {
     Play(bool),
 }
 
-/// The address of one text field: an input, plus which component of it —
-/// vectors and matrices spread one input over several fields.
+/// One step into a structured value.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Seg {
+    Key(String),
+    Index(usize),
+}
+
+/// Where a node lives inside its input's value, rooted at the input name.
+pub type Path = Vec<Seg>;
+
+/// Which text field of a leaf: vectors and matrices spread one leaf over
+/// several component fields, and a map entry's key is a field of its own.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Slot {
+    Component(usize),
+    MapKey,
+}
+
+/// The address of one text field: an input, the path of the leaf inside its
+/// value, and which slot of that leaf.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Field {
     pub section: Section,
     pub name: String,
-    pub index: usize,
+    pub path: Path,
+    pub slot: Slot,
 }
 
 impl Field {
-    fn new(section: Section, name: &str, index: usize) -> Field {
-        Field { section, name: name.to_string(), index }
+    fn new(section: Section, name: &str, path: &Path, slot: Slot) -> Field {
+        Field { section, name: name.to_string(), path: path.clone(), slot }
     }
 
     /// What this field's text box is keyed by. Handed to `theme::text_edit`
     /// as-is — it hashes what it is given, so hashing here first would key
     /// the box under something else.
-    fn key(&self) -> (&'static str, Section, &str, usize) {
-        ("input", self.section, &self.name, self.index)
+    fn key(&self) -> (&'static str, Section, &str, &Path, Slot) {
+        ("input", self.section, &self.name, &self.path, self.slot)
     }
 
     #[cfg(test)]
@@ -106,7 +133,8 @@ pub fn apply(tab: &mut Tab, report: &InputReport, events: Vec<Event>) {
 /// Pin a set value — unless it equals the input's declared default, which
 /// clears the pin instead: "set to the default" and "cleared to the
 /// default" are one state, not two (the reset button would otherwise claim
-/// a difference that isn't there).
+/// a difference that isn't there). Whole-value comparison, so growing an
+/// array pins it and shrinking it back to the default clears the pin.
 fn set_or_clear(tab: &mut Tab, report: &InputReport, section: Section, name: String, value: Value) {
     let default = report
         .inputs
@@ -150,9 +178,9 @@ fn section_of(entry: &ReportEntry) -> Section {
 fn is_transport(entry: &ReportEntry) -> bool {
     entry.name == "t"
         && entry.kind == InputKind::Cascade
-        && matches!(entry.ty.as_deref(), Some("number") | Some("integer"))
-        && entry.minimum.is_some()
-        && entry.maximum.is_some()
+        && matches!(entry.ty(), Some("number") | Some("integer"))
+        && entry.minimum().is_some()
+        && entry.maximum().is_some()
 }
 
 /// The transport entry of the tab's report, if it has one.
@@ -230,8 +258,10 @@ const ROW: f32 = 21.0;
 const GAP: f32 = 4.0;
 /// Gap below one input's block.
 const BLOCK_GAP: f32 = 6.0;
-/// Width of the x/y/z column beside a vector's components.
+/// Width of the x/y/z (or element-index) column beside a row's control.
 const COMP_W: f32 = 11.0;
+/// How much each nesting level indents its rows.
+const INDENT: f32 = 10.0;
 /// The adjuster buttons of an unranged number, in the order they sit in.
 const ADJUSTERS: [&str; 4] = ["/2", "-", "+", "2x"];
 /// Padding inside an adjuster button — narrower than a normal button's, to
@@ -239,7 +269,7 @@ const ADJUSTERS: [&str; 4] = ["/2", "-", "+", "2x"];
 const ADJUSTER_PAD: f32 = 4.0;
 
 /// One input's block: the name row (with the reset button at its right end
-/// while the value is pinned), then the control rows.
+/// while the value is pinned), then the control rows, recursively.
 fn control(
     ui: &mut egui::Ui,
     tab: &Tab,
@@ -250,7 +280,7 @@ fn control(
 ) {
     let shown = tab.shown_value(section, entry).clone();
     let name = entry.name.clone();
-    let kind = ControlKind::of(entry);
+    let is_bool = matches!(NodeKind::of(&entry.schema), NodeKind::Bool);
     let full = ui.available_width();
     let is_set =
         tab.set_values(section).get(&name).is_some_and(|v| !same_value(v, &entry.default));
@@ -265,42 +295,28 @@ fn control(
         let head = row(ui, full);
         let head_w = (full - theme::RESET_SIDE - GAP).max(0.0);
         let head_rect = egui::Rect::from_min_size(head.min, egui::vec2(head_w, ROW));
-        let response = match kind {
-            ControlKind::Bool => {
-                let on = shown.as_bool().unwrap_or(false);
-                let r = theme::check_box(ui, ("check", section, &name), head_rect, on, &name);
-                if r.clicked() {
-                    events.push(Event::Set(section, name.clone(), Value::Bool(!on)));
-                }
-                r
+        let response = if is_bool {
+            let on = shown.as_bool().unwrap_or(false);
+            let id = ("check", section, &name, &Path::new());
+            let r = theme::check_box(ui, id, head_rect, on, &name);
+            if r.clicked() {
+                events.push(Event::Set(section, name.clone(), Value::Bool(!on)));
             }
-            _ => {
-                let galley = ui.painter().layout_no_wrap(
-                    name.clone(),
-                    egui::FontId::proportional(theme::UI_SIZE),
-                    theme::TEXT,
-                );
-                let pos = theme::snap(
-                    ui,
-                    egui::pos2(
-                        head_rect.left(),
-                        head_rect.center().y - galley.size().y / 2.0,
-                    ),
-                );
-                ui.painter().with_clip_rect(head_rect).galley(pos, galley, theme::TEXT);
-                ui.interact(
-                    head_rect,
-                    egui::Id::new(("label", section, &name)),
-                    egui::Sense::hover(),
-                )
-            }
+            r
+        } else {
+            text_at(ui, head_rect, &name, theme::TEXT);
+            ui.interact(
+                head_rect,
+                egui::Id::new(("label", section, &name)),
+                egui::Sense::hover(),
+            )
         };
-        if let Some(d) = &entry.description {
+        if let Some(d) = entry.description() {
             response.on_hover_text(d);
         }
 
         // Reset, at the right end of the name row — drawn only when the
-        // value is pinned.
+        // value is pinned. One per top-level input: a whole-value clear.
         if is_set {
             let reset_rect = egui::Rect::from_min_size(
                 egui::pos2(head.right() - theme::RESET_SIDE, head.center().y - theme::RESET_SIDE / 2.0),
@@ -312,60 +328,158 @@ fn control(
             }
         }
 
-        match kind {
-            ControlKind::Bool => {}
-            ControlKind::Choice(choices) => {
-                for (i, c) in choices.iter().enumerate() {
-                    let rect = row(ui, full);
+        if !is_bool {
+            let mut cx = Cx {
+                section,
+                name,
+                top: shown,
+                playing: tab.playing,
+                transport: is_transport(entry),
+                full,
+                events,
+                edit,
+            };
+            cx.contents(ui, &entry.schema, &Path::new(), 0.0);
+        }
+    });
+    ui.add_space(BLOCK_GAP);
+}
+
+/// The per-input render state the recursion threads: which input, its shown
+/// top-level value (every leaf edit splices into a clone of it), and the
+/// event/edit sinks.
+struct Cx<'a> {
+    section: Section,
+    name: String,
+    top: Value,
+    playing: bool,
+    /// This input is the transport: its number row gets a play button.
+    transport: bool,
+    full: f32,
+    events: &'a mut Vec<Event>,
+    edit: &'a mut Edit,
+}
+
+impl Cx<'_> {
+    fn field(&self, path: &Path, slot: Slot) -> Field {
+        Field::new(self.section, &self.name, path, slot)
+    }
+
+    /// Splice a leaf edit at its path into a clone of the shown top-level
+    /// value and emit the whole value — events stay whole-value.
+    fn set_at(&mut self, path: &Path, leaf: Value) {
+        let whole = splice(&self.top, path, leaf);
+        self.events.push(Event::Set(self.section, self.name.clone(), whole));
+    }
+
+    /// The value shown at `path`: navigate the top-level value; an absent
+    /// subtree shows its schema's default, else a type-blank (synthesis).
+    fn at(&self, schema: &Map<String, Value>, path: &Path) -> Value {
+        value_at(&self.top, path).cloned().unwrap_or_else(|| odm_build::synthesize(schema))
+    }
+
+    /// Allocate one full-width row, indented on the left.
+    fn row(&self, ui: &mut egui::Ui, indent: f32) -> egui::Rect {
+        shrink_left(row(ui, self.full), indent)
+    }
+
+    /// One labelled subtree: a boolean puts the box on the label row; every
+    /// other kind gets a label row and its contents indented beneath —
+    /// exactly the top-level block shape, one level down.
+    fn child(
+        &mut self,
+        ui: &mut egui::Ui,
+        label: &str,
+        schema: &Map<String, Value>,
+        path: &Path,
+        indent: f32,
+    ) {
+        if let NodeKind::Bool = NodeKind::of(schema) {
+            let rect = self.row(ui, indent);
+            self.bool_row(ui, rect, path, label);
+            return;
+        }
+        let rect = self.row(ui, indent);
+        text_at(ui, rect, label, theme::TEXT);
+        if let Some(d) = schema.get("description").and_then(|d| d.as_str()) {
+            ui.interact(
+                rect,
+                egui::Id::new(("label", self.section, &self.name, path)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(d);
+        }
+        self.contents(ui, schema, path, indent + INDENT);
+    }
+
+    /// One node's control rows (its label, if any, drawn by the caller).
+    fn contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        schema: &Map<String, Value>,
+        path: &Path,
+        indent: f32,
+    ) {
+        match NodeKind::of(schema) {
+            // Only reached unlabelled (top level bools live on the name
+            // row; array elements go through the inline row).
+            NodeKind::Bool => {
+                let rect = self.row(ui, indent);
+                self.bool_row(ui, rect, path, "");
+            }
+            NodeKind::Choice(choices) => {
+                let shown = self.at(schema, path);
+                for (i, c) in choices.clone().iter().enumerate() {
+                    let rect = self.row(ui, indent);
                     let current = same_value(c, &shown);
-                    let id = ("radio", section, &name, i);
+                    let id = ("radio", self.section, &self.name, path, i);
                     if theme::radio(ui, id, rect, current, &plain(c)).clicked() && !current {
-                        events.push(Event::Set(section, name.clone(), c.clone()));
+                        self.set_at(path, c.clone());
                     }
                 }
             }
-            ControlKind::Number => {
-                let mut rect = row(ui, full);
+            NodeKind::Number => {
+                let mut rect = self.row(ui, indent);
                 // The one thing being the transport buys: a play button,
                 // parked at the right end of the row.
-                if is_transport(entry) {
-                    let text = if tab.playing { "Stop" } else { "Play" };
+                if self.transport && path.is_empty() {
+                    let text = if self.playing { "Stop" } else { "Play" };
                     let w = button_width(ui, "Stop").max(button_width(ui, "Play"));
                     let at = egui::Rect::from_min_size(
                         egui::pos2(rect.right() - w, rect.top()),
                         egui::vec2(w, ROW),
                     );
+                    let playing = self.playing;
                     if theme::button(&mut child(ui, at), text).clicked() {
-                        events.push(Event::Play(!tab.playing));
+                        self.events.push(Event::Play(!playing));
                     }
                     rect = shrink_right(rect, w + GAP);
                 }
-                let v = shown.as_f64().unwrap_or(0.0);
-                if let Some(n) =
-                    number(ui, edit, Field::new(section, &name, 0), rect, v, entry, adjust(entry))
-                {
-                    events.push(Event::Set(section, name.clone(), num(n)));
-                }
+                self.number_row(ui, schema, path, rect);
             }
-            ControlKind::Vector(labels) => {
-                let parts = components(&shown, &entry.default, labels.len());
+            NodeKind::Vector(labels) => {
+                let parts = components(&self.at(schema, path), labels.len());
+                let spec = NumSpec::of(schema);
                 for (i, letter) in labels.iter().enumerate() {
-                    let r = row(ui, full);
+                    let r = self.row(ui, indent);
                     text_at(ui, r, letter, theme::WEAK_TEXT);
-                    let field = shrink_left(r, COMP_W);
-                    let f = Field::new(section, &name, i);
-                    if let Some(n) = number(ui, edit, f, field, parts[i], entry, adjust(entry)) {
+                    let rect = shrink_left(r, COMP_W);
+                    let f = self.field(path, Slot::Component(i));
+                    if let Some(n) =
+                        number(ui, self.edit, f, rect, parts[i], &spec, adjust_of(&spec))
+                    {
                         let mut next = parts.clone();
                         next[i] = n;
-                        events.push(Event::Set(section, name.clone(), array(&next)));
+                        self.set_at(path, array(&next));
                     }
                 }
             }
-            ControlKind::Matrix => {
-                let parts = components(&shown, &entry.default, 16);
-                let cell_w = ((full - GAP * 3.0) / 4.0).floor();
+            NodeKind::Matrix => {
+                let parts = components(&self.at(schema, path), 16);
+                let spec = NumSpec::of(schema);
                 for r in 0..4 {
-                    let line = row(ui, full);
+                    let line = self.row(ui, indent);
+                    let cell_w = ((line.width() - GAP * 3.0) / 4.0).floor();
                     for c in 0..4 {
                         // Laid out as the matrix reads — row r, column c —
                         // over column-major storage.
@@ -374,29 +488,338 @@ fn control(
                             egui::pos2(line.left() + (cell_w + GAP) * c as f32, line.top()),
                             egui::vec2(cell_w, ROW),
                         );
-                        let f = Field::new(section, &name, i);
-                        if let Some(n) = number(ui, edit, f, cell, parts[i], entry, Adjust::None) {
+                        let f = self.field(path, Slot::Component(i));
+                        if let Some(n) =
+                            number(ui, self.edit, f, cell, parts[i], &spec, Adjust::None)
+                        {
                             let mut next = parts.clone();
                             next[i] = n;
-                            events.push(Event::Set(section, name.clone(), array(&next)));
+                            self.set_at(path, array(&next));
                         }
                     }
                 }
             }
-            ControlKind::Text => {
-                // Free-form: edited as (relaxed) JSON.
-                let rect = row(ui, full);
-                let f = Field::new(section, &name, 0);
-                if let Some(text) = field_edit(ui, edit, &f, rect, plain(&shown)) {
-                    let value = parse_value(&text, entry.ty.as_deref());
-                    if !same_value(&value, &shown) {
-                        events.push(Event::Set(section, name.clone(), value));
+            NodeKind::Text => {
+                let rect = self.row(ui, indent);
+                self.text_row(ui, schema, path, rect);
+            }
+            NodeKind::Object(props) => {
+                for (pname, pschema) in props.clone() {
+                    let Some(ps) = pschema.as_object() else { continue };
+                    let mut p = path.clone();
+                    p.push(Seg::Key(pname.clone()));
+                    self.child(ui, &pname, ps, &p, indent);
+                }
+            }
+            NodeKind::Array(items) => {
+                let items = items.clone();
+                let arr = self.at(schema, path).as_array().cloned().unwrap_or_default();
+                for i in 0..arr.len() {
+                    let mut p = path.clone();
+                    p.push(Seg::Index(i));
+                    let rect = self.row(ui, indent);
+                    let removed = self.remove_box(ui, rect, &p);
+                    let inner = shrink_right(rect, theme::RESET_SIDE + GAP);
+                    let label = i.to_string();
+                    if NodeKind::of(&items).single_row() {
+                        text_at(ui, inner, &label, theme::WEAK_TEXT);
+                        self.leaf_row(ui, &items, &p, shrink_left(inner, COMP_W));
+                    } else {
+                        text_at(ui, inner, &label, theme::WEAK_TEXT);
+                        self.contents(ui, &items, &p, indent + INDENT);
+                    }
+                    if removed {
+                        let mut next = arr.clone();
+                        next.remove(i);
+                        self.set_at(path, Value::Array(next));
+                    }
+                }
+                let rect = self.row(ui, indent);
+                if self.add_button(ui, rect, path) {
+                    let mut next = arr.clone();
+                    next.push(odm_build::synthesize(&items));
+                    self.set_at(path, Value::Array(next));
+                }
+            }
+            NodeKind::MapOf(values) => {
+                let values = values.clone();
+                // serde_json's Map is key-sorted; the panel shows entries in
+                // that (identity) order.
+                let map = self.at(schema, path).as_object().cloned().unwrap_or_default();
+                for k in map.keys() {
+                    let mut p = path.clone();
+                    p.push(Seg::Key(k.clone()));
+                    let rect = self.row(ui, indent);
+                    let removed = self.remove_box(ui, rect, &p);
+                    let inner = shrink_right(rect, theme::RESET_SIDE + GAP);
+                    // The key column: an editable text field. A rename
+                    // splices remove+insert; empty or duplicate keys
+                    // discard like any invalid edit.
+                    let kw = (inner.width() * 0.4).clamp(40.0, 120.0).min(inner.width());
+                    let krect = egui::Rect::from_min_size(inner.min, egui::vec2(kw, ROW));
+                    let kf = self.field(&p, Slot::MapKey);
+                    if let Some(text) = field_edit(ui, self.edit, &kf, krect, k.clone()) {
+                        let nk = text.trim();
+                        if !nk.is_empty() && nk != k && !map.contains_key(nk) {
+                            let mut next = map.clone();
+                            let v = next.remove(k).expect("iterating map keys");
+                            next.insert(nk.to_string(), v);
+                            self.set_at(path, Value::Object(next));
+                        }
+                    }
+                    if NodeKind::of(&values).single_row() {
+                        self.leaf_row(ui, &values, &p, shrink_left(inner, kw + GAP));
+                    } else {
+                        self.contents(ui, &values, &p, indent + INDENT);
+                    }
+                    if removed {
+                        let mut next = map.clone();
+                        next.remove(k);
+                        self.set_at(path, Value::Object(next));
+                    }
+                }
+                let rect = self.row(ui, indent);
+                if self.add_button(ui, rect, path) {
+                    // A fresh unused key, with its field focused for
+                    // immediate rename.
+                    let mut key = "new".to_string();
+                    let mut n = 1;
+                    while map.contains_key(&key) {
+                        n += 1;
+                        key = format!("new-{n}");
+                    }
+                    let mut p = path.clone();
+                    p.push(Seg::Key(key.clone()));
+                    let focus = egui::Id::new(self.field(&p, Slot::MapKey).key());
+                    ui.ctx().memory_mut(|m| m.request_focus(focus));
+                    let mut next = map.clone();
+                    next.insert(key, odm_build::synthesize(&values));
+                    self.set_at(path, Value::Object(next));
+                }
+            }
+            NodeKind::Union => {
+                let shown = self.at(schema, path);
+                let tag = odm_build::tag_name(schema).to_string();
+                let current = shown.get(&tag).and_then(|k| k.as_str()).map(|s| s.to_string());
+                let variants =
+                    schema.get("variants").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+                for (i, vname) in variants.keys().enumerate() {
+                    let rect = self.row(ui, indent);
+                    let selected = current.as_deref() == Some(vname);
+                    let id = ("radio", self.section, &self.name, path, i);
+                    if theme::radio(ui, id, rect, selected, vname).clicked() && !selected {
+                        // Switching variants replaces the subtree with the
+                        // new variant's template — shared fields belong
+                        // outside the union, on the enclosing object.
+                        self.set_at(path, odm_build::synthesize_variant(schema, vname));
+                    }
+                }
+                if let Some(props) = current
+                    .and_then(|c| variants.get(&c).cloned())
+                    .and_then(|b| b.get("properties").cloned())
+                    .and_then(|p| p.as_object().cloned())
+                {
+                    for (pname, pschema) in props {
+                        let Some(ps) = pschema.as_object() else { continue };
+                        let mut p = path.clone();
+                        p.push(Seg::Key(pname.clone()));
+                        self.child(ui, &pname, ps, &p, indent + INDENT);
                     }
                 }
             }
         }
-    });
-    ui.add_space(BLOCK_GAP);
+    }
+
+    /// A single-row leaf control drawn into `rect` (array elements and map
+    /// entries put their label/key beside the control on one row).
+    fn leaf_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        schema: &Map<String, Value>,
+        path: &Path,
+        rect: egui::Rect,
+    ) {
+        match NodeKind::of(schema) {
+            NodeKind::Bool => self.bool_row(ui, rect, path, ""),
+            NodeKind::Number => self.number_row(ui, schema, path, rect),
+            _ => self.text_row(ui, schema, path, rect),
+        }
+    }
+
+    fn bool_row(&mut self, ui: &mut egui::Ui, rect: egui::Rect, path: &Path, label: &str) {
+        let on = self.at(&Map::new(), path).as_bool().unwrap_or(false);
+        let id = ("check", self.section, &self.name, path);
+        if theme::check_box(ui, id, rect, on, label).clicked() {
+            self.set_at(path, Value::Bool(!on));
+        }
+    }
+
+    fn number_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        schema: &Map<String, Value>,
+        path: &Path,
+        rect: egui::Rect,
+    ) {
+        let v = self.at(schema, path).as_f64().unwrap_or(0.0);
+        let spec = NumSpec::of(schema);
+        let f = self.field(path, Slot::Component(0));
+        if let Some(n) = number(ui, self.edit, f, rect, v, &spec, adjust_of(&spec)) {
+            self.set_at(path, num(n));
+        }
+    }
+
+    fn text_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        schema: &Map<String, Value>,
+        path: &Path,
+        rect: egui::Rect,
+    ) {
+        // Free-form: edited as (relaxed) JSON — the universal escape hatch
+        // for strings, colors, and any unrenderable subtree.
+        let shown = self.at(schema, path);
+        let f = self.field(path, Slot::Component(0));
+        if let Some(text) = field_edit(ui, self.edit, &f, rect, plain(&shown)) {
+            let value = parse_value(&text, schema.get("type").and_then(|t| t.as_str()));
+            if !same_value(&value, &shown) {
+                self.set_at(path, value);
+            }
+        }
+    }
+
+    /// The × at the right end of an element/entry row. Returns clicked.
+    fn remove_box(&mut self, ui: &mut egui::Ui, rect: egui::Rect, path: &Path) -> bool {
+        let at = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - theme::RESET_SIDE, rect.center().y - theme::RESET_SIDE / 2.0),
+            egui::Vec2::splat(theme::RESET_SIDE),
+        );
+        let id = egui::Id::new(("remove", self.section, &self.name, path));
+        theme::remove_button(ui, id, at).clicked()
+    }
+
+    /// The Add button under an array's/map's entries. Returns clicked.
+    fn add_button(&mut self, ui: &mut egui::Ui, rect: egui::Rect, path: &Path) -> bool {
+        let w = button_width(ui, "Add");
+        let at = egui::Rect::from_min_size(rect.min, egui::vec2(w, ROW));
+        let mut bui = child(ui, at);
+        // The button needs a discriminated id: several collections may sit
+        // in one panel.
+        let _ = path;
+        theme::button(&mut bui, "Add").clicked()
+    }
+}
+
+/// What kind of control a schema node draws.
+enum NodeKind<'a> {
+    Bool,
+    Choice(&'a Vec<Value>),
+    Number,
+    /// A fixed-length run of numbers, one row each, under these letters.
+    Vector(&'static [&'static str]),
+    Matrix,
+    /// One text field: strings, colors, untyped values, and any subtree
+    /// with nothing better to render as.
+    Text,
+    /// `object` with `properties`: one labelled child per property.
+    Object(&'a Map<String, Value>),
+    /// `array` with `items`: indexed elements plus Add, per-element ×.
+    Array(&'a Map<String, Value>),
+    /// `object` with `additionalProperties`: like the array control with an
+    /// editable key column.
+    MapOf(&'a Map<String, Value>),
+    /// `variants`: the tag as radios, the active variant's rows beneath.
+    Union,
+}
+
+impl<'a> NodeKind<'a> {
+    fn of(schema: &'a Map<String, Value>) -> NodeKind<'a> {
+        if schema.contains_key("variants") {
+            return NodeKind::Union;
+        }
+        if let Some(choices) = schema.get("enum").and_then(|e| e.as_array()) {
+            return NodeKind::Choice(choices);
+        }
+        match schema.get("type").and_then(|t| t.as_str()) {
+            Some("boolean") => NodeKind::Bool,
+            Some("number") | Some("integer") => NodeKind::Number,
+            Some("vector2") => NodeKind::Vector(&["x", "y"]),
+            Some("vector3") => NodeKind::Vector(&["x", "y", "z"]),
+            Some("quaternion") => NodeKind::Vector(&["x", "y", "z", "w"]),
+            Some("matrix4") => NodeKind::Matrix,
+            Some("array") => match schema.get("items").and_then(|i| i.as_object()) {
+                Some(items) => NodeKind::Array(items),
+                None => NodeKind::Text,
+            },
+            Some("object") => {
+                if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+                    NodeKind::Object(props)
+                } else if let Some(ap) =
+                    schema.get("additionalProperties").and_then(|p| p.as_object())
+                {
+                    NodeKind::MapOf(ap)
+                } else {
+                    NodeKind::Text
+                }
+            }
+            _ => NodeKind::Text,
+        }
+    }
+
+    /// Kinds that fit on one row, so array elements and map entries can put
+    /// them beside their label/key instead of beneath it.
+    fn single_row(&self) -> bool {
+        matches!(self, NodeKind::Bool | NodeKind::Number | NodeKind::Text)
+    }
+}
+
+/// Navigate a value by path. `None` for anything absent or mistyped.
+fn value_at<'a>(top: &'a Value, path: &[Seg]) -> Option<&'a Value> {
+    match path.split_first() {
+        None => Some(top),
+        Some((Seg::Key(k), rest)) => value_at(top.as_object()?.get(k)?, rest),
+        Some((Seg::Index(i), rest)) => value_at(top.as_array()?.get(*i)?, rest),
+    }
+}
+
+/// A clone of `top` with `leaf` spliced in at `path`, creating intermediate
+/// containers where the path runs through absent (or mistyped) values.
+fn splice(top: &Value, path: &[Seg], leaf: Value) -> Value {
+    match path.split_first() {
+        None => leaf,
+        Some((Seg::Key(k), rest)) => {
+            let mut obj = top.as_object().cloned().unwrap_or_default();
+            let child = obj.get(k).cloned().unwrap_or(Value::Null);
+            obj.insert(k.clone(), splice(&child, rest, leaf));
+            Value::Object(obj)
+        }
+        Some((Seg::Index(i), rest)) => {
+            let mut arr = top.as_array().cloned().unwrap_or_default();
+            while arr.len() <= *i {
+                arr.push(Value::Null);
+            }
+            let child = arr[*i].clone();
+            arr[*i] = splice(&child, rest, leaf);
+            Value::Array(arr)
+        }
+    }
+}
+
+/// The numeric constraints of one leaf, read off its schema node.
+struct NumSpec {
+    integer: bool,
+    minimum: Option<f64>,
+    maximum: Option<f64>,
+}
+
+impl NumSpec {
+    fn of(schema: &Map<String, Value>) -> NumSpec {
+        NumSpec {
+            integer: schema.get("type").and_then(|t| t.as_str()) == Some("integer"),
+            minimum: schema.get("minimum").and_then(|v| v.as_f64()),
+            maximum: schema.get("maximum").and_then(|v| v.as_f64()),
+        }
+    }
 }
 
 /// What sits to the right of a number's field.
@@ -410,8 +833,8 @@ enum Adjust {
     None,
 }
 
-fn adjust(entry: &ReportEntry) -> Adjust {
-    match (entry.minimum, entry.maximum) {
+fn adjust_of(spec: &NumSpec) -> Adjust {
+    match (spec.minimum, spec.maximum) {
         (Some(lo), Some(hi)) if hi > lo => Adjust::Slider(lo, hi),
         _ => Adjust::Buttons,
     }
@@ -425,7 +848,7 @@ fn number(
     field: Field,
     rect: egui::Rect,
     value: f64,
-    entry: &ReportEntry,
+    spec: &NumSpec,
     adjust: Adjust,
 ) -> Option<f64> {
     let mut out = None;
@@ -437,7 +860,7 @@ fn number(
             let mut v = value;
             let mut bui = child(ui, bar);
             if theme::trackbar(&mut bui, &mut v, lo..=hi, bar.width()).changed() {
-                out = Some(round(v, entry));
+                out = Some(round(v, spec));
             }
             egui::Rect::from_min_size(rect.min, egui::vec2(field_w, rect.height()))
         }
@@ -451,7 +874,7 @@ fn number(
                 let mut bui = child(ui, at);
                 bui.spacing_mut().button_padding.x = ADJUSTER_PAD;
                 if theme::button(&mut bui, *text).clicked() {
-                    out = Some(round(adjusted(value, *text, entry), entry));
+                    out = Some(round(adjusted(value, *text, spec), spec));
                 }
                 x += w + GAP;
             }
@@ -461,7 +884,7 @@ fn number(
     // A field the user typed into wins over an adjuster clicked in the same
     // frame (the click is what took the field's focus away).
     if let Some(text) = field_edit(ui, edit, &field, text_rect, trim_num(value)) {
-        out = text.trim().parse::<f64>().ok().map(|v| clamp(round(v, entry), entry));
+        out = text.trim().parse::<f64>().ok().map(|v| clamp(round(v, spec), spec));
     }
     out.filter(|v| *v != value)
 }
@@ -469,8 +892,8 @@ fn number(
 /// What an adjuster button does to a value. `-`/`+` step by the ten's place
 /// below the value's own (0.1 for 4.2, 10 for 380), so one click is always
 /// a nudge; integers step by 1.
-fn adjusted(value: f64, button: &str, entry: &ReportEntry) -> f64 {
-    let step = if entry.ty.as_deref() == Some("integer") {
+fn adjusted(value: f64, button: &str, spec: &NumSpec) -> f64 {
+    let step = if spec.integer {
         1.0
     } else {
         let m = value.abs();
@@ -488,13 +911,13 @@ fn adjusted(value: f64, button: &str, entry: &ReportEntry) -> f64 {
 }
 
 /// Integers stay integers, and everything stays inside a declared range.
-fn round(v: f64, entry: &ReportEntry) -> f64 {
-    let v = if entry.ty.as_deref() == Some("integer") { v.round() } else { trim(v) };
-    clamp(v, entry)
+fn round(v: f64, spec: &NumSpec) -> f64 {
+    let v = if spec.integer { v.round() } else { trim(v) };
+    clamp(v, spec)
 }
 
-fn clamp(v: f64, entry: &ReportEntry) -> f64 {
-    v.max(entry.minimum.unwrap_or(f64::NEG_INFINITY)).min(entry.maximum.unwrap_or(f64::INFINITY))
+fn clamp(v: f64, spec: &NumSpec) -> f64 {
+    v.max(spec.minimum.unwrap_or(f64::NEG_INFINITY)).min(spec.maximum.unwrap_or(f64::INFINITY))
 }
 
 /// Drop the float dust a step or a halving leaves behind (0.30000000000000004).
@@ -534,15 +957,14 @@ fn field_edit(
     was.filter(|_| !fui.input(|i| i.key_pressed(egui::Key::Escape))).map(|_| buf)
 }
 
-/// The numbers behind a vector/matrix input: the shown value if it is the
-/// right shape, else the declared default, else zeros.
-fn components(shown: &Value, default: &Value, n: usize) -> Vec<f64> {
-    let pick = |v: &Value| {
-        v.as_array()
-            .filter(|a| a.len() == n)
-            .map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect::<Vec<f64>>())
-    };
-    pick(shown).or_else(|| pick(default)).unwrap_or_else(|| vec![0.0; n])
+/// The numbers behind a vector/matrix leaf: the shown value if it is the
+/// right shape, else zeros.
+fn components(shown: &Value, n: usize) -> Vec<f64> {
+    shown
+        .as_array()
+        .filter(|a| a.len() == n)
+        .map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect::<Vec<f64>>())
+        .unwrap_or_else(|| vec![0.0; n])
 }
 
 fn array(values: &[f64]) -> Value {
@@ -592,33 +1014,6 @@ fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     text_width(ui, text) + ui.spacing().button_padding.x * 2.0
 }
 
-enum ControlKind {
-    Bool,
-    Choice(Vec<Value>),
-    Number,
-    /// A fixed-length run of numbers, one row each, under these letters.
-    Vector(&'static [&'static str]),
-    Matrix,
-    Text,
-}
-
-impl ControlKind {
-    fn of(entry: &ReportEntry) -> ControlKind {
-        if let Some(choices) = &entry.choices {
-            return ControlKind::Choice(choices.clone());
-        }
-        match entry.ty.as_deref() {
-            Some("boolean") => ControlKind::Bool,
-            Some("number") | Some("integer") => ControlKind::Number,
-            Some("vector2") => ControlKind::Vector(&["x", "y"]),
-            Some("vector3") => ControlKind::Vector(&["x", "y", "z"]),
-            Some("quaternion") => ControlKind::Vector(&["x", "y", "z", "w"]),
-            Some("matrix4") => ControlKind::Matrix,
-            _ => ControlKind::Text,
-        }
-    }
-}
-
 /// A value the way a text field shows it: bare strings unquoted, numbers
 /// rounded to a few decimals (a scrubbed `t` is 0.20833333333333334 in
 /// JSON), everything else compact JSON.
@@ -639,7 +1034,7 @@ fn trim_num(v: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// The reverse: JSON when it parses, else a bare string — except inputs
+/// The reverse: JSON when it parses, else a bare string — except leaves
 /// declared `type: 'string'`, which always take the text as-is.
 fn parse_value(text: &str, ty: Option<&str>) -> Value {
     let text = text.trim();
@@ -665,33 +1060,31 @@ mod tests {
     use odm_build::ValueSource;
     use serde_json::{Map, json};
 
-    /// A number input with a minimum but no maximum — field plus adjuster
-    /// buttons, like every input of examples/parametric-box.
-    fn number_entry(name: &str, default: i64) -> ReportEntry {
+    fn schema_of(v: Value) -> Map<String, Value> {
+        v.as_object().unwrap().clone()
+    }
+
+    fn entry_with(name: &str, kind: InputKind, schema: Value, default: Value) -> ReportEntry {
         ReportEntry {
             name: name.into(),
-            value: json!(default),
+            value: default.clone(),
             source: ValueSource::Default,
-            kind: InputKind::Plain,
-            ty: Some("number".into()),
-            minimum: Some(1.0),
-            maximum: None,
-            description: None,
-            default: json!(default),
-            choices: None,
+            kind,
+            schema: schema_of(schema),
+            default,
             declared_in: vec!["root.js".into()],
         }
     }
 
+    /// A number input with a minimum but no maximum — field plus adjuster
+    /// buttons, like every input of examples/parametric-box.
+    fn number_entry(name: &str, default: i64) -> ReportEntry {
+        entry_with(name, InputKind::Plain, json!({ "type": "number", "minimum": 1 }), json!(default))
+    }
+
     /// An input of any type, with no range declared.
     fn entry(name: &str, ty: &str, default: Value) -> ReportEntry {
-        ReportEntry {
-            ty: Some(ty.into()),
-            value: default.clone(),
-            default,
-            minimum: None,
-            ..number_entry(name, 0)
-        }
+        entry_with(name, InputKind::Plain, json!({ "type": ty }), default)
     }
 
     fn preset(name: &str, values: Value) -> (String, Map<String, Value>) {
@@ -760,8 +1153,11 @@ mod tests {
             self.frame(vec![egui::Event::PointerMoved(pos)]);
             self.frame(vec![button(true)]);
             self.frame(vec![button(false)]);
-            // The release frame's events are applied after it rendered; one
-            // more frame shows their effect, like the viewer's next repaint.
+            // The release frame's events are applied after it rendered; two
+            // more frames show their effect and settle the layout — between
+            // frames, `read_response` reflects the second-to-last frame, so
+            // one settled frame is not enough for a rect read to be current.
+            self.frame(Vec::new());
             self.frame(Vec::new());
         }
 
@@ -792,21 +1188,35 @@ mod tests {
             self.ctx.read_response(egui::Id::new(("reset", Section::Arg, name))).map(|r| r.rect)
         }
 
-        /// Click arg `name`'s check box row.
+        /// Click arg `name`'s check box row (top-level: empty path).
         fn click_check(&mut self, name: &str) {
             let rect = self
                 .ctx
-                .read_response(egui::Id::new(("check", Section::Arg, name)))
+                .read_response(egui::Id::new(("check", Section::Arg, name, &Path::new())))
                 .unwrap_or_else(|| panic!("no check box for {name:?}"))
                 .rect;
             self.click_at(rect.center());
         }
 
-        fn field_rect(&self, name: &str, index: usize) -> egui::Rect {
+        /// Click the × of the element/entry at `path`.
+        fn click_remove(&mut self, name: &str, path: Path) {
+            let rect = self
+                .ctx
+                .read_response(egui::Id::new(("remove", Section::Arg, name, &path)))
+                .unwrap_or_else(|| panic!("no remove at {name}{path:?}"))
+                .rect;
+            self.click_at(rect.center());
+        }
+
+        fn field_rect_at(&self, name: &str, path: Path, slot: Slot) -> egui::Rect {
             self.ctx
-                .read_response(Field::new(Section::Arg, name, index).id())
-                .unwrap_or_else(|| panic!("no field {name:?}[{index}]"))
+                .read_response(Field::new(Section::Arg, name, &path, slot).id())
+                .unwrap_or_else(|| panic!("no field {name:?}{path:?}[{slot:?}]"))
                 .rect
+        }
+
+        fn field_rect(&self, name: &str, index: usize) -> egui::Rect {
+            self.field_rect_at(name, Vec::new(), Slot::Component(index))
         }
 
         /// What the text field for arg `name` displays right now.
@@ -814,8 +1224,7 @@ mod tests {
             self.component_text(name, 0)
         }
 
-        fn component_text(&self, name: &str, index: usize) -> String {
-            let rect = self.field_rect(name, index);
+        fn text_in(&self, rect: egui::Rect) -> String {
             self.texts
                 .iter()
                 .filter(|(r, _)| rect.contains(r.center()))
@@ -823,17 +1232,28 @@ mod tests {
                 .collect()
         }
 
+        fn component_text(&self, name: &str, index: usize) -> String {
+            self.text_in(self.field_rect(name, index))
+        }
+
         fn field_center(&self, name: &str) -> egui::Pos2 {
             self.field_rect(name, 0).center()
         }
 
-        /// Type `text` into arg `name`'s field (component `index`), replacing
-        /// what is there, and commit it with Enter.
-        fn type_into(&mut self, name: &str, index: usize, text: &str) {
-            self.click_at(self.field_rect(name, index).center());
+        /// Type `text` into the field at `rect`, replacing what is there,
+        /// and commit it with Enter.
+        fn type_at(&mut self, rect: egui::Rect, text: &str) {
+            self.click_at(rect.center());
             self.key(egui::Key::A, egui::Modifiers::COMMAND);
             self.frame(vec![egui::Event::Text(text.into())]);
             self.key(egui::Key::Enter, egui::Modifiers::default());
+            // Settle, as click_at does: the commit may reshape the panel.
+            self.frame(Vec::new());
+        }
+
+        /// Type into arg `name`'s field (component `index`).
+        fn type_into(&mut self, name: &str, index: usize, text: &str) {
+            self.type_at(self.field_rect(name, index), text);
         }
 
         fn key(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
@@ -926,7 +1346,8 @@ mod tests {
 
         h.key(egui::Key::A, egui::Modifiers::COMMAND);
         h.frame(vec![egui::Event::Text("42".into())]);
-        assert_eq!(h.tab.edit, Some((Field::new(Section::Arg, "height", 0), "42".into())));
+        let f = Field::new(Section::Arg, "height", &Vec::new(), Slot::Component(0));
+        assert_eq!(h.tab.edit, Some((f, "42".into())));
         assert_eq!(h.field_text("height"), "42");
 
         h.key(egui::Key::Enter, egui::Modifiers::default());
@@ -1009,11 +1430,8 @@ mod tests {
     /// toggles, and toggling back to the default clears the pin.
     #[test]
     fn bool_inputs_are_check_boxes() {
-        let mut entry = number_entry("lid", 0);
-        entry.ty = Some("boolean".into());
-        entry.default = json!(false);
-        entry.value = json!(false);
-        let mut h = Harness::new(InputReport { inputs: vec![entry], ..Default::default() });
+        let e = entry_with("lid", InputKind::Plain, json!({ "type": "boolean" }), json!(false));
+        let mut h = Harness::new(InputReport { inputs: vec![e], ..Default::default() });
         h.click_check("lid");
         assert_eq!(h.tab.set_args["lid"], json!(true));
         h.click_check("lid");
@@ -1024,17 +1442,18 @@ mod tests {
     /// not just the dot and its label.
     #[test]
     fn choice_inputs_are_radios() {
-        let mut entry = number_entry("style", 0);
-        entry.ty = Some("string".into());
-        entry.default = json!("flat");
-        entry.value = json!("flat");
-        entry.choices = Some(vec![json!("flat"), json!("gabled")]);
-        let mut h = Harness::new(InputReport { inputs: vec![entry], ..Default::default() });
+        let e = entry_with(
+            "style",
+            InputKind::Plain,
+            json!({ "type": "string", "enum": ["flat", "gabled"] }),
+            json!("flat"),
+        );
+        let mut h = Harness::new(InputReport { inputs: vec![e], ..Default::default() });
 
         // Click well to the right of the second choice's label.
         let row = h
             .ctx
-            .read_response(egui::Id::new(("radio", Section::Arg, "style", 1usize)))
+            .read_response(egui::Id::new(("radio", Section::Arg, "style", &Path::new(), 1usize)))
             .expect("a radio row")
             .rect;
         assert!(row.width() > 200.0, "the row spans the panel: {row:?}");
@@ -1049,9 +1468,12 @@ mod tests {
     /// clicking near the right end of the bar scrubs the value up.
     #[test]
     fn ranged_numbers_get_a_slider() {
-        let mut e = entry("angle", "number", json!(10));
-        e.minimum = Some(0.0);
-        e.maximum = Some(90.0);
+        let e = entry_with(
+            "angle",
+            InputKind::Plain,
+            json!({ "type": "number", "minimum": 0, "maximum": 90 }),
+            json!(10),
+        );
         let mut h = Harness::new(InputReport { inputs: vec![e], ..Default::default() });
         assert_eq!(h.field_text("angle"), "10");
 
@@ -1127,10 +1549,12 @@ mod tests {
     /// one extra: the play button beside it.
     #[test]
     fn the_transport_is_an_input_with_a_play_button() {
-        let mut t = entry("t", "number", json!(0));
-        t.kind = InputKind::Cascade;
-        t.minimum = Some(0.0);
-        t.maximum = Some(2.0);
+        let t = entry_with(
+            "t",
+            InputKind::Cascade,
+            json!({ "type": "number", "minimum": 0, "maximum": 2 }),
+            json!(0),
+        );
         let mut h = Harness::new(InputReport { inputs: vec![t], ..Default::default() });
         assert!(transport_entry(&h.tab).is_some());
 
@@ -1138,5 +1562,204 @@ mod tests {
         assert!(h.tab.playing);
         h.click_text("Stop");
         assert!(!h.tab.playing);
+    }
+
+    // ---------- structure: nested schemas, paths, add/remove ----------
+
+    fn hole_entry() -> ReportEntry {
+        entry_with(
+            "hole",
+            InputKind::Plain,
+            json!({ "type": "object",
+                "properties": {
+                    "r": { "type": "number" },
+                    "at": { "type": "vector3", "default": [1, 2, 3] },
+                },
+                "default": { "r": 6 } }),
+            json!({ "r": 6 }),
+        )
+    }
+
+    /// An object input renders one labelled block per property; editing a
+    /// nested leaf splices into the whole value and emits one Set.
+    #[test]
+    fn nested_leaf_edits_splice_into_the_whole_value() {
+        let mut h = Harness::new(InputReport { inputs: vec![hole_entry()], ..Default::default() });
+
+        // The nested number leaf, addressed by path.
+        let r = h.field_rect_at("hole", vec![Seg::Key("r".into())], Slot::Component(0));
+        assert_eq!(h.text_in(r), "6");
+        h.type_at(r, "9");
+        assert_eq!(h.tab.set_args["hole"], json!({ "r": 9 }));
+
+        // An absent property with a nested default displays that default...
+        let at1 = h.field_rect_at("hole", vec![Seg::Key("at".into())], Slot::Component(1));
+        assert_eq!(h.text_in(at1), "2");
+        // ...and editing one component splices the whole vector in.
+        h.type_at(at1, "7");
+        assert_eq!(h.tab.set_args["hole"], json!({ "r": 9, "at": [1, 7, 3] }));
+
+        // Reset stays one button per top-level input: a whole-value clear.
+        h.click_reset("hole");
+        assert!(!h.tab.set_args.contains_key("hole"));
+        h.frame(Vec::new());
+        let r = h.field_rect_at("hole", vec![Seg::Key("r".into())], Slot::Component(0));
+        assert_eq!(h.text_in(r), "6", "back to the declared default");
+    }
+
+    /// An array with an items schema renders per-element rows with a ×
+    /// each, plus Add. New elements come from the items default; removing
+    /// back down to the declared default clears the pin.
+    #[test]
+    fn arrays_grow_and_shrink() {
+        let bars = entry_with(
+            "bars",
+            InputKind::Plain,
+            json!({ "type": "array", "items": { "type": "number", "default": 5 }, "default": [1, 2] }),
+            json!([1, 2]),
+        );
+        let mut h = Harness::new(InputReport { inputs: vec![bars], ..Default::default() });
+
+        // Elements are number fields addressed by index.
+        let e0 = h.field_rect_at("bars", vec![Seg::Index(0)], Slot::Component(0));
+        assert_eq!(h.text_in(e0), "1");
+
+        h.click_text("Add");
+        assert_eq!(h.tab.set_args["bars"], json!([1, 2, 5]), "items.default is the template");
+        assert!(h.reset_rect("bars").is_some(), "a grown array is pinned");
+
+        // Editing the new element goes through its path.
+        let e2 = h.field_rect_at("bars", vec![Seg::Index(2)], Slot::Component(0));
+        h.type_at(e2, "8");
+        assert_eq!(h.tab.set_args["bars"], json!([1, 2, 8]));
+
+        // Removing back to the default clears the pin — comparison is
+        // whole-value.
+        h.click_remove("bars", vec![Seg::Index(2)]);
+        assert!(!h.tab.set_args.contains_key("bars"), "back at the default: pin cleared");
+    }
+
+    /// A subtree with nothing better to render as (an object with no
+    /// properties) falls back to a JSON text field for that subtree only.
+    #[test]
+    fn unrenderable_subtrees_fall_back_to_json() {
+        let e = entry_with(
+            "wrap",
+            InputKind::Plain,
+            json!({ "type": "object",
+                "properties": {
+                    "label": { "type": "string" },
+                    "cfg": { "type": "object" },
+                },
+                "default": { "label": "x", "cfg": { "a": 1 } } }),
+            json!({ "label": "x", "cfg": { "a": 1 } }),
+        );
+        let mut h = Harness::new(InputReport { inputs: vec![e], ..Default::default() });
+
+        let cfg = h.field_rect_at("wrap", vec![Seg::Key("cfg".into())], Slot::Component(0));
+        assert_eq!(h.text_in(cfg), "{\"a\":1}");
+        h.type_at(cfg, "{\"b\": 2}");
+        assert_eq!(h.tab.set_args["wrap"], json!({ "label": "x", "cfg": { "b": 2 } }));
+
+        // The sibling string leaf is unaffected and takes text as-is.
+        let label = h.field_rect_at("wrap", vec![Seg::Key("label".into())], Slot::Component(0));
+        h.type_at(label, "12 cm");
+        assert_eq!(h.tab.set_args["wrap"]["label"], json!("12 cm"));
+    }
+
+    /// A union renders its tag as radios; switching replaces the subtree
+    /// with the new variant's template, and the active variant's rows
+    /// render beneath.
+    #[test]
+    fn unions_switch_by_tag_radio() {
+        let shape = entry_with(
+            "shape",
+            InputKind::Plain,
+            json!({ "variants": {
+                "box": { "properties": { "size": { "type": "number", "default": 10 } } },
+                "sphere": { "properties": { "radius": { "type": "number", "default": 5 } } },
+            }, "default": { "kind": "box", "size": 10 } }),
+            json!({ "kind": "box", "size": 10 }),
+        );
+        let mut h = Harness::new(InputReport { inputs: vec![shape], ..Default::default() });
+
+        // The active variant's property renders.
+        let size = h.field_rect_at("shape", vec![Seg::Key("size".into())], Slot::Component(0));
+        assert_eq!(h.text_in(size), "10");
+
+        h.click_text("sphere");
+        assert_eq!(
+            h.tab.set_args["shape"],
+            json!({ "kind": "sphere", "radius": 5 }),
+            "the new variant's template replaces the subtree"
+        );
+        h.frame(Vec::new());
+        let radius = h.field_rect_at("shape", vec![Seg::Key("radius".into())], Slot::Component(0));
+        assert_eq!(h.text_in(radius), "5");
+
+        h.click_text("box");
+        assert!(!h.tab.set_args.contains_key("shape"), "back at the default: pin cleared");
+    }
+
+    /// A map input is the array control with an editable key column: Add
+    /// inserts under a fresh key, a rename splices remove+insert, invalid
+    /// renames discard, × removes.
+    #[test]
+    fn maps_add_rename_and_remove() {
+        let anchors = entry_with(
+            "anchors",
+            InputKind::Plain,
+            json!({ "type": "object", "additionalProperties": { "type": "number", "default": 1 },
+                "default": {} }),
+            json!({}),
+        );
+        let mut h = Harness::new(InputReport { inputs: vec![anchors], ..Default::default() });
+
+        h.click_text("Add");
+        assert_eq!(h.tab.set_args["anchors"], json!({ "new": 1 }));
+
+        // Rename via the key field.
+        let key = h.field_rect_at("anchors", vec![Seg::Key("new".into())], Slot::MapKey);
+        h.type_at(key, "top");
+        assert_eq!(h.tab.set_args["anchors"], json!({ "top": 1 }));
+
+        // A second Add picks a fresh key; renaming it onto a taken key
+        // discards like any invalid edit.
+        h.frame(Vec::new());
+        h.click_text("Add");
+        assert_eq!(h.tab.set_args["anchors"], json!({ "new": 1, "top": 1 }));
+        let key = h.field_rect_at("anchors", vec![Seg::Key("new".into())], Slot::MapKey);
+        h.type_at(key, "top");
+        assert_eq!(h.tab.set_args["anchors"], json!({ "new": 1, "top": 1 }), "duplicate discards");
+
+        // The value field sits beside the key.
+        let v = h.field_rect_at("anchors", vec![Seg::Key("top".into())], Slot::Component(0));
+        h.type_at(v, "4");
+        assert_eq!(h.tab.set_args["anchors"], json!({ "new": 1, "top": 4 }));
+
+        h.click_remove("anchors", vec![Seg::Key("new".into())]);
+        assert_eq!(h.tab.set_args["anchors"], json!({ "top": 4 }));
+        h.click_remove("anchors", vec![Seg::Key("top".into())]);
+        assert!(!h.tab.set_args.contains_key("anchors"), "empty again: pin cleared");
+    }
+
+    /// Nested edit buffers are isolated: two fields at different paths
+    /// never share a buffer, and an in-progress edit at one path leaves
+    /// every other field mirroring its value.
+    #[test]
+    fn nested_edit_buffers_are_isolated() {
+        let mut h = Harness::new(InputReport { inputs: vec![hole_entry()], ..Default::default() });
+        let r = h.field_rect_at("hole", vec![Seg::Key("r".into())], Slot::Component(0));
+        h.click_at(r.center());
+        h.key(egui::Key::A, egui::Modifiers::COMMAND);
+        h.frame(vec![egui::Event::Text("99".into())]);
+
+        let f = Field::new(Section::Arg, "hole", &vec![Seg::Key("r".into())], Slot::Component(0));
+        assert_eq!(h.tab.edit, Some((f, "99".into())));
+        // The sibling vector still mirrors its (default) value.
+        let at0 = h.field_rect_at("hole", vec![Seg::Key("at".into())], Slot::Component(0));
+        assert_eq!(h.text_in(at0), "1");
+        // Nothing committed yet.
+        assert!(h.tab.set_args.is_empty());
     }
 }

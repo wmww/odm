@@ -58,7 +58,7 @@ fn fall_through_names_reach_the_view() {
     // arm invoke (the second is covered by an invoke's cascade value).
     assert_eq!(names, vec!["speed", "t"]);
     let t = report.inputs.iter().find(|e| e.name == "t").unwrap();
-    assert_eq!((t.minimum, t.maximum), (Some(0.0), Some(2.0)));
+    assert_eq!((t.minimum(), t.maximum()), (Some(0.0), Some(2.0)));
     assert_eq!(t.value, json!(0));
     assert_eq!(t.source, ValueSource::Default);
     assert_eq!(t.kind, InputKind::Cascade);

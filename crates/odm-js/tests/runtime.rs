@@ -129,9 +129,9 @@ fn cascade_reads_recorded_as_deps() {
     ctx.insert("t".to_string(), json!(1.5));
     ctx.insert("width".to_string(), json!(30.0));
     let decls = json!({
-        "width": { "cascade": true, "type": "number" },
-        "t": { "cascade": true, "type": "number" },
-        "depth": { "cascade": false, "type": "number" },
+        "width": { "cascade": true, "schema": { "type": "number" } },
+        "t": { "cascade": true, "schema": { "type": "number" } },
+        "depth": { "cascade": false, "schema": { "type": "number" } },
     });
     let out = build_full(
         &w,
@@ -169,7 +169,7 @@ fn undeclared_get_is_an_error() {
         &w,
         "export default (ctx) => odm.box(ctx.input('nope'))",
         &json!({}),
-        &json!({ "size": { "cascade": false, "type": "number" } }),
+        &json!({ "size": { "cascade": false, "schema": { "type": "number" } } }),
         &HashMap::new(),
         None,
     )
@@ -203,10 +203,10 @@ fn extension_types_hydrate_to_three_instances() {
             "c": "#4682b4",
         }),
         &json!({
-            "off": { "cascade": false, "type": "vector3" },
-            "m": { "cascade": false, "type": "matrix4" },
-            "q": { "cascade": false, "type": "quaternion" },
-            "c": { "cascade": false, "type": "color" },
+            "off": { "cascade": false, "schema": { "type": "vector3" } },
+            "m": { "cascade": false, "schema": { "type": "matrix4" } },
+            "q": { "cascade": false, "schema": { "type": "quaternion" } },
+            "c": { "cascade": false, "schema": { "type": "color" } },
         }),
         &HashMap::new(),
         None,
@@ -399,7 +399,7 @@ fn invoke_runs_nested_isolate_and_records_dep() {
             }
             "#
             .to_string(),
-            json!({ "radius": { "cascade": false, "type": "number" } }),
+            json!({ "radius": { "cascade": false, "schema": { "type": "number" } } }),
         ),
     );
     let invoker = NestedInvoker {
@@ -457,7 +457,7 @@ fn repeated_invokes_share_one_stored_subtree() {
             (
                 "export default (ctx) => odm.cylinder(ctx.input('radius'), 1).name('wheel')"
                     .to_string(),
-                json!({ "radius": { "cascade": false, "type": "number" } }),
+                json!({ "radius": { "cascade": false, "schema": { "type": "number" } } }),
             ),
         );
         let invoker = NestedInvoker {
@@ -509,7 +509,7 @@ fn solids_serialize_through_invoke_args() {
             }
             "#
             .to_string(),
-            json!({ "tool": { "cascade": false, "type": "solid" } }),
+            json!({ "tool": { "cascade": false, "schema": { "type": "solid" } } }),
         ),
     );
     let invoker = NestedInvoker {
@@ -546,7 +546,7 @@ fn cascade_values_flow_to_the_nested_build() {
         "spinner.js".to_string(),
         (
             "export default (ctx) => odm.box(1).rotateZ(ctx.input('t'))".to_string(),
-            json!({ "t": { "cascade": true, "type": "number" } }),
+            json!({ "t": { "cascade": true, "schema": { "type": "number" } } }),
         ),
     );
     let invoker = NestedInvoker {

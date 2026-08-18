@@ -22,7 +22,7 @@ pub use executor::{
     InterruptHandle, InvokeError, Invoker, LogLevel, LogLine, cascade_value_hash,
 };
 pub use ir_json::node_from_json;
-pub use meta::{ExtType, Input, Meta};
+pub use meta::{ExtType, Input, Meta, synthesize, synthesize_variant, tag_name};
 pub use version::{ApiVersion, SUPPORTED, parse_doc, parse_pragma};
 pub use report::{
     InputKind, InputReport, ReportEntry, ValueSource, check_input_names, declared_entries,

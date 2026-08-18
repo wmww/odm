@@ -178,24 +178,24 @@ fn input_gallery_covers_every_control() {
             .unwrap_or_else(|| panic!("no {name:?} in the report"))
     };
 
-    assert_eq!(entry("windows").ty.as_deref(), Some("boolean"), "the check box");
-    assert!(entry("roof").choices.is_some(), "string radios");
-    assert!(entry("spacing").choices.is_some(), "numeric radios");
+    assert_eq!(entry("windows").ty(), Some("boolean"), "the check box");
+    assert!(entry("roof").choices().is_some(), "string radios");
+    assert!(entry("spacing").choices().is_some(), "numeric radios");
     for ty in ["vector2", "vector3", "quaternion", "matrix4", "color"] {
         assert!(
-            report.inputs.iter().any(|i| i.ty.as_deref() == Some(ty)),
+            report.inputs.iter().any(|i| i.ty() == Some(ty)),
             "no {ty} input in the gallery"
         );
     }
-    assert_eq!((entry("beam").minimum, entry("beam").maximum), (Some(0.5), None), "adjusters");
-    assert!(entry("thickness").maximum.is_some(), "a ranged number: the slider");
-    assert!(entry("note").ty.is_none(), "note takes any JSON");
+    assert_eq!((entry("beam").minimum(), entry("beam").maximum()), (Some(0.5), None), "adjusters");
+    assert!(entry("thickness").maximum().is_some(), "a ranged number: the slider");
+    assert!(entry("note").ty().is_none(), "note takes any JSON");
     assert!(entry("hole").default.get("r").is_some(), "object input with properties");
 
     // The transport: a ranged cascade number named t.
     let t = entry("t");
     assert_eq!(t.kind, InputKind::Cascade);
-    assert_eq!((t.minimum, t.maximum), (Some(0.0), Some(2.0)));
+    assert_eq!((t.minimum(), t.maximum()), (Some(0.0), Some(2.0)));
 
     // Declared only in parts/, settable from the view anyway.
     let detail = entry("detail");

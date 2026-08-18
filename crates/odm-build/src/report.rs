@@ -28,14 +28,14 @@ pub struct ReportEntry {
     /// Where that value came from this pass.
     pub source: ValueSource,
     pub kind: InputKind,
-    /// From the winning (shallowest) declaration.
-    pub ty: Option<String>,
-    pub minimum: Option<f64>,
-    pub maximum: Option<f64>,
-    pub description: Option<String>,
+    /// The winning (shallowest) declaration's authored schema, `cascade`
+    /// stripped and every `default` normalized — arbitrary depth, which is
+    /// how the panel and the agent learn an input's element shape. When
+    /// equal-depth cascade declarations disagree on range, `minimum`/
+    /// `maximum` here carry the union.
+    pub schema: Map<String, Value>,
+    /// The winning declared default (`Null` when none is declared).
     pub default: Value,
-    /// `enum` choices from the winning declaration, for choice controls.
-    pub choices: Option<Vec<Value>>,
     /// Declaring files, shallowest first.
     pub declared_in: Vec<String>,
 }
@@ -80,18 +80,41 @@ impl ValueSource {
 }
 
 impl ReportEntry {
+    /// Flat conveniences, derived from the schema.
+    pub fn ty(&self) -> Option<&str> {
+        self.schema.get("type").and_then(|t| t.as_str())
+    }
+
+    pub fn minimum(&self) -> Option<f64> {
+        self.schema.get("minimum").and_then(|v| v.as_f64())
+    }
+
+    pub fn maximum(&self) -> Option<f64> {
+        self.schema.get("maximum").and_then(|v| v.as_f64())
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.schema.get("description").and_then(|d| d.as_str())
+    }
+
+    /// `enum` choices from the winning declaration, for choice controls.
+    pub fn choices(&self) -> Option<&Vec<Value>> {
+        self.schema.get("enum").and_then(|e| e.as_array())
+    }
+
     pub fn to_json(&self) -> Value {
         json!({
             "name": self.name,
             "value": self.value,
             "source": self.source.as_str(),
             "kind": self.kind.as_str(),
-            "type": self.ty,
-            "minimum": self.minimum,
-            "maximum": self.maximum,
-            "description": self.description,
+            "type": self.ty(),
+            "minimum": self.minimum(),
+            "maximum": self.maximum(),
+            "description": self.description(),
             "default": self.default,
-            "choices": self.choices,
+            "choices": self.choices(),
+            "schema": self.schema,
             "declared_in": self.declared_in,
         })
     }
@@ -111,19 +134,19 @@ impl ReportEntry {
             value: set.cloned().unwrap_or_else(|| default.clone()),
             source: ValueSource::of(set.is_some()),
             kind,
-            ty: input.type_name().map(|t| t.to_string()),
-            minimum: input.minimum(),
-            maximum: input.maximum(),
-            description: input
-                .authored
-                .get("description")
-                .and_then(|d| d.as_str())
-                .map(|d| d.to_string()),
+            schema: entry_schema(&input.authored),
             default,
-            choices: choices_of(&input.authored),
             declared_in,
         }
     }
+}
+
+/// An entry's `schema`: the authored declaration minus `cascade` (a
+/// resolution channel, not a shape).
+fn entry_schema(authored: &Map<String, Value>) -> Map<String, Value> {
+    let mut schema = authored.clone();
+    schema.remove("cascade");
+    schema
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -161,12 +184,18 @@ pub fn declared_entries(path: &str, meta: &Meta, view: &View) -> Vec<ReportEntry
 struct Site {
     depth: usize,
     path: String,
-    ty: Option<String>,
+    schema: Map<String, Value>,
     default: Value,
-    minimum: Option<f64>,
-    maximum: Option<f64>,
-    description: Option<String>,
-    choices: Option<Vec<Value>>,
+}
+
+impl Site {
+    fn ty(&self) -> Option<&str> {
+        self.schema.get("type").and_then(|t| t.as_str())
+    }
+
+    fn range_end(&self, key: &str) -> Option<f64> {
+        self.schema.get(key).and_then(|v| v.as_f64())
+    }
 }
 
 impl BuildEngine {
@@ -232,25 +261,25 @@ impl BuildEngine {
             let win_depth = found[0].depth;
             // Equal-depth winners: ranges union; the lint below flags
             // default/type disagreements.
-            let mut minimum = found[0].minimum;
-            let mut maximum = found[0].maximum;
+            let mut minimum = found[0].range_end("minimum");
+            let mut maximum = found[0].range_end("maximum");
             for s in found.iter().take_while(|s| s.depth == win_depth).skip(1) {
-                minimum = match (minimum, s.minimum) {
+                minimum = match (minimum, s.range_end("minimum")) {
                     (Some(a), Some(b)) => Some(a.min(b)),
                     _ => None,
                 };
-                maximum = match (maximum, s.maximum) {
+                maximum = match (maximum, s.range_end("maximum")) {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     _ => None,
                 };
             }
             for s in &found[1..] {
-                if s.ty != found[0].ty {
+                if s.ty() != found[0].ty() {
                     report.errors.push(format!(
                         "input {name:?} is declared with type {} in {} but type {} in {}",
-                        fmt_ty(&found[0].ty),
+                        fmt_ty(found[0].ty()),
                         found[0].path,
-                        fmt_ty(&s.ty),
+                        fmt_ty(s.ty()),
                         s.path
                     ));
                 } else if s.default != found[0].default {
@@ -270,17 +299,22 @@ impl BuildEngine {
                     declared_in.push(s.path.clone());
                 }
             }
+            // The winning schema, with the (possibly unioned) range spliced
+            // back in so the flat fields and the schema agree.
+            let mut schema = found[0].schema.clone();
+            for (key, end) in [("minimum", minimum), ("maximum", maximum)] {
+                match end.and_then(serde_json::Number::from_f64) {
+                    Some(n) => schema.insert(key.into(), Value::Number(n)),
+                    None => schema.remove(key),
+                };
+            }
             report.inputs.push(ReportEntry {
                 name,
                 value,
                 source,
                 kind: InputKind::Cascade,
-                ty: found[0].ty.clone(),
-                minimum,
-                maximum,
-                description: found[0].description.clone(),
+                schema,
                 default: found[0].default.clone(),
-                choices: found[0].choices.clone(),
                 declared_in,
             });
         }
@@ -331,16 +365,8 @@ impl BuildEngine {
                 sites.entry(name.clone()).or_default().push(Site {
                     depth,
                     path: path.to_string(),
-                    ty: input.type_name().map(|t| t.to_string()),
+                    schema: entry_schema(&input.authored),
                     default: input.default.clone().unwrap_or(Value::Null),
-                    minimum: input.minimum(),
-                    maximum: input.maximum(),
-                    description: input
-                        .authored
-                        .get("description")
-                        .and_then(|d| d.as_str())
-                        .map(|d| d.to_string()),
-                    choices: choices_of(&input.authored),
                 });
             }
         }
@@ -472,11 +498,7 @@ pub fn check_input_names(
     Ok(())
 }
 
-fn choices_of(authored: &Map<String, Value>) -> Option<Vec<Value>> {
-    authored.get("enum").and_then(|e| e.as_array()).map(|a| a.to_vec())
-}
-
-fn fmt_ty(t: &Option<String>) -> String {
+fn fmt_ty(t: Option<&str>) -> String {
     match t {
         Some(t) => format!("{t:?}"),
         None => "(untyped)".into(),

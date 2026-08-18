@@ -155,12 +155,8 @@ mod tests {
             value: json!(1),
             source: ValueSource::Default,
             kind,
-            ty: Some("number".into()),
-            minimum: None,
-            maximum: None,
-            description: None,
+            schema: json!({ "type": "number" }).as_object().unwrap().clone(),
             default: json!(1),
-            choices: None,
             declared_in: vec!["root.js".into()],
         }
     }
