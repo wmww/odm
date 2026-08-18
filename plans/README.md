@@ -14,6 +14,12 @@ discussions that followed. Cross-references note where plans touch.
   inline links (era hypertext, not buttons): a file opens a tab, a node
   selects in that path's tab. Spans on the action transcript entries,
   resolved on click through `scene::locate`.
+- `structured-inputs.md` — structure in view inputs (option B from the
+  2026-08-17 discussion): arbitrary-depth schema recursion (ext types
+  at depth, applied nested defaults), the report carrying schemas, a
+  recursive panel with array add/remove ("new object"), tagged unions
+  (`variants`) and string-keyed maps (`additionalProperties`).
+  examples/input-gallery demonstrates and tests each stage as built.
 
 Done and deleted: `cli-diet.md` (surface cuts + the prompt-vs-docs policy —
 now `notes/agent-surface.md`); `render-workflow.md` (superseded by
