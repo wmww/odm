@@ -17,7 +17,7 @@ odm inspect ['{…}']           # measure the scene / one node
 odm render  ['{…}']           # PNG → prints path
 odm raycast '{…}'             # nearest surface hit along rays
 odm clearance '{…}'           # per node pair: signed distance (gap/penetration)
-odm poll --follow             # stream user messages forever; park in background
+odm poll --follow             # stream user messages forever; park under a per-line watcher
 odm poll [--timeout <sec>]    # one-shot fallback: wait for messages, exit
 odm say <text>                # send a message to the user
 odm say --task <text>         # set the live "working on..." status
@@ -136,15 +136,20 @@ you collect them with `odm poll`:
   make one message arrive twice — if the same text turns up again
   immediately, it is the same instruction, not a second one.
 
-**Stay reachable at all times**, including while you work: park one
-`odm poll --follow` in the background at the start of the session and
-check its new lines whenever you pause. Use your harness's managed
-background-task mechanism, which feeds output back to you line by line
-(Claude Code: Bash with `run_in_background: true`, new lines via its
-BashOutput/TaskOutput tool) — a shell `&` orphans the process and you
-never see its lines. Only if your harness has no such mechanism, fall
-back to `odm poll --timeout <sec>`, relaunched whenever it exits,
-acting on what it printed.
+**Stay reachable at all times**, including while you work: at the
+start of the session, park one `odm poll --follow` under a mechanism
+that *notifies you on each output line* (Claude Code: the `Monitor`
+tool with `persistent: true`). A mechanism that only notifies when the
+task exits does not work — `--follow` never exits, so its lines pile
+up unread while the viewer tells the user someone is listening
+(Claude Code: Bash `run_in_background` is exit-notify only; a shell
+`&` orphans the process entirely). If exit-notify background tasks
+are all your harness has, background a one-shot `odm poll` instead —
+it exits at the first batch, so the notification wakes you — and
+relaunch it each time you act on one. With no background mechanism at
+all, fall back to foreground `odm poll --timeout <sec>` between steps.
+Every line `--follow` prints is worth waking for: it only emits on
+messages, build breaks/heals, health changes, and engine down/back.
 Messages are never lost — anything sent while nothing was polling is
 delivered to the next poll, and the viewer shows the user which of
 their messages have reached you — but it also tells them nobody is

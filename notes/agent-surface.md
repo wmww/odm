@@ -242,9 +242,18 @@ writing the values costs tokens ~nothing vs reading tiles.
   before the engine); bad project path still errors at launch.
   Shutdown's `stopped` error is swallowed (the down notice is its
   line); other refusals still print + exit 1, as does a dead stdout.
-  Prompt leads with `--follow` and names the harness background-task
-  mechanism (Claude Code `run_in_background`/BashOutput, not `&`) —
+  Prompt leads with `--follow` and names the harness mechanism —
   agents were reaching for `--timeout` relaunch loops and shell `&`.
+- **The watcher must notify per line, not per exit** (2026-08-18, field
+  report): the prompt used to name Claude Code `run_in_background`/
+  BashOutput, but that harness only notifies on task *completion* —
+  and `--follow` never exits, so lines sat unread while the viewer
+  showed an active poll. Prompt now names Claude Code's `Monitor` tool
+  (`persistent: true`), calls out exit-notify mechanisms as broken for
+  `--follow`, and gives the exit-notify fallback: background a one-shot
+  `odm poll` (exits at first batch → the completion notification wakes
+  the agent), relaunched per batch. No grep filter recommended:
+  `--follow` already emits only actionable lines.
 
 ## Standing cuts (don't reintroduce)
 
