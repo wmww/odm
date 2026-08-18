@@ -636,17 +636,6 @@ impl ViewerApp {
         }))
     }
 
-    /// The t transport: a ranged fall-through number named `t` becomes a
-    /// timeline (scrub + play at 1 unit/sec, looping over its range). Its
-    /// panel is only up when the view has one — nothing else lives down there.
-    fn transport_ui(&mut self, ui: &mut egui::Ui) {
-        let Some(tab) = self.tab() else { return };
-        if let Some(entry) = inputs::transport_entry(tab) {
-            let events = inputs::transport_ui(ui, tab, &entry);
-            self.apply_input_events(events);
-        }
-    }
-
     /// The agent's state, as the lamp on its tab: dark red when nothing is
     /// listening (the user's cue to go prod the agent in its own terminal),
     /// green when an `odm poll` is waiting, and blinking while the agent has
@@ -842,7 +831,7 @@ impl eframe::App for ViewerApp {
                         let mut events = Vec::new();
                         theme::sheet_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
                             if let Some(tab) = self.tabs.get_mut(self.active) {
-                                events = inputs::panel_ui(ui, tab, true);
+                                events = inputs::panel_ui(ui, tab);
                             }
                         });
                         self.apply_input_events(events);
@@ -851,15 +840,7 @@ impl eframe::App for ViewerApp {
                 theme::band(ui, inputs.response.rect);
                 theme::band(ui, tree.response.rect);
             });
-        // The transport is the last thing the window pushed down, and only
-        // there when the view is animated.
-        if self.tab().is_some_and(|tab| inputs::transport_entry(tab).is_some()) {
-            let bottom = egui::Panel::bottom("timeline")
-                .frame(theme::panel_frame())
-                .show(ui, |ui| self.transport_ui(ui));
-            theme::band(ui, bottom.response.rect);
-        }
-        // Above the transport, below the viewport.
+        // Below the viewport.
         let dock = egui::Panel::bottom("dock")
             .resizable(true)
             .default_size(DOCK_HEIGHT)

@@ -35,12 +35,12 @@ pub struct Tab {
     pub scene: Option<SceneCache>,
     /// The `t` transport is playing (1 unit/sec, looping over the range).
     pub playing: bool,
-    /// The one in-progress text-field edit — (section, input name, buffer).
+    /// The one in-progress text-field edit — which field, and its buffer.
     /// Present exactly while that field has keyboard focus (egui focus is
     /// single, so one is enough); everything else the panel draws is derived
     /// fresh each frame from the report and the set values, so external
-    /// changes (presets, ×, rebuilds) always show through.
-    pub edit: Option<(Section, String, String)>,
+    /// changes (presets, resets, rebuilds) always show through.
+    pub edit: Option<(inputs::Field, String)>,
 }
 
 impl Tab {

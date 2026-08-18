@@ -293,35 +293,57 @@ fn pixels(p: &egui::Painter, rows: &[&str], pos: Pos2, color: Color32) {
 /// Side of the era's check box.
 pub const CHECKBOX: f32 = 13.0;
 
-/// A check box: sunken window-filled square, the checkmark when on. The box
-/// only — the inputs panel keeps labels in their own column. Explicit id, as
-/// [`text_edit`]: panel rows shift and an auto id would move with them.
-pub fn check_box(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, checked: bool) -> Response {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(CHECKBOX), egui::Sense::hover());
-    let rect = Rect::from_min_size(snap(ui, rect.min), rect.size());
+/// Gap between an indicator (check box, radio) and its label.
+const INDICATOR_GAP: f32 = 5.0;
+
+/// A check box with its label: sunken window-filled square at the left of
+/// `rect`, the checkmark when on, the label beside it. The whole rect is the
+/// click target — labels sit beside their box here, not in a column of their
+/// own. Explicit id, as [`text_edit`]: panel rows shift and an auto id would
+/// move with them.
+pub fn check_box(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    rect: Rect,
+    checked: bool,
+    text: &str,
+) -> Response {
+    let mid = snap(ui, rect.center()).y;
+    let box_rect = Rect::from_min_size(
+        snap(ui, pos2(rect.left(), mid - CHECKBOX / 2.0)),
+        Vec2::splat(CHECKBOX),
+    );
     let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::ZERO, WINDOW);
-    bevel(p, rect, Bevel::Sunken);
+    p.rect_filled(box_rect, CornerRadius::ZERO, WINDOW);
+    bevel(p, box_rect, Bevel::Sunken);
     if checked {
-        pixels(p, &CHECK, pos2(rect.left() + 3.0, rect.top() + 4.0), TEXT);
+        pixels(p, &CHECK, pos2(box_rect.left() + 3.0, box_rect.top() + 4.0), TEXT);
     }
+    let galley = label(ui, text);
+    let pos = snap(ui, pos2(box_rect.right() + INDICATOR_GAP, mid - galley.size().y / 2.0));
+    ui.painter().with_clip_rect(rect).galley(pos, galley, TEXT);
     ui.interact(rect, egui::Id::new(id), egui::Sense::click())
 }
 
 /// Diameter of the era's radio button.
 pub const RADIO: f32 = 12.0;
 
-/// A radio button with its label; the pair is one click target.
-pub fn radio(ui: &mut Ui, selected: bool, text: &str) -> Response {
-    const GAP: f32 = 5.0;
-    let galley = label(ui, text);
-    let size = vec2(RADIO + GAP + galley.size().x, RADIO.max(galley.size().y));
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+/// A radio button with its label, laid out like [`check_box`]: indicator at
+/// the left of `rect`, label beside it, the whole rect one click target — so
+/// the empty space to the right of a choice selects it too.
+pub fn radio(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    rect: Rect,
+    selected: bool,
+    text: &str,
+) -> Response {
     let mid = snap(ui, rect.center()).y;
     radio_circle(ui.painter(), snap(ui, pos2(rect.left(), mid - RADIO / 2.0)), selected);
-    let pos = snap(ui, pos2(rect.left() + RADIO + GAP, mid - galley.size().y / 2.0));
-    ui.painter().galley(pos, galley, TEXT);
-    response
+    let galley = label(ui, text);
+    let pos = snap(ui, pos2(rect.left() + RADIO + INDICATOR_GAP, mid - galley.size().y / 2.0));
+    ui.painter().with_clip_rect(rect).galley(pos, galley, TEXT);
+    ui.interact(rect, egui::Id::new(id), egui::Sense::click())
 }
 
 /// The radio circle, pixel by pixel: a two-tone sunken ring (dark arc
@@ -891,10 +913,11 @@ fn menu_separator(ui: &mut Ui, width: f32) {
 
 /// Trackbar: egui's slider drives interaction, but paints nothing — the
 /// groove and handle are drawn here so they can carry real bevels.
-pub fn trackbar(ui: &mut Ui, value: &mut f64, range: RangeInclusive<f64>) -> Response {
+pub fn trackbar(ui: &mut Ui, value: &mut f64, range: RangeInclusive<f64>, width: f32) -> Response {
     let (start, end) = (*range.start(), *range.end());
     let r = ui
         .scope(|ui| {
+            ui.spacing_mut().slider_width = width;
             for w in widget_states(ui.visuals_mut()) {
                 w.bg_fill = FACE;
                 w.fg_stroke = Stroke::new(1.0, FACE);

@@ -5,11 +5,15 @@
 //! reaches the panel without root.js mentioning it.
 export const meta = {
   inputs: {
-    // --- Text fields: everything that isn't a boolean or an enum ---
-    plate: { type: 'vector2', default: [180, 90], description: 'base plate footprint (X, Y)' },
+    // --- Numbers with both ends declared: field + slider ---
     thickness: { type: 'number', default: 4, minimum: 1, maximum: 20, description: 'plate thickness' },
     columns: { type: 'integer', default: 4, minimum: 1, maximum: 8, description: 'how many pins' },
-    tint: { type: 'color', default: '#3b6ea5', description: 'plate color' },
+
+    // --- Numbers with no range: field + the /2 - + 2x adjusters ---
+    beam: { type: 'number', default: 3.5, minimum: 0.5, description: 'beacon radius' },
+
+    // --- Component rows (vectors, quaternion) and the matrix grid ---
+    plate: { type: 'vector2', default: [180, 90], description: 'base plate footprint (X, Y)' },
     beacon: { type: 'vector3', default: [0, 0, 40], description: 'where the beacon floats' },
     tilt: { type: 'quaternion', default: [0, 0, 0, 1], description: 'gizmo orientation' },
     placement: {
@@ -17,6 +21,9 @@ export const meta = {
       default: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -28, 8, 1],
       description: 'plaque placement, column-major',
     },
+
+    // --- Text fields: whatever is left ---
+    tint: { type: 'color', default: '#3b6ea5', description: 'plate color' },
     bars: {
       type: 'array',
       items: { type: 'number', minimum: 0 },
@@ -46,7 +53,7 @@ export const meta = {
     // `detail` is declared in parts/ and shows up in the panel too.
   },
   presets: {
-    showy: { roof: 'domed', windows: true, tint: '#c05746', bars: [4, 18, 9, 22, 13, 7], columns: 7, spacing: 6, t: 0.5 },
+    showy: { roof: 'domed', windows: true, tint: '#c05746', bars: [4, 18, 9, 22, 13, 7], columns: 7, spacing: 6, beam: 5, t: 0.5 },
     bare: { roof: 'flat', windows: false, columns: 1, bars: [8], thickness: 2, hole: { r: 2, depth: 12 } },
     askew: {
       tilt: [0.3827, 0, 0, 0.9239],
@@ -124,7 +131,7 @@ export default function build(ctx) {
 
   const beaconAt = ctx.input('beacon'); // THREE.Vector3
   const beacon = odm
-    .sphere(3.5, { segments: 32 })
+    .sphere(ctx.input('beam'), { segments: 32 })
     .translate(beaconAt.x, beaconAt.y, beaconAt.z)
     .color('#f2e8cf')
     .name('beacon');

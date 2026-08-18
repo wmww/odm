@@ -91,8 +91,10 @@ the schema too.
 
 - **Path addressing.** `Path` = `Vec<Seg>` with `Seg::Key(String) |
   Seg::Index(usize)`, rooted at an input name. Widget ids become
-  `("input", section, name, path)`; `Tab::edit` becomes
-  `(Section, String, Path, String)`. Leaf shown-value = navigate the
+  `("input", section, name, path)`; `inputs::Field` (today: section,
+  name, component index — vectors and matrices already spread one input
+  over several fields) grows a `Path` in place of the index, and
+  `Tab::edit` follows it. Leaf shown-value = navigate the
   top-level shown value by path; an absent optional property shows its
   nested default, else a type-blank (0, "", false, [], {}, null).
 - **Events stay whole-value.** `Event::Set(section, name, value)` is
@@ -103,8 +105,9 @@ the schema too.
 - **Rendering is one recursive function** over (schema, shown value,
   path):
   - Leaves (number/integer/string/boolean/enum/ext types/untyped)
-    render exactly today's row controls — check box, radios, text
-    field — just addressed by path and indented by depth.
+    render exactly today's controls — check box, radios, number field
+    with slider/adjusters, vector rows, matrix grid, text field — just
+    addressed by path and indented by depth.
   - `object` with `properties`: a group header row (the input or
     property name), then one recursive row per property, indented.
   - `array` with `items`: a group with one recursive sub-entry per
@@ -228,5 +231,6 @@ sets whole values. Doctests for the new examples.
 - **Doohickey-typed inputs**: `items` referencing another doohickey's
   declared plain inputs would de-duplicate the scene/part schema and
   make a real scene composer ("new object" = pick a doohickey).
-- Element reorder buttons; per-path reset; multi-field vector leaf
-  controls; sliders (blocked on the open trackbar UX question).
+- Element reorder buttons; per-path reset. (Multi-field vector leaves
+  and sliders landed at the top level 2026-08-17; the recursion has to
+  reuse them, not reinvent them.)

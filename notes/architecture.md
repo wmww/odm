@@ -252,12 +252,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   register_native_texture, orbit/pan/zoom, one **side bar** down the right
   holding the generated input panel above the scene tree with a draggable
   split between them (inputs from the tab's fall-through report: label/value
-  columns with check boxes, radios, JSON-ish text fields, presets; there is
-  no left panel), a
-  `t` transport when a ranged cascade number named t falls through
-  (scrub + play at 1 unit/sec looping; its bottom panel is only up when the
-  view has one — there is no status band, and nothing else lives down there),
-  one resizable bottom dock holding **Agent** and a devtools-style **Output**
+  blocks with check boxes, radios, sliders, number/JSON text fields,
+  presets, and `t` among them with a play button; there is no left panel
+  and no status band), one resizable bottom dock holding **Agent** and a devtools-style **Output**
   as two tabs
   (`theme::tab_strip`, the plain version of the view strip; one dock per
   window, showing the active tab's console; the Output label carries the
@@ -422,29 +419,60 @@ overruns, so a full strip can still be added to. Labels elide
 
 ### Input panel
 
-odm-viewer-core `inputs.rs` + `tab.rs`. Reworked 2026-08-17 to the era's
-property-sheet shape: fixed label column left (45%, hard-clipped,
-description on hover), value column right. The reset button ends the label
-column (a hooked revert arrow — a circle arrow has too few pixels to read as
-anything but a dot); it is drawn only for a pinned value, but its space is
-always reserved so rows don't shift.
-Booleans are `theme::check_box`, enum choices stack `theme::radio` rows,
-everything else is a text field (numbers shown rounded to 4 decimals).
-Trackbars are gone from the panel until the slider UX is settled
-(`theme::trackbar` survives; the `t` transport still uses it). Preset
-buttons flow onto rows by hand — egui's `horizontal_wrapped` either
-letter-wraps a button's text or (with `TextWrapMode::Extend`) overflows
-and *widens the scroll content*, poisoning `available_width` for every
-later row. Wanted later: nested/structured inputs (tree-mirrored or
-selection-contextual — undecided), and some way to bring sliders back.
+odm-viewer-core `inputs.rs` + `tab.rs`. Shape (reworked 2026-08-17,
+twice): every input is a **block**, not a row — its name on a row of its
+own, its control(s) beneath at full panel width. The exception is a
+boolean, whose box goes first with the name beside it (a box wants its
+label next to it, and the whole row is the click target). The reset
+button ends the *name* row (a hooked revert arrow — a circle arrow has
+too few pixels to read as anything but a dot), drawn only for a pinned
+value. Per type:
+
+- boolean → `theme::check_box`; enum → `theme::radio` rows, each row
+  spanning the panel so the empty space right of a choice selects it.
+- number/integer → a text field plus, at its right, a `theme::trackbar`
+  when both `minimum` and `maximum` are declared, else the four
+  adjusters `/2 - + 2x` (`-`/`+` step by the ten's place below the
+  value's own, so one click nudges at any magnitude; integers step by 1;
+  a declared min/max clamps).
+- vector2/vector3/quaternion → one number row per component under an
+  x/y/z/w letter; matrix4 → a 4x4 grid of bare fields (sixteen adjusters
+  is too much), laid out **as the matrix reads** (row r, column c =
+  element `c * 4 + r`) over the column-major wire form.
+- everything else (arrays, objects, strings, untyped) → one full-width
+  JSON-ish text field. Numbers show rounded to 4 decimals.
+
+A text field **commits on losing focus**, not just on Enter — clicking
+away applies what you typed; only Escape discards (egui's own
+`DragValue` uses the same `lost_focus() && !escape` rule). Number fields
+that don't parse as a number discard instead. `num()` writes integral
+values as JSON integers, so a field or slider never turns `42` into
+`42.0` in the view's args.
+
+`Reset` is the first button of the preset row: same look, and its bundle
+is "every default" — `Event::ClearAll` empties `set_args` and
+`set_cascade`, which is exactly resetting each field individually.
+Preset buttons flow onto rows by hand — egui's `horizontal_wrapped`
+either letter-wraps a button's text or (with `TextWrapMode::Extend`)
+overflows and *widens the scroll content*, poisoning `available_width`
+for every later row.
+
+`t` is an input like any other, in the panel with the rest (its bottom
+"timeline" panel is gone, 2026-08-17, on the user's call: it is just a
+ranged cascade number). The one special case is the Play/Stop button
+parked at the right end of its row; `Viewer::advance_transport` still
+drives it at 1 unit/sec, looping.
+
+Wanted later: nested/structured inputs (plans/structured-inputs.md), a
+color swatch/picker.
 
 `examples/input-gallery` is the panel's fixture project: one input per
 control it can draw (every extension type, an enum on a non-string type,
 array/object/untyped inputs, presets, the `t` transport, and a cascade
 input declared only in `parts/`). Open it when changing this file;
 `examples::input_gallery_covers_every_control` guards the report side.
-Known gap it makes obvious: long values are clipped
-(issues/panel-clips-long-input-values).
+Known gap it makes obvious: long values still clip in matrix cells and
+in the array/object text fields (issues/panel-clips-long-input-values).
 
 Controls come from the tab's
 fall-through report; interactions come back as `Event`s which
@@ -454,8 +482,11 @@ trait). The
 invariant that keeps it honest: **the panel is a pure render of (report, tab
 set values)** — the only other state is `Tab::edit`, the buffer of the one
 text field currently holding keyboard focus (egui focus is single, so it's
-an `Option`, present exactly while focused; Enter applies, any other focus
-loss discards). Two rules that came out of a 2026-08-14 bug (a text field
+an `Option<(Field, String)>` — `Field` being input name + component index,
+present exactly while focused; Enter and any other focus loss apply,
+Escape discards). `panel_ui` *takes* the edit out of the tab for the frame
+and puts back what still has focus, so a field that loses focus finds its
+buffer whatever order the fields draw in. Two rules that came out of a 2026-08-14 bug (a text field
 frozen at its first-frame value, blind to presets/resets):
 
 - Never cache what a control displays outside `Tab::edit`. Unfocused text

@@ -66,7 +66,8 @@ Senders may pass THREE instances or the JSON form; values are
 normalized to the wire form at the boundary (so hashing and
 memoization only ever see canonical JSON). A `solid` input cannot have
 a `default` (and therefore cannot cascade). Extension types also drive
-the viewer's typed controls (vector rows, color picker).
+the viewer's typed controls (vector/quaternion component rows, a matrix
+grid; a color picker is still wanted).
 
 ```js
 //! odm unstable
@@ -148,9 +149,10 @@ export default (ctx) => odm.box([10, 2, 2]).rotateZ(Math.PI * ctx.input('t'));
 
 Any doohickey that reads `t` animates; assemblies compose animated
 parts without mentioning `t` at all, yet the view can still set it —
-that is the cascade mechanism doing its job. The viewer renders a
-ranged, fall-through numeric control named `t` as a transport (scrub,
-plus play at 1 unit/second looping over the range); the CLI sets it
+that is the cascade mechanism doing its job. The viewer shows a ranged,
+fall-through numeric control named `t` in the input panel like any
+other input, with a play button beside its slider (1 unit/second,
+looping over the range); the CLI sets it
 like any input (`odm render '{"inputs": {"t": 1.5}}'`). Declaring
 `t` 0–2 *is*
 "this loops every 2 seconds". Only doohickeys that read `t` rebuild

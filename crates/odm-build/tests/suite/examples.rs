@@ -187,6 +187,8 @@ fn input_gallery_covers_every_control() {
             "no {ty} input in the gallery"
         );
     }
+    assert_eq!((entry("beam").minimum, entry("beam").maximum), (Some(0.5), None), "adjusters");
+    assert!(entry("thickness").maximum.is_some(), "a ranged number: the slider");
     assert!(entry("note").ty.is_none(), "note takes any JSON");
     assert!(entry("hole").default.get("r").is_some(), "object input with properties");
 

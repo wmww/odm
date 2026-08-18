@@ -105,7 +105,7 @@ export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('
   `ctx.invoke(path, args, cascade)`, or the view's `inputs` outermost —
   and a declaration auto-provides its default for its own subtree.
 - **Time is just an input**: declare a ranged cascade `t` and the
-  viewer gives it a transport (scrub/play, looping over the range);
+  viewer's input panel gives it a play button (looping over the range);
   `odm render '{"inputs": {"t": 1.5}}'` sets it like anything else.
   Only readers of `t` rebuild when it changes.
 - `meta.presets` names input bundles; `"preset"` applies one.

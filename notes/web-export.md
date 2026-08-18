@@ -2,7 +2,8 @@
 
 `odm export --web <out-dir> [<project-dir>] [--view <path>] [--template
 <dir>] [--force]` turns a project into a static site: the desktop viewer's
-read side (viewport, tree, input panel, `t` transport, console, View menu)
+read side (viewport, tree, input panel with the `t` play button, console,
+View menu)
 around a frozen generation, built client-side. No editing, no agent, no
 sockets. Verified interactive in Chromium (WebGPU/Vulkan): initial build,
 transport play, input edits → rebuilds, click-select, error + weld-failure
