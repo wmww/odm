@@ -36,7 +36,21 @@ pub fn list_box<R>(
     axes: Vec2b,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    scroll_box(ui, id_salt, size, axes, false, add)
+    scroll_box(ui, id_salt, size, axes, WINDOW, false, add)
+}
+
+/// A scrolling box the colour of a control face — the property sheet, not
+/// the client area. For contents that are themselves controls: the sunken
+/// window fills belong to the check boxes and fields inside it, and a
+/// window-coloured surround would flatten them into their background.
+pub fn sheet_box<R>(
+    ui: &mut Ui,
+    id_salt: &str,
+    size: Vec2,
+    axes: Vec2b,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    scroll_box(ui, id_salt, size, axes, FACE, false, add)
 }
 
 /// A vertical list box that follows its tail: content added at the bottom
@@ -47,7 +61,7 @@ pub fn tail_box<R>(
     size: Vec2,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    scroll_box(ui, id_salt, size, Vec2b::new(false, true), true, add)
+    scroll_box(ui, id_salt, size, Vec2b::new(false, true), WINDOW, true, add)
 }
 
 fn scroll_box<R>(
@@ -55,12 +69,13 @@ fn scroll_box<R>(
     id_salt: &str,
     size: Vec2,
     axes: Vec2b,
+    fill: Color32,
     stick_to_bottom: bool,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
     let (outer, _) = ui.allocate_exact_size(size, Sense::hover());
     let p = ui.painter().clone();
-    p.rect_filled(outer, CornerRadius::ZERO, WINDOW);
+    p.rect_filled(outer, CornerRadius::ZERO, fill);
     bevel(&p, outer, Bevel::Sunken);
 
     // Inside the border the bars sit flush; only the contents are inset.

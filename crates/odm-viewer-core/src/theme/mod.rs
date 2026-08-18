@@ -14,7 +14,7 @@
 
 mod scroll;
 
-pub use scroll::{BAR as SCROLLBAR, list_box, tail_box};
+pub use scroll::{BAR as SCROLLBAR, list_box, sheet_box, tail_box};
 
 use crate::icons::{self, Icon};
 use eframe::egui::{

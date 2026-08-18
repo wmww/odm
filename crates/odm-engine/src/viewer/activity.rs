@@ -156,7 +156,7 @@ impl ActivityView {
     ) {
         let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
         let painter = ui.painter().clone();
-        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::WINDOW);
+        painter.rect_filled(rect, egui::CornerRadius::ZERO, theme::FACE);
         theme::bevel(&painter, rect, theme::Bevel::Sunken);
         let well = rect.shrink(2.0);
         if well.width() < 1.0 || well.height() < 1.0 {

@@ -295,7 +295,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   shared-device renderer into an odm-viewer-core `OffscreenTarget` (the
   ViewportTex machinery extracted for reuse — future render windows are one
   OffscreenTarget + camera + scene each; per-window Orbit not built yet).
-  `ActivityView::panel_ui` owns the whole column: sunken well, render at the
+  `ActivityView::panel_ui` owns the whole column: sunken face-coloured well
+  (empty it reads as panel, not as a black hole), render at the
   well's own pixel size, opaque paint, caption top-right in WEAK_TEXT on a
   dimmed plate. The column is an `egui::Panel::right` *nested in the chat
   tab* (resizable, 220 default / 60 min / 70% max, 8px left margin so its
@@ -356,8 +357,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   odm-viewer-core's `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`,
-  `collapsing`, `list_box`, `text_edit`, `trackbar`, `check_box`, `radio`,
-  `reset_button`, `menu_bar`/`menu`,
+  `collapsing`, `list_box`/`sheet_box`, `text_edit`, `trackbar`, `check_box`,
+  `radio`, `reset_button`, `menu_bar`/`menu`,
   `dialog`, `list_row`, `tab`/`tab_edge`, …) that paint two-tone 3D bevels —
   egui's `WidgetVisuals` has one uniform `bg_stroke`, so bevels can't be
   themed and must be drawn over each widget's rect. Prefer these wrappers over
@@ -793,6 +794,9 @@ square arrow buttons, a 50% dithered trough, a raised handle. egui still owns
 the scrolling; we read `ScrollAreaOutput` and write `State::offset` back.
 Consequences:
 
+- `sheet_box` is the same well filled with the control face instead of the
+  window colour, for panes whose contents are themselves controls (the inputs
+  panel): the sunken dark fills belong to the fields and radios inside it.
 - The bar is always present on an axis it was given, graying its arrows when
   there is nothing to scroll. That means the pane's size is fixed by the
   caller (`ERROR_HEIGHT` for the error pane, `LIST_HEIGHT` for the Open

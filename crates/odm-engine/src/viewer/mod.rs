@@ -781,7 +781,7 @@ impl eframe::App for ViewerApp {
             .show(ui, |ui| {
                 let size = ui.available_size();
                 let mut events = Vec::new();
-                theme::list_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
+                theme::sheet_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
                     events = inputs::panel_ui(ui, &mut self.tabs[self.active], true);
                 });
                 self.apply_input_events(events);
