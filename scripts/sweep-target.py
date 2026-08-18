@@ -117,21 +117,30 @@ def sweep(root: Path, live: set, dry: bool, drop_incremental: bool):
                 removed.append(entry)
                 if not dry:
                     shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
-        # Incremental caches can't be liveness-matched (their dir suffix is a
-        # different hash than artifact filenames), and a cache is only worth
-        # keeping for code being actively recompiled anyway. Prune by idle
-        # time; a false positive just slows that crate's next recompile.
+        # Incremental caches can't be liveness-matched: their dir suffix is a
+        # hash that appears nowhere in fingerprints or artifact names, and
+        # fresh builds don't touch them (both verified), so neither exactness
+        # nor idle time identifies the live ones — and idle time is exactly
+        # wrong here, since every stale universe's dir is recent. Instead keep
+        # the newest 2 dirs per crate name (current lib + test units); older
+        # siblings are dead universes. A false positive only slows that
+        # crate's next recompile.
         inc = profile_dir / "incremental"
         if inc.is_dir():
             cutoff = float("inf") if drop_incremental else time.time() - 7 * 86400
+            by_name = {}
             for entry in inc.iterdir():
-                if entry.stat().st_mtime >= cutoff:
-                    kept += 1
-                    continue
-                freed += size(entry)
-                removed.append(entry)
-                if not dry:
-                    shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+                by_name.setdefault(entry.name.rsplit("-", 1)[0], []).append(entry)
+            for entries in by_name.values():
+                entries.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+                for i, entry in enumerate(entries):
+                    if i < 2 and entry.stat().st_mtime >= cutoff:
+                        kept += 1
+                        continue
+                    freed += size(entry)
+                    removed.append(entry)
+                    if not dry:
+                        shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
     return freed, kept, removed
 
 

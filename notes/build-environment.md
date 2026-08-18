@@ -104,11 +104,14 @@ unit) and deletes only unreferenced entries in `deps/`, `build/`, and
 It enumerates dev *and* release (the sweep walks every profile dir; release
 live-set comes from plain `--release`, no `--all-targets`, so it never builds
 release test binaries just to enumerate them). `incremental/` can't be
-liveness-matched (its dir suffix is a different hash than artifact names —
-verified), so it's pruned by idle time instead: unit dirs untouched for 7
-days go, `--drop-incremental` drops it all. Over-deleting incremental only
-slows that crate's next recompile; it's an accelerator, not a freshness
-input.
+liveness-matched (its dir suffix hash appears nowhere in fingerprints or
+artifact names, and fresh builds don't touch live dirs — both verified), and
+idle-time pruning is exactly wrong there: every stale universe's dir is
+recent, so churn-heavy weeks grew incremental/ to 5.4 GiB while everything
+sat under any sane age cutoff. Instead the sweep keeps the newest 2 dirs per
+crate name (current lib + test units) and drops older siblings;
+`--drop-incremental` drops it all. Over-deleting incremental only slows that
+crate's next recompile; it's an accelerator, not a freshness input.
 
 In a seeded checkout most of `deps/` is hardlinked, so sweeping there frees real
 disk only for entries the seed source no longer holds.
