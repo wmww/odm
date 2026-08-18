@@ -7,6 +7,10 @@ members = ["crates/*"]
 # consumer would fail with "cannot satisfy dependencies so `std` only shows
 # up once". It still builds as a path dep of odm and of the test binaries.
 exclude = ["crates/odm-dylib"]
+# So plain `cargo run` runs the odm binary instead of failing on the ambiguity
+# with xtask. Also narrows bare `cargo build`/`cargo test` to this one package —
+# use --workspace (as CLAUDE.md says) to cover everything.
+default-members = ["crates/odm"]
 
 [workspace.package]
 edition = "2024"
