@@ -396,7 +396,7 @@ impl Cx<'_> {
     ) {
         if let NodeKind::Bool = NodeKind::of(schema) {
             let rect = self.row(ui, indent);
-            self.bool_row(ui, rect, path, label);
+            self.bool_row(ui, schema, rect, path, label);
             return;
         }
         let rect = self.row(ui, indent);
@@ -425,7 +425,7 @@ impl Cx<'_> {
             // row; array elements go through the inline row).
             NodeKind::Bool => {
                 let rect = self.row(ui, indent);
-                self.bool_row(ui, rect, path, "");
+                self.bool_row(ui, schema, rect, path, "");
             }
             NodeKind::Choice(choices) => {
                 let shown = self.at(schema, path);
@@ -643,14 +643,21 @@ impl Cx<'_> {
         rect: egui::Rect,
     ) {
         match NodeKind::of(schema) {
-            NodeKind::Bool => self.bool_row(ui, rect, path, ""),
+            NodeKind::Bool => self.bool_row(ui, schema, rect, path, ""),
             NodeKind::Number => self.number_row(ui, schema, path, rect),
             _ => self.text_row(ui, schema, path, rect),
         }
     }
 
-    fn bool_row(&mut self, ui: &mut egui::Ui, rect: egui::Rect, path: &Path, label: &str) {
-        let on = self.at(&Map::new(), path).as_bool().unwrap_or(false);
+    fn bool_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        schema: &Map<String, Value>,
+        rect: egui::Rect,
+        path: &Path,
+        label: &str,
+    ) {
+        let on = self.at(schema, path).as_bool().unwrap_or(false);
         let id = ("check", self.section, &self.name, path);
         if theme::check_box(ui, id, rect, on, label).clicked() {
             self.set_at(path, Value::Bool(!on));
@@ -1744,6 +1751,33 @@ mod tests {
         assert_eq!(h.tab.set_args["anchors"], json!({ "top": 4 }));
         h.click_remove("anchors", vec![Seg::Key("top".into())]);
         assert!(!h.tab.set_args.contains_key("anchors"), "empty again: pin cleared");
+    }
+
+    /// An absent boolean property shows its nested default; toggling
+    /// splices the flipped value in.
+    #[test]
+    fn nested_bool_defaults_display_and_toggle() {
+        let e = entry_with(
+            "opts",
+            InputKind::Plain,
+            json!({ "type": "object",
+                "properties": { "lid": { "type": "boolean", "default": true } },
+                "default": {} }),
+            json!({}),
+        );
+        let mut h = Harness::new(InputReport { inputs: vec![e], ..Default::default() });
+        let path = vec![Seg::Key("lid".to_string())];
+        let rect = h
+            .ctx
+            .read_response(egui::Id::new(("check", Section::Arg, "opts", &path)))
+            .expect("nested check box")
+            .rect;
+        h.click_at(rect.center());
+        assert_eq!(
+            h.tab.set_args["opts"],
+            json!({ "lid": false }),
+            "shown checked (the nested default), so a toggle turns it off"
+        );
     }
 
     /// Nested edit buffers are isolated: two fields at different paths
