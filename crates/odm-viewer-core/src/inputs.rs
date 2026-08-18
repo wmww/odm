@@ -142,13 +142,39 @@ pub fn panel_ui(ui: &mut egui::Ui, tab: &mut Tab, skip_t: bool) -> Vec<Event> {
     }
 
     if !report.presets.is_empty() {
-        ui.horizontal_wrapped(|ui| {
-            for (name, _) in &report.presets {
-                if theme::button(ui, name.as_str()).clicked() {
-                    events.push(Event::Preset(name.clone()));
-                }
+        // Whole buttons flow onto as many rows as they need. Done by hand:
+        // `horizontal_wrapped` either wraps a button's text letter by letter
+        // (the default) or lets the row overflow and widen the panel's
+        // scroll content (with Extend) — never moves the button itself.
+        let avail = ui.available_width();
+        let pad = ui.spacing().button_padding.x * 2.0;
+        let gap = ui.spacing().item_spacing.x;
+        let mut rows: Vec<Vec<&str>> = vec![Vec::new()];
+        let mut x = 0.0;
+        for (name, _) in &report.presets {
+            let text = ui.painter().layout_no_wrap(
+                name.clone(),
+                egui::FontId::proportional(theme::UI_SIZE),
+                theme::TEXT,
+            );
+            let w = text.size().x + pad;
+            if x > 0.0 && x + w > avail {
+                rows.push(Vec::new());
+                x = 0.0;
             }
-        });
+            x += w + gap;
+            rows.last_mut().unwrap().push(name);
+        }
+        for row in rows {
+            ui.horizontal(|ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                for name in row {
+                    if theme::button(ui, name).clicked() {
+                        events.push(Event::Preset(name.to_string()));
+                    }
+                }
+            });
+        }
         ui.add_space(4.0);
     }
 
@@ -168,7 +194,17 @@ pub fn panel_ui(ui: &mut egui::Ui, tab: &mut Tab, skip_t: bool) -> Vec<Event> {
     events
 }
 
-/// One input row: name, a typed control, and a reset button when set.
+/// Height of one control row. Labels and the reset button center on the
+/// first row of their control (choices stack one choice per row).
+const ROW: f32 = 21.0;
+/// The label column's share of the panel width.
+const SPLIT: f32 = 0.45;
+/// Gap between the columns.
+const GAP: f32 = 4.0;
+
+/// One input row: label column on the left, the typed control in the value
+/// column, and a reset button pinned to the right edge — grayed when the
+/// value is at its default.
 fn control(
     ui: &mut egui::Ui,
     tab: &mut Tab,
@@ -178,84 +214,112 @@ fn control(
 ) {
     let shown = tab.shown_value(section, entry).clone();
     let name = entry.name.clone();
-    ui.horizontal(|ui| {
-        let label = ui.label(&name);
-        if let Some(d) = &entry.description {
-            label.on_hover_text(d);
+    let kind = ControlKind::of(entry);
+    let rows = match &kind {
+        ControlKind::Choice(c) => c.len().max(1),
+        _ => 1,
+    };
+
+    let full = ui.available_width();
+    let label_w = (full * SPLIT).floor();
+    let value_w = (full - label_w - theme::RESET_SIDE - GAP * 2.0).max(24.0);
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(full, ROW * rows as f32), egui::Sense::hover());
+
+    // Label: clipped to its column, centered on the first row.
+    let label_rect = egui::Rect::from_min_size(rect.min, egui::vec2(label_w, ROW));
+    let galley = ui.painter().layout_no_wrap(
+        name.clone(),
+        egui::FontId::proportional(theme::UI_SIZE),
+        theme::TEXT,
+    );
+    let pos = theme::snap(
+        ui,
+        egui::pos2(label_rect.left(), label_rect.center().y - galley.size().y / 2.0),
+    );
+    ui.painter().with_clip_rect(label_rect).galley(pos, galley, theme::TEXT);
+    if let Some(d) = &entry.description {
+        ui.interact(label_rect, egui::Id::new(("label", section, &name)), egui::Sense::hover())
+            .on_hover_text(d);
+    }
+
+    // The control, in a child UI spanning the value column.
+    let value_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + label_w + GAP, rect.top()),
+        egui::vec2(value_w, rect.height()),
+    );
+    let mut vui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(value_rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    match kind {
+        ControlKind::Bool => {
+            vui.add_space((ROW - theme::CHECKBOX) / 2.0);
+            let on = shown.as_bool().unwrap_or(false);
+            if theme::check_box(&mut vui, ("check", section, &name), on).clicked() {
+                events.push(Event::Set(section, name.clone(), Value::Bool(!on)));
+            }
         }
-        // A pinned value equal to the default (possible via old persisted
-        // tabs; `apply` clears the pin on set) shows no × either — "set to
-        // the default" must not look different from "cleared".
-        let is_set = tab
-            .set_values(section)
-            .get(&name)
-            .is_some_and(|v| !same_value(v, &entry.default));
-        if is_set && theme::button(ui, "×").clicked() {
-            events.push(Event::Clear(section, name.clone()));
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        match ControlKind::of(entry) {
-            ControlKind::Ranged => {
-                let (min, max) = (entry.minimum.unwrap(), entry.maximum.unwrap());
-                let mut v = shown.as_f64().unwrap_or(min);
-                if theme::trackbar(ui, &mut v, min..=max).changed() {
-                    let v = if entry.ty.as_deref() == Some("integer") { v.round() } else { v };
-                    events.push(Event::Set(section, name.clone(), num(v)));
-                }
-                theme::status_field(ui, trim_num(v));
-            }
-            ControlKind::Bool => {
-                let on = shown.as_bool().unwrap_or(false);
-                if theme::button(ui, if on { "true" } else { "false" }).clicked() {
-                    events.push(Event::Set(section, name.clone(), Value::Bool(!on)));
-                }
-            }
-            ControlKind::Choice(choices) => {
-                for c in &choices {
-                    let text = plain(c);
-                    let current = *c == shown;
-                    let b = theme::button(
-                        ui,
-                        if current { format!("[{text}]") } else { text.clone() },
-                    );
-                    if b.clicked() && !current {
-                        events.push(Event::Set(section, name.clone(), c.clone()));
-                    }
-                }
-            }
-            ControlKind::Text => {
-                // Free-form: edit as (relaxed) JSON, applied on Enter,
-                // discarded on any other focus loss (click away, Escape).
-                // The buffer lives only while the field has focus; an
-                // unfocused field mirrors `shown` every frame.
-                let editing =
-                    tab.edit.as_ref().is_some_and(|(s, n, _)| *s == section && n == &name);
-                let mut buf = match &tab.edit {
-                    Some((_, _, b)) if editing => b.clone(),
-                    _ => plain(&shown),
-                };
-                let response =
-                    theme::text_edit(ui, ("input", section, &name), &mut buf, ui.available_width() - 8.0, "");
-                if response.has_focus() {
-                    tab.edit = Some((section, name.clone(), buf));
-                } else if editing {
-                    // Focus left this frame.
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        let value = parse_value(&buf, entry.ty.as_deref());
-                        events.push(Event::Set(section, name.clone(), value));
-                    }
-                    tab.edit = None;
+        ControlKind::Choice(choices) => {
+            // One choice per ROW: pad to the first row's center, then space
+            // the 14px radio lines out to the row pitch.
+            vui.add_space((ROW - theme::UI_SIZE) / 2.0);
+            vui.spacing_mut().item_spacing.y = ROW - theme::UI_SIZE;
+            for c in &choices {
+                let current = same_value(c, &shown);
+                if theme::radio(&mut vui, current, &plain(c)).clicked() && !current {
+                    events.push(Event::Set(section, name.clone(), c.clone()));
                 }
             }
         }
-    });
-    ui.add_space(2.0);
+        ControlKind::Text => {
+            // Free-form: edit as (relaxed) JSON, applied on Enter,
+            // discarded on any other focus loss (click away, Escape).
+            // The buffer lives only while the field has focus; an
+            // unfocused field mirrors `shown` every frame.
+            let editing = tab.edit.as_ref().is_some_and(|(s, n, _)| *s == section && n == &name);
+            let mut buf = match &tab.edit {
+                Some((_, _, b)) if editing => b.clone(),
+                _ => plain(&shown),
+            };
+            let response = theme::text_edit(
+                &mut vui,
+                ("input", section, &name),
+                &mut buf,
+                value_w - theme::TEXT_PAD * 2.0,
+                "",
+            );
+            if response.has_focus() {
+                tab.edit = Some((section, name.clone(), buf));
+            } else if editing {
+                // Focus left this frame.
+                if vui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    let value = parse_value(&buf, entry.ty.as_deref());
+                    events.push(Event::Set(section, name.clone(), value));
+                }
+                tab.edit = None;
+            }
+        }
+    }
+
+    // Reset, on the first row's right edge. A pinned value equal to the
+    // default (possible via old persisted tabs; `apply` clears the pin on
+    // set) reads as unset — "set to the default" must not look different
+    // from "cleared".
+    let is_set =
+        tab.set_values(section).get(&name).is_some_and(|v| !same_value(v, &entry.default));
+    let reset_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - theme::RESET_SIDE, rect.top() + (ROW - theme::RESET_SIDE) / 2.0),
+        egui::Vec2::splat(theme::RESET_SIDE),
+    );
+    let id = egui::Id::new(("reset", section, &name));
+    if theme::reset_button(ui, id, reset_rect, is_set).clicked() {
+        events.push(Event::Clear(section, name.clone()));
+    }
 }
 
 enum ControlKind {
-    Ranged,
     Bool,
     Choice(Vec<Value>),
     Text,
@@ -267,24 +331,33 @@ impl ControlKind {
             return ControlKind::Choice(choices.clone());
         }
         match entry.ty.as_deref() {
-            Some("number") | Some("integer")
-                if entry.minimum.is_some() && entry.maximum.is_some() =>
-            {
-                ControlKind::Ranged
-            }
             Some("boolean") => ControlKind::Bool,
+            // Ranged numbers had a trackbar here; until the slider UX is
+            // settled they take the text field like everything else (the
+            // widget survives in `theme::trackbar` — the transport uses it).
             _ => ControlKind::Text,
         }
     }
 }
 
-/// A value the way a text field shows it: bare strings unquoted,
-/// everything else compact JSON.
+/// A value the way a text field shows it: bare strings unquoted, numbers
+/// rounded to a few decimals (a scrubbed `t` is 0.20833333333333334 in
+/// JSON), everything else compact JSON.
 fn plain(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
+        Value::Number(n) => match n.as_f64() {
+            Some(f) => trim_num(f),
+            None => n.to_string(),
+        },
         other => other.to_string(),
     }
+}
+
+/// A float to at most 4 decimal places, trailing zeros trimmed.
+fn trim_num(v: f64) -> String {
+    let s = format!("{v:.4}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The reverse: JSON when it parses, else a bare string — except inputs
@@ -299,11 +372,6 @@ fn parse_value(text: &str, ty: Option<&str>) -> Value {
 
 fn num(v: f64) -> Value {
     serde_json::Number::from_f64(v).map(Value::Number).unwrap_or(Value::Null)
-}
-
-fn trim_num(v: f64) -> String {
-    let s = format!("{v:.3}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 #[cfg(test)]
@@ -397,7 +465,7 @@ mod tests {
             self.frame(Vec::new());
         }
 
-        /// Click the widget labeled `text` (a preset button, an ×).
+        /// Click the widget labeled `text` (a preset button, a radio choice).
         fn click_text(&mut self, text: &str) {
             let rect = self
                 .texts
@@ -405,6 +473,26 @@ mod tests {
                 .find(|(_, t)| t == text)
                 .unwrap_or_else(|| panic!("no {text:?} on screen: {:?}", self.texts))
                 .0;
+            self.click_at(rect.center());
+        }
+
+        /// Click arg `name`'s reset button. Always present; inert at default.
+        fn click_reset(&mut self, name: &str) {
+            let rect = self
+                .ctx
+                .read_response(egui::Id::new(("reset", Section::Arg, name)))
+                .unwrap_or_else(|| panic!("no reset for {name:?}"))
+                .rect;
+            self.click_at(rect.center());
+        }
+
+        /// Click arg `name`'s check box.
+        fn click_check(&mut self, name: &str) {
+            let rect = self
+                .ctx
+                .read_response(egui::Id::new(("check", Section::Arg, name)))
+                .unwrap_or_else(|| panic!("no check box for {name:?}"))
+                .rect;
             self.click_at(rect.center());
         }
 
@@ -464,9 +552,9 @@ mod tests {
         }
     }
 
-    /// The parametric-box bug (2026-08-14): click the Chunky preset, then the
-    /// × it puts next to height. The value under height must track both — it
-    /// used to freeze at whatever the field showed on its first frame.
+    /// The parametric-box bug (2026-08-14): click the Chunky preset, then
+    /// reset height. The value under height must track both — it used to
+    /// freeze at whatever the field showed on its first frame.
     #[test]
     fn text_fields_track_preset_and_clear() {
         let mut h = Harness::new(box_report());
@@ -486,7 +574,7 @@ mod tests {
         stale.inputs[0].source = ValueSource::View;
         h.tab.published.report = stale.into();
 
-        h.click_text("×"); // height's — the first set row on screen
+        h.click_reset("height");
         assert!(!h.tab.set_args.contains_key("height"));
         h.frame(Vec::new());
         assert_eq!(h.field_text("height"), "30", "cleared field shows the default again");
@@ -514,8 +602,8 @@ mod tests {
     }
 
     /// Setting an input to its declared default is a clear, not a pin: the
-    /// key leaves the tab and the × goes away — "manually set to the
-    /// default" and "cleared to the default" are one state, not two.
+    /// key leaves the tab and the reset button goes inert — "manually set to
+    /// the default" and "cleared to the default" are one state, not two.
     #[test]
     fn setting_the_default_clears_the_pin() {
         let mut h = Harness::new(box_report());
@@ -524,8 +612,6 @@ mod tests {
         h.frame(vec![egui::Event::Text("42".into())]);
         h.key(egui::Key::Enter, egui::Modifiers::default());
         assert_eq!(h.tab.set_args["height"], json!(42));
-        h.frame(Vec::new());
-        assert!(h.texts.iter().any(|(_, t)| t == "×"), "a pinned value shows ×");
 
         h.click_at(h.field_center("height"));
         h.key(egui::Key::A, egui::Modifiers::COMMAND);
@@ -533,15 +619,14 @@ mod tests {
         h.key(egui::Key::Enter, egui::Modifiers::default());
         assert!(!h.tab.set_args.contains_key("height"), "typing the default clears the pin");
         h.frame(Vec::new());
-        assert!(!h.texts.iter().any(|(_, t)| t == "×"));
         assert_eq!(h.field_text("height"), "30");
     }
 
     /// A preset value equal to the declared default doesn't pin either, and
     /// a legacy pinned-at-default value (old persisted tabs; floats vs
-    /// integer defaults) shows no ×.
+    /// integer defaults) reads as unset: its reset button is inert.
     #[test]
-    fn default_valued_pins_show_no_x() {
+    fn default_valued_pins_read_as_unset() {
         let mut h = Harness::new(InputReport {
             inputs: vec![number_entry("height", 30), number_entry("wall", 3)],
             presets: vec![preset("thin", json!({ "height": 30, "wall": 1 }))],
@@ -551,11 +636,58 @@ mod tests {
         assert!(!h.tab.set_args.contains_key("height"), "preset at the default doesn't pin");
         assert_eq!(h.tab.set_args["wall"], json!(1));
 
-        // 30.0 == 30: a float pin at an integer default is still "unset".
+        // 30.0 == 30: a float pin at an integer default is still "unset",
+        // so its reset button does nothing.
         h.tab.set_args.insert("height".into(), json!(30.0));
         h.frame(Vec::new());
-        let xs = h.texts.iter().filter(|(_, t)| t == "×").count();
-        assert_eq!(xs, 1, "only wall's pin shows an ×");
+        h.click_reset("height");
+        assert_eq!(h.tab.set_args["height"], json!(30.0), "inert reset leaves the legacy pin");
+
+        h.click_reset("wall");
+        assert!(!h.tab.set_args.contains_key("wall"), "a live reset clears its pin");
+    }
+
+    /// Booleans are a check box; clicking toggles, and toggling back to the
+    /// default clears the pin.
+    #[test]
+    fn bool_inputs_are_check_boxes() {
+        let mut entry = number_entry("lid", 0);
+        entry.ty = Some("boolean".into());
+        entry.default = json!(false);
+        entry.value = json!(false);
+        let mut h =
+            Harness::new(InputReport { inputs: vec![entry], ..Default::default() });
+        h.click_check("lid");
+        assert_eq!(h.tab.set_args["lid"], json!(true));
+        h.click_check("lid");
+        assert!(!h.tab.set_args.contains_key("lid"), "back at the default: pin cleared");
+    }
+
+    /// Enum choices are radio rows; clicking one sets it, clicking the
+    /// default clears the pin.
+    #[test]
+    fn choice_inputs_are_radios() {
+        let mut entry = number_entry("style", 0);
+        entry.ty = Some("string".into());
+        entry.default = json!("flat");
+        entry.value = json!("flat");
+        entry.choices = Some(vec![json!("flat"), json!("gabled")]);
+        let mut h =
+            Harness::new(InputReport { inputs: vec![entry], ..Default::default() });
+        h.click_text("gabled");
+        assert_eq!(h.tab.set_args["style"], json!("gabled"));
+        h.click_text("flat");
+        assert!(!h.tab.set_args.contains_key("style"), "the default choice clears the pin");
+    }
+
+    /// Ranged numbers (min and max declared) take the text field like any
+    /// other number — no trackbar in the panel while the slider UX is open.
+    #[test]
+    fn ranged_numbers_are_text_fields() {
+        let mut entry = number_entry("angle", 0);
+        entry.maximum = Some(90.0);
+        let h = Harness::new(InputReport { inputs: vec![entry], ..Default::default() });
+        assert_eq!(h.field_text("angle"), "0");
     }
 
     /// Leaving a field without Enter discards the edit instead of applying

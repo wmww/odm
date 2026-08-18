@@ -290,6 +290,102 @@ fn pixels(p: &egui::Painter, rows: &[&str], pos: Pos2, color: Color32) {
     p.add(mesh);
 }
 
+/// Side of the era's check box.
+pub const CHECKBOX: f32 = 13.0;
+
+/// A check box: sunken window-filled square, the checkmark when on. The box
+/// only — the inputs panel keeps labels in their own column. Explicit id, as
+/// [`text_edit`]: panel rows shift and an auto id would move with them.
+pub fn check_box(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, checked: bool) -> Response {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(CHECKBOX), egui::Sense::hover());
+    let rect = Rect::from_min_size(snap(ui, rect.min), rect.size());
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::ZERO, WINDOW);
+    bevel(p, rect, Bevel::Sunken);
+    if checked {
+        pixels(p, &CHECK, pos2(rect.left() + 3.0, rect.top() + 4.0), TEXT);
+    }
+    ui.interact(rect, egui::Id::new(id), egui::Sense::click())
+}
+
+/// Diameter of the era's radio button.
+pub const RADIO: f32 = 12.0;
+
+/// A radio button with its label; the pair is one click target.
+pub fn radio(ui: &mut Ui, selected: bool, text: &str) -> Response {
+    const GAP: f32 = 5.0;
+    let galley = label(ui, text);
+    let size = vec2(RADIO + GAP + galley.size().x, RADIO.max(galley.size().y));
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let mid = snap(ui, rect.center()).y;
+    radio_circle(ui.painter(), snap(ui, pos2(rect.left(), mid - RADIO / 2.0)), selected);
+    let pos = snap(ui, pos2(rect.left() + RADIO + GAP, mid - galley.size().y / 2.0));
+    ui.painter().galley(pos, galley, TEXT);
+    response
+}
+
+/// The radio circle, pixel by pixel: a two-tone sunken ring (dark arc
+/// top-left, light bottom-right, like a round [`Bevel::Sunken`]) around a
+/// window-filled disc, with the dot when selected. Computed rather than
+/// hand-drawn art — the distance test lands the same circle the era's did.
+fn radio_circle(p: &egui::Painter, pos: Pos2, selected: bool) {
+    let mut mesh = egui::Mesh::default();
+    let c = (RADIO - 1.0) / 2.0;
+    for y in 0..RADIO as i32 {
+        for x in 0..RADIO as i32 {
+            let (dx, dy) = (x as f32 - c, y as f32 - c);
+            let d = (dx * dx + dy * dy).sqrt();
+            let dark = dx + dy < 0.0; // top-left half
+            let color = if d > 6.0 {
+                continue;
+            } else if d > 5.0 {
+                if dark { SHADOW } else { HILIGHT }
+            } else if d > 4.0 {
+                if dark { FRAME } else { FACE }
+            } else if selected && d <= 2.0 {
+                TEXT
+            } else {
+                WINDOW
+            };
+            let min = pos2(pos.x + x as f32, pos.y + y as f32);
+            mesh.add_colored_rect(Rect::from_min_size(min, Vec2::splat(1.0)), color);
+        }
+    }
+    p.add(mesh);
+}
+
+/// Side of a [`reset_button`].
+pub const RESET_SIDE: f32 = 18.0;
+
+/// The circle arrow of a [`reset_button`]: a ring open at the top with the
+/// head pointing down its left side.
+const RESET_ARROW: [&str; 7] = [
+    "...##..", //
+    "###..#.", //
+    "##....#", //
+    "#.....#", //
+    "#.....#", //
+    ".#...#.", //
+    "..###..", //
+];
+
+/// A square icon button that resets a value to its default: raised, pressing
+/// like any button — grayed and inert while `enabled` is off (a value already
+/// at its default has nothing to reset, but the button holds its place).
+pub fn reset_button(ui: &mut Ui, id: egui::Id, rect: Rect, enabled: bool) -> Response {
+    let rect = Rect::from_min_size(snap(ui, rect.min), rect.size());
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let response = ui.interact(rect, id, sense);
+    let pressed = enabled && response.is_pointer_button_down_on();
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::ZERO, FACE);
+    bevel(p, rect, if pressed { Bevel::Sunken } else { Bevel::Raised });
+    let nudge = if pressed { 1.0 } else { 0.0 };
+    let pos = snap(ui, rect.center() + vec2(nudge - 3.5, nudge - 3.5));
+    pixels(p, &RESET_ARROW, pos, if enabled { TEXT } else { WEAK_TEXT });
+    response
+}
+
 /// Snap a position to whole physical pixels. Bitmap art (icons, text) placed
 /// off the pixel grid blurs, and layout arithmetic lands on halves easily.
 pub fn snap(ui: &Ui, pos: Pos2) -> Pos2 {

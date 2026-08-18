@@ -537,15 +537,6 @@ impl ViewerApp {
         let task = state.task();
         state.with_transcript(|transcript| {
             theme::tail_box(ui, "chat", size, |ui| {
-                if transcript.is_empty() {
-                    ui.label(
-                        egui::RichText::new(
-                            "Type below to send the agent a message.\n\
-                             Enter sends it; shift+Enter starts a new line.",
-                        )
-                        .color(theme::WEAK_TEXT),
-                    );
-                }
                 for entry in transcript {
                     let undelivered = entry.delivery != Delivery::Done;
                     // A message can now hold newlines; its later lines are

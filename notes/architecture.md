@@ -242,8 +242,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   `.odm/viewer.json`; classic notebook tabs, each with its own close box, a
   red label when that tab's last build failed —, offscreen texture viewport via
   register_native_texture, orbit/pan/zoom, tree panel, generated input panel
-  (right side; controls from the tab's fall-through report: trackbars for
-  ranged numbers, toggles, choice buttons, JSON-ish text fields, presets), a
+  (right side; controls from the tab's fall-through report: label/value
+  columns with check boxes, radios, JSON-ish text fields, presets), a
   `t` transport when a ranged cascade number named t falls through
   (scrub + play at 1 unit/sec looping; its bottom panel is only up when the
   view has one — there is no status band, and nothing else lives down there),
@@ -352,7 +352,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   odm-viewer-core's `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`,
-  `collapsing`, `list_box`, `text_edit`, `trackbar`, `menu_bar`/`menu`,
+  `collapsing`, `list_box`, `text_edit`, `trackbar`, `check_box`, `radio`,
+  `reset_button`, `menu_bar`/`menu`,
   `dialog`, `list_row`, `tab`/`tab_edge`, …) that paint two-tone 3D bevels —
   egui's `WidgetVisuals` has one uniform `bg_stroke`, so bevels can't be
   themed and must be drawn over each widget's rect. Prefer these wrappers over
@@ -410,7 +411,21 @@ overruns, so a full strip can still be added to. Labels elide
 
 ### Input panel
 
-odm-viewer-core `inputs.rs` + `tab.rs`. Controls come from the tab's
+odm-viewer-core `inputs.rs` + `tab.rs`. Reworked 2026-08-17 to the era's
+property-sheet shape: fixed label column left (45%, hard-clipped,
+description on hover), value column right, and a circle-arrow reset button
+per row on the right edge — always present, grayed/inert at the default.
+Booleans are `theme::check_box`, enum choices stack `theme::radio` rows,
+everything else is a text field (numbers shown rounded to 4 decimals).
+Trackbars are gone from the panel until the slider UX is settled
+(`theme::trackbar` survives; the `t` transport still uses it). Preset
+buttons flow onto rows by hand — egui's `horizontal_wrapped` either
+letter-wraps a button's text or (with `TextWrapMode::Extend`) overflows
+and *widens the scroll content*, poisoning `available_width` for every
+later row. Wanted later: nested/structured inputs (tree-mirrored or
+selection-contextual — undecided), and some way to bring sliders back.
+
+Controls come from the tab's
 fall-through report; interactions come back as `Event`s which
 `inputs::apply` folds into the tab's `set_args`/`set_cascade` (pure and
 unit-tested; `Tab::apply` then submits `tab.view()` through the `Engine`
@@ -420,7 +435,7 @@ set values)** — the only other state is `Tab::edit`, the buffer of the one
 text field currently holding keyboard focus (egui focus is single, so it's
 an `Option`, present exactly while focused; Enter applies, any other focus
 loss discards). Two rules that came out of a 2026-08-14 bug (a text field
-frozen at its first-frame value, blind to presets/×):
+frozen at its first-frame value, blind to presets/resets):
 
 - Never cache what a control displays outside `Tab::edit`. Unfocused text
   fields re-derive their string from `shown_value` every frame.
@@ -433,9 +448,10 @@ frozen at its first-frame value, blind to presets/×):
 Two behaviors added 2026-08-17 (issues/stale-pinned-view-inputs):
 
 - Setting a value equal to its declared default *clears* the pin instead
-  (`inputs::set_or_clear`, numbers compared numerically), and the × only
-  shows for a real difference — "set to the default" and "cleared" are one
-  state, in the tab, the view identity, and viewer.json alike.
+  (`inputs::set_or_clear`, numbers compared numerically), and the reset
+  button only enables for a real difference — "set to the default" and
+  "cleared" are one state, in the tab, the view identity, and viewer.json
+  alike.
 - Stale pinned args (the target dropped/renamed an input) self-heal: a
   failed slot build publishes the target's declared inputs
   (`Published.declared`, cleared on success), `Tab::prune_stale_args` drops
