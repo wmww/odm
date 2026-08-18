@@ -244,10 +244,16 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   viewer (menu bar, tab strip — one view per tab, persisted in
   `.odm/viewer.json`; classic notebook tabs, each with its own close box, a
   red label when that tab's last build failed, and a magnifier at the end
-  opening the doohickey picker —, offscreen texture viewport via
-  register_native_texture, orbit/pan/zoom, tree panel, generated input panel
-  (right side; controls from the tab's fall-through report: label/value
-  columns with check boxes, radios, JSON-ish text fields, presets), a
+  opening the doohickey picker. The *last* tab closes too (Ctrl+W, or its
+  box): no tab is a real state — empty panels, a blank viewport well
+  (`blank_viewport`), `set_active_slot(None)`, no view registered, chat
+  messages with no view snapshot — and it persists as an empty tab list in
+  viewer.json —, offscreen texture viewport via
+  register_native_texture, orbit/pan/zoom, one **side bar** down the right
+  holding the generated input panel above the scene tree with a draggable
+  split between them (inputs from the tab's fall-through report: label/value
+  columns with check boxes, radios, JSON-ish text fields, presets; there is
+  no left panel), a
   `t` transport when a ranged cascade number named t falls through
   (scrub + play at 1 unit/sec looping; its bottom panel is only up when the
   view has one — there is no status band, and nothing else lives down there),
@@ -487,12 +493,16 @@ labels, real focus, asserting on the painted galley text).
 
 `viewer/menu.rs` is the whole bar: an `Action` enum, a `theme::menu` per
 drop-down listing `MenuEntry`s, and one `apply` that turns an action into an
-effect. File has New Project… (Ctrl+N) / Open Project… (Ctrl+O) / Open Doohickey…
-(Ctrl+Alt+O) / Export Web… / Quit (Ctrl+Q), View has Frame Scene (F) and
-checkmarked Wireframe/Grid. `menu::shortcuts` reads those chords off the input
-queue at the top of the frame and `apply`s the same actions — consumed, so a
-chord never also lands in whatever has the caret, and Ctrl+Alt+O is taken
-before Ctrl+O because egui's `consume_shortcut` ignores an *extra* alt. A modal
+effect. File has New Project… / Open Project… | Open Doohickey… (Ctrl+O) /
+Close Doohickey (Ctrl+W) | Export Web… | Quit (Ctrl+Q); Edit has one item,
+Message Agent (Ctrl+Enter) — put the dock on the Agent tab and the caret in
+its box (`ViewerApp::focus_chat`, taken by the box when it next draws); View
+has Frame Scene (F) and checkmarked Wireframe/X-Ray/Grid/Agent Activity.
+Opening a *project* has no chord on purpose: swapping the whole engine is not
+something to trip over next to Ctrl+O. `menu::shortcuts` reads those chords
+off the input queue at the top of the frame and `apply`s the same actions —
+consumed, so a chord never also lands in whatever has the caret (Ctrl+Enter
+has to beat the chat box it aims at). A modal
 owns the keyboard while it is up (only Quit still fires). `theme::menu` measures its own entries and pins the popup width
 before drawing, because an auto-sizing egui popup doesn't know its width until
 the frame after — and a highlight that stops at the text looks broken. Titles

@@ -43,7 +43,9 @@ Decisions from the 2026-08-17 design discussion:
 ## Viewer integration
 
 - **Tab becomes an enum.** Today's `Tab` (odm-viewer-core) is strongly a
-  doohickey view and `self.tabs[self.active]` assumes it everywhere.
+  doohickey view; the host now reaches it through `self.tabs.get(self.active)`
+  (no tab is already a state — empty panels), but every reader still assumes
+  the one kind.
   The enum is desktop chrome — it wraps the core `Tab`, which stays as is.
   Rename it `ViewTab`, introduce `Tab { View(ViewTab), Term(TermTab) }`,
   and route per-tab UI by kind. `TermTab` = terminal handle + label +

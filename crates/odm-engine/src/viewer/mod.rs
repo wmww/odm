@@ -41,6 +41,12 @@ const INPUT_MAX_SHARE: f32 = 0.5;
 const DOCK_HEIGHT: f32 = 150.0;
 const DOCK_MIN: f32 = 100.0;
 
+/// The side bar: how wide it starts, and how the two panels stacked in it —
+/// inputs on top, scene tree below — split that column to begin with.
+const SIDEBAR_WIDTH: f32 = 240.0;
+const TREE_HEIGHT: f32 = 280.0;
+const TREE_MIN: f32 = 60.0;
+
 /// The lamp on the Agent tab: nothing listening, listening, and the dim half
 /// of the blink while it works — plus how long each half of that blink lasts.
 const LAMP_OFF: egui::Color32 = egui::Color32::from_rgb(0x8c, 0x2c, 0x2c);
@@ -120,6 +126,9 @@ pub struct ViewerApp {
     activity: ActivityView,
     /// The chat input line. The transcript itself lives in `EngineState`.
     chat_input: String,
+    /// Edit ▸ Message Agent (Ctrl+Enter) asked for the caret; the chat box
+    /// takes it when it next draws, and clears this.
+    focus_chat: bool,
     /// Which tab of the bottom dock is showing. One dock for the window, not
     /// one per view: the console it shows is the active tab's.
     dock: Dock,
@@ -152,6 +161,7 @@ impl ViewerApp {
             tab_counter: 0,
             activity: ActivityView::default(),
             chat_input: String::new(),
+            focus_chat: false,
             dock: Dock::Chat,
             dialog: None,
             agent_questions: Vec::new(),
@@ -199,11 +209,30 @@ impl ViewerApp {
         for tab in &self.tabs {
             self.state().set_view(&tab.slot, tab.view());
         }
-        self.state().set_active_slot(Some(self.tab().slot.clone()));
+        self.sync_active();
     }
 
-    fn tab(&self) -> &Tab {
-        &self.tabs[self.active]
+    /// The tab in front, if any: closing the last one leaves the window open
+    /// on the project with nothing in it.
+    fn tab(&self) -> Option<&Tab> {
+        self.tabs.get(self.active)
+    }
+
+    /// Tell the engine which tab the user is on (and what is selected in it)
+    /// after the strip changes. Nothing open is a real answer: the CLI's
+    /// `"view": true` then says so rather than pointing at a closed tab.
+    fn sync_active(&self) {
+        let state = self.state();
+        match self.tab() {
+            Some(tab) => {
+                state.set_selection(tab.selected.clone());
+                state.set_active_slot(Some(tab.slot.clone()));
+            }
+            None => {
+                state.set_selection(Vec::new());
+                state.set_active_slot(None);
+            }
+        }
     }
 
     fn save_tabs(&self) {
@@ -249,14 +278,17 @@ impl ViewerApp {
 
     fn frame_scene(&mut self) {
         let Self { core, tabs, active, .. } = self;
-        core.frame_scene(&mut tabs[*active]);
+        if let Some(tab) = tabs.get_mut(*active) {
+            core.frame_scene(tab);
+        }
     }
 
     /// Turn panel interactions into the tab's new view, and hand it to the
     /// engine (latest-wins per slot).
     fn apply_input_events(&mut self, events: Vec<inputs::Event>) {
         let state = self.state();
-        if self.tabs[self.active].apply(&*state, events) {
+        let Some(tab) = self.tabs.get_mut(self.active) else { return };
+        if tab.apply(&*state, events) {
             self.save_tabs();
         }
     }
@@ -276,8 +308,7 @@ impl ViewerApp {
         self.core.needs_render = true;
         // The CLI's `status` selection and `"view": true` follow the tab the
         // user is looking at.
-        self.state().set_selection(self.tab().selected.clone());
-        self.state().set_active_slot(Some(self.tab().slot.clone()));
+        self.sync_active();
         self.save_tabs();
     }
 
@@ -288,23 +319,26 @@ impl ViewerApp {
         self.tabs.push(tab);
         self.active = self.tabs.len() - 1;
         self.core.needs_render = true;
-        self.state().set_selection(Vec::new());
-        self.state().set_active_slot(Some(self.tab().slot.clone()));
+        self.sync_active();
         self.save_tabs();
     }
 
+    /// Close one tab — the last one included, which leaves the window on the
+    /// project with empty panels (File ▸ Open Doohickey fills them again).
     fn close_tab(&mut self, index: usize) {
-        if self.tabs.len() <= 1 || index >= self.tabs.len() {
-            return; // the last tab stays
+        if index >= self.tabs.len() {
+            return;
         }
         let tab = self.tabs.remove(index);
         self.state().remove_view(&tab.slot);
-        if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
+        // Stay on the tab the user was on: closing one to its left shifts it
+        // down, closing the last one falls back onto the new end of the row.
+        if index < self.active {
+            self.active -= 1;
         }
+        self.active = self.active.min(self.tabs.len().saturating_sub(1));
         self.core.needs_render = true;
-        self.state().set_selection(self.tab().selected.clone());
-        self.state().set_active_slot(Some(self.tab().slot.clone()));
+        self.sync_active();
         self.save_tabs();
     }
 
@@ -332,12 +366,11 @@ impl ViewerApp {
         // page edge they stop at; both end their text on the same line.
         let edge_y = origin.y + grow + theme::TAB_HEIGHT;
 
-        let closable = self.tabs.len() > 1; // the last tab stays
-        let extra = PAD * 2.0 + if closable { CLOSE + CLOSE_GAP } else { 0.0 };
+        let extra = PAD * 2.0 + CLOSE + CLOSE_GAP;
         // Tabs take their natural width, squeezed to an even share of the strip
         // once the row no longer fits.
         let room = strip.width() - FIND.x - FIND_GAP;
-        let share = (room / self.tabs.len() as f32).max(MIN_TAB);
+        let share = (room / self.tabs.len().max(1) as f32).max(MIN_TAB);
         let state = self.state();
         let failed: Vec<bool> =
             self.tabs.iter().map(|tab| state.build_failed(&tab.slot)).collect();
@@ -380,7 +413,11 @@ impl ViewerApp {
             }
         }
         theme::tab_edge(ui.painter(), edge_y, strip.left(), strip.right());
-        theme::tab(ui.painter(), tab_rects[self.active]);
+        // Nothing open: the page edge runs the whole width, with only the
+        // magnifier standing on it.
+        if let Some(rect) = tab_rects.get(self.active) {
+            theme::tab(ui.painter(), *rect);
+        }
 
         // It keeps its place at the right end even when the row overruns the
         // strip, so a full strip can still be added to.
@@ -401,7 +438,7 @@ impl ViewerApp {
                 theme::snap(ui, egui::pos2(left + galley.size().x + CLOSE_GAP + CLOSE / 2.0, mid)),
                 egui::Vec2::splat(CLOSE),
             );
-            if closable {
+            {
                 let hit = ui.interact(close_box, ui.id().with(("close", i)), egui::Sense::click());
                 let armed = hit.hovered();
                 if armed {
@@ -422,8 +459,7 @@ impl ViewerApp {
             }
             // The rest of the tab switches to it — stopping at the close box
             // rather than running under it, so neither steals the other's click.
-            let right = if closable { close_box.left() } else { rect.right() };
-            let body = rect.with_max_x(right.min(find_x - FIND_GAP));
+            let body = rect.with_max_x(close_box.left().min(find_x - FIND_GAP));
             if body.width() <= 0.0 {
                 continue; // squeezed off the end of the strip
             }
@@ -559,13 +595,17 @@ impl ViewerApp {
         });
         let input =
             theme::text_area(ui, "chat-input", &mut self.chat_input, input_width, input_max, "");
+        if std::mem::take(&mut self.focus_chat) {
+            input.response.request_focus();
+        }
         if input.submitted {
             let text = self.chat_input.trim().to_owned();
             if !text.is_empty() {
                 // Stamped now: the snapshot must be what the user sees as
                 // they hit Enter, not whatever a later poll happens to find.
+                // No tab open, nothing to attach.
                 let snapshot = self.view_snapshot();
-                self.state().send_message(text, Some(snapshot));
+                self.state().send_message(text, snapshot);
             }
             self.chat_input.clear();
             // Enter sends *and* keeps the caret, so a reply can follow.
@@ -577,12 +617,12 @@ impl ViewerApp {
     /// the tab's view (path + set inputs), their selection, and the camera —
     /// in the render request's explicit spelling, so the agent replays this
     /// exact view by pasting the numbers into `odm render`.
-    fn view_snapshot(&self) -> Value {
-        let tab = self.tab();
+    fn view_snapshot(&self) -> Option<Value> {
+        let tab = self.tab()?;
         let mut inputs = tab.set_args.clone();
         inputs.extend(tab.set_cascade.clone());
         let orbit = &tab.orbit;
-        serde_json::json!({
+        Some(serde_json::json!({
             "slot": tab.slot,
             "path": tab.path,
             "inputs": inputs,
@@ -593,15 +633,16 @@ impl ViewerApp {
                 [0.0, 0.0, 1.0],
                 &odm_render::Projection::Perspective { fov_y_deg: FOV_Y_DEG },
             ),
-        })
+        }))
     }
 
     /// The t transport: a ranged fall-through number named `t` becomes a
     /// timeline (scrub + play at 1 unit/sec, looping over its range). Its
     /// panel is only up when the view has one — nothing else lives down there.
     fn transport_ui(&mut self, ui: &mut egui::Ui) {
-        if let Some(entry) = inputs::transport_entry(self.tab()) {
-            let events = inputs::transport_ui(ui, self.tab(), &entry);
+        let Some(tab) = self.tab() else { return };
+        if let Some(entry) = inputs::transport_entry(tab) {
+            let events = inputs::transport_ui(ui, tab, &entry);
             self.apply_input_events(events);
         }
     }
@@ -627,7 +668,10 @@ impl ViewerApp {
     /// project — what the agent said, and what the build said — so they share
     /// the space rather than stacking and squeezing the viewport.
     fn dock_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let (console, console_color) = console_tab(self.tab());
+        let (console, console_color) = match self.tab() {
+            Some(tab) => console_tab(tab),
+            None => ("Output".to_owned(), theme::TEXT),
+        };
         let tabs = [
             theme::StripTab::new("Agent", theme::TEXT).lamp(self.agent_lamp(ui)),
             theme::StripTab::new(console, console_color),
@@ -639,9 +683,14 @@ impl ViewerApp {
         let clicked = theme::tab_strip(ui, "dock", &tabs, selected);
         // The click lands after the body, so the strip and what is under it
         // never disagree within a frame.
-        match self.dock {
-            Dock::Chat => self.chat_ui(ui, frame),
-            Dock::Console => console_ui(ui, self.tab()),
+        match (self.dock, self.tab()) {
+            (Dock::Chat, _) => self.chat_ui(ui, frame),
+            (Dock::Console, Some(tab)) => console_ui(ui, tab),
+            // No tab, no build, nothing said: an empty well.
+            (Dock::Console, None) => {
+                let size = egui::vec2(ui.available_width(), ui.available_height().max(24.0));
+                theme::list_box(ui, "console", size, egui::Vec2b::new(false, true), |_| {});
+            }
         }
         if let Some(i) = clicked {
             self.dock = if i == 0 { Dock::Chat } else { Dock::Console };
@@ -740,11 +789,12 @@ impl eframe::App for ViewerApp {
         let state = self.state();
         {
             let Self { core, tabs, active, renderer, activity, .. } = &mut *self;
-            let pruned = core.poll_published(&*state, &mut tabs[*active], ui.ctx(), renderer, &|h| {
-                activity.keeps(h)
-            });
-            if core.advance_transport(ui.ctx(), &*state, &mut tabs[*active]) || pruned {
-                tabs::save(state.project(), tabs, *active);
+            if let Some(tab) = tabs.get_mut(*active) {
+                let pruned =
+                    core.poll_published(&*state, tab, ui.ctx(), renderer, &|h| activity.keeps(h));
+                if core.advance_transport(ui.ctx(), &*state, tab) || pruned {
+                    tabs::save(state.project(), tabs, *active);
+                }
             }
         }
         // Activity events are drained either way; the toggle drops them.
@@ -762,34 +812,48 @@ impl eframe::App for ViewerApp {
             .frame(theme::panel_frame())
             .show(ui, |ui| self.tab_bar(ui));
         theme::band(ui, tab_bar.response.rect);
-        let left = egui::Panel::left("tree")
+        // The side bar: what the view *takes* over what it *made*, one above
+        // the other down the right, with a draggable split between them. Its
+        // own edge trades width against the viewport.
+        egui::Panel::right("sidebar")
             .resizable(true)
-            .default_size(240.0)
-            .frame(theme::panel_frame())
+            .default_size(SIDEBAR_WIDTH)
+            .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                let size = ui.available_size();
-                theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| {
-                    let Self { core, tabs, active, .. } = &mut *self;
-                    core.tree_ui(ui, &*state, &mut tabs[*active]);
-                });
+                let tree = egui::Panel::bottom("tree")
+                    .resizable(true)
+                    .default_size(TREE_HEIGHT)
+                    .min_size(TREE_MIN)
+                    .max_size((ui.available_height() * PANEL_SHARE).max(TREE_MIN))
+                    .frame(theme::panel_frame())
+                    .show(ui, |ui| {
+                        let size = ui.available_size();
+                        theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| {
+                            let Self { core, tabs, active, .. } = &mut *self;
+                            if let Some(tab) = tabs.get_mut(*active) {
+                                core.tree_ui(ui, &*state, tab);
+                            }
+                        });
+                    });
+                let inputs = egui::CentralPanel::default().frame(theme::panel_frame()).show(
+                    ui,
+                    |ui| {
+                        let size = ui.available_size();
+                        let mut events = Vec::new();
+                        theme::sheet_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
+                            if let Some(tab) = self.tabs.get_mut(self.active) {
+                                events = inputs::panel_ui(ui, tab, true);
+                            }
+                        });
+                        self.apply_input_events(events);
+                    },
+                );
+                theme::band(ui, inputs.response.rect);
+                theme::band(ui, tree.response.rect);
             });
-        theme::band(ui, left.response.rect);
-        let right = egui::Panel::right("inputs")
-            .resizable(true)
-            .default_size(230.0)
-            .frame(theme::panel_frame())
-            .show(ui, |ui| {
-                let size = ui.available_size();
-                let mut events = Vec::new();
-                theme::sheet_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
-                    events = inputs::panel_ui(ui, &mut self.tabs[self.active], true);
-                });
-                self.apply_input_events(events);
-            });
-        theme::band(ui, right.response.rect);
         // The transport is the last thing the window pushed down, and only
         // there when the view is animated.
-        if inputs::transport_entry(self.tab()).is_some() {
+        if self.tab().is_some_and(|tab| inputs::transport_entry(tab).is_some()) {
             let bottom = egui::Panel::bottom("timeline")
                 .frame(theme::panel_frame())
                 .show(ui, |ui| self.transport_ui(ui));
@@ -809,7 +873,11 @@ impl eframe::App for ViewerApp {
             .show(ui, |ui| {
                 let shortcuts = self.dialog.is_none() && self.pick.is_none();
                 let Self { core, tabs, active, renderer, .. } = &mut *self;
-                core.viewport_ui(ui, frame, renderer, &*state, &mut tabs[*active], shortcuts);
+                match tabs.get_mut(*active) {
+                    Some(tab) => core.viewport_ui(ui, frame, renderer, &*state, tab, shortcuts),
+                    // Nothing open: an empty well, not the last tab's render.
+                    None => odm_viewer_core::blank_viewport(ui),
+                }
             });
 
         self.pick_ui(ui.ctx());

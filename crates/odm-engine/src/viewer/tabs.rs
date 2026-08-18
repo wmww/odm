@@ -36,13 +36,12 @@ fn file_of(project: &Path) -> std::path::PathBuf {
 }
 
 /// Restore tabs from `.odm/viewer.json`. Slots are (re)assigned by the
-/// caller. Returns (tabs, active index); None when nothing usable exists.
+/// caller. Returns (tabs, active index); None when there is no readable file
+/// — an empty tab list is a state the user can leave the viewer in, and comes
+/// back as one.
 pub fn load(project: &Path, mut slot: impl FnMut() -> String) -> Option<(Vec<Tab>, usize)> {
     let text = std::fs::read_to_string(file_of(project)).ok()?;
     let saved: SavedTabs = serde_json::from_str(&text).ok()?;
-    if saved.tabs.is_empty() {
-        return None;
-    }
     let tabs: Vec<Tab> = saved
         .tabs
         .into_iter()
@@ -58,7 +57,7 @@ pub fn load(project: &Path, mut slot: impl FnMut() -> String) -> Option<(Vec<Tab
             tab
         })
         .collect();
-    let active = saved.active.min(tabs.len() - 1);
+    let active = saved.active.min(tabs.len().saturating_sub(1));
     Some((tabs, active))
 }
 

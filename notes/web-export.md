@@ -139,10 +139,12 @@ odm-kernel with `wasm-uu`.
   Degenerate build loop: `Engine::set_view` marks pending; each frame
   start runs pending synchronously (latest-wins), publishes with
   last-good root semantics + `input_report`, pins roots + gc. `app.rs` is
-  the desktop chrome minus everything editable: menu bar (View only),
-  tree, inputs, status band + transport (the web app keeps its own status
-  band; the desktop viewer dropped its), output dock, viewport; integer
-  pixels_per_point forced.
+  the desktop chrome minus everything editable: menu bar (View only), the
+  same right-hand side bar (inputs above tree, draggable split), the `t`
+  transport in its own bottom panel when the view has one, output dock,
+  viewport; integer pixels_per_point forced. No status band — it went the
+  way the desktop viewer's did (2026-08-17); the console says what the
+  build had to say.
 
 ## Isolation & drift (accepted, by design)
 

@@ -92,24 +92,9 @@ impl WebApp {
         }
     }
 
-    fn bottom_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            let p = &self.tab.published;
-            let status = match (&p.error, p.root.is_some()) {
-                (Some(_), _) => "build failed — see console".to_string(),
-                (None, true) => "built".to_string(),
-                (None, false) => "building…".to_string(),
-            };
-            theme::status_field(ui, status);
-            match self.tab.selected.as_slice() {
-                [] => {}
-                [(id, _)] => theme::status_field(
-                    ui,
-                    format!("selected: {}", if id.is_empty() { "(root)" } else { id }),
-                ),
-                sel => theme::status_field(ui, format!("selected: {} nodes", sel.len())),
-            }
-        });
+    /// The `t` transport, when the view has one. There is no status band —
+    /// the build says what it has to say in the console, as on the desktop.
+    fn transport_ui(&mut self, ui: &mut egui::Ui) {
         if let Some(entry) = inputs::transport_entry(&self.tab) {
             let events = inputs::transport_ui(ui, &self.tab, &entry);
             self.apply_input_events(events);
@@ -145,36 +130,48 @@ impl eframe::App for WebApp {
             .frame(egui::Frame::new().fill(theme::FACE).inner_margin(egui::Margin::symmetric(2, 1)))
             .show(ui, |ui| self.menu_ui(ui));
         theme::band(ui, menu.response.rect);
-        let left = egui::Panel::left("tree")
+        // One side bar down the right, as the desktop viewer has: inputs on
+        // top, scene tree below, the split between them draggable.
+        egui::Panel::right("sidebar")
             .resizable(true)
-            .default_size(220.0)
-            .frame(theme::panel_frame())
+            .default_size(240.0)
+            .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                let size = ui.available_size();
-                theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| {
-                    let Self { core, tab, engine, .. } = &mut *self;
-                    core.tree_ui(ui, engine, tab);
-                });
+                let tree = egui::Panel::bottom("tree")
+                    .resizable(true)
+                    .default_size(260.0)
+                    .min_size(60.0)
+                    .max_size((ui.available_height() * PANEL_SHARE).max(60.0))
+                    .frame(theme::panel_frame())
+                    .show(ui, |ui| {
+                        let size = ui.available_size();
+                        theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| {
+                            let Self { core, tab, engine, .. } = &mut *self;
+                            core.tree_ui(ui, engine, tab);
+                        });
+                    });
+                let inputs = egui::CentralPanel::default().frame(theme::panel_frame()).show(
+                    ui,
+                    |ui| {
+                        let size = ui.available_size();
+                        let mut events = Vec::new();
+                        theme::sheet_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
+                            events = inputs::panel_ui(ui, &mut self.tab, true);
+                        });
+                        self.apply_input_events(events);
+                    },
+                );
+                theme::band(ui, inputs.response.rect);
+                theme::band(ui, tree.response.rect);
             });
-        theme::band(ui, left.response.rect);
-        let right = egui::Panel::right("inputs")
-            .resizable(true)
-            .default_size(230.0)
-            .frame(theme::panel_frame())
-            .show(ui, |ui| {
-                let size = ui.available_size();
-                let mut events = Vec::new();
-                theme::sheet_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
-                    events = inputs::panel_ui(ui, &mut self.tab, true);
-                });
-                self.apply_input_events(events);
-            });
-        theme::band(ui, right.response.rect);
-        let bottom = egui::Panel::bottom("status")
-            .frame(theme::panel_frame())
-            .show(ui, |ui| self.bottom_ui(ui));
-        theme::band(ui, bottom.response.rect);
-        // The console dock, above the status band like the desktop's.
+        // Only up when the view is animated; nothing else lives down there.
+        if inputs::transport_entry(&self.tab).is_some() {
+            let bottom = egui::Panel::bottom("timeline")
+                .frame(theme::panel_frame())
+                .show(ui, |ui| self.transport_ui(ui));
+            theme::band(ui, bottom.response.rect);
+        }
+        // The console dock, above the transport like the desktop's.
         let (console, console_color) = console_tab(&self.tab);
         let dock = egui::Panel::bottom("dock")
             .resizable(true)

@@ -27,5 +27,5 @@ pub use console::{console_tab, console_ui};
 pub use engine::{Engine, Published};
 pub use tab::{SceneCache, Section, Tab};
 pub use tree::selection_covers;
-pub use viewer::{PANEL_SHARE, Viewer};
+pub use viewer::{PANEL_SHARE, Viewer, blank_viewport};
 pub use viewport::OffscreenTarget;

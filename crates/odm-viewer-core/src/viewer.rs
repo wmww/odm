@@ -27,6 +27,15 @@ const PICK_RADIUS_PT: f64 = 6.0;
 /// under it) with nothing.
 pub const PANEL_SHARE: f32 = 0.6;
 
+/// The viewport well with nothing in it — no tab open, so no camera and no
+/// scene to point one at. Hosts that can be tabless draw this in the
+/// viewport's place; it is the same sunken well, empty.
+pub fn blank_viewport(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+    ui.painter().rect_filled(rect.shrink(2.0), egui::CornerRadius::ZERO, theme::WINDOW);
+    theme::bevel(ui.painter(), rect, theme::Bevel::Sunken);
+}
+
 /// The read side of one viewer window: display toggles (shared across tabs,
 /// as the desktop viewer always had them), the offscreen viewport target,
 /// and the render-needed flag. Hosts own the tabs and the `Renderer` (other

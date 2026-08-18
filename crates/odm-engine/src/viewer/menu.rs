@@ -14,7 +14,9 @@ pub enum Action {
     New,
     Open,
     OpenDoohickey,
+    CloseDoohickey,
     ExportWeb,
+    FocusAgent,
     Quit,
     Frame,
     Wireframe,
@@ -27,13 +29,17 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
     let mut action = None;
     theme::menu_bar(ui, |ui| {
         let mut file = vec![
-            MenuEntry::item(Action::New, "New Project…").shortcut("Ctrl+N"),
-            MenuEntry::item(Action::Open, "Open Project…").shortcut("Ctrl+O"),
+            MenuEntry::item(Action::New, "New Project…"),
+            MenuEntry::item(Action::Open, "Open Project…"),
         ];
         // Nothing to open into, or to export, without a project.
         if app.session.is_some() {
+            // The tabs get their own section: what is open in the window is a
+            // different subject from which project the window is on.
+            file.push(MenuEntry::separator());
+            file.push(MenuEntry::item(Action::OpenDoohickey, "Open Doohickey…").shortcut("Ctrl+O"));
             file.push(
-                MenuEntry::item(Action::OpenDoohickey, "Open Doohickey…").shortcut("Ctrl+Alt+O"),
+                MenuEntry::item(Action::CloseDoohickey, "Close Doohickey").shortcut("Ctrl+W"),
             );
             file.push(MenuEntry::separator());
             file.push(MenuEntry::item(Action::ExportWeb, "Export Web…"));
@@ -43,6 +49,11 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
         action = action.or(theme::menu(ui, "File", &file));
         // Nothing to look at without a project, so nothing to say about how.
         if app.session.is_some() {
+            action = action.or(theme::menu(
+                ui,
+                "Edit",
+                &[MenuEntry::item(Action::FocusAgent, "Message Agent").shortcut("Ctrl+Enter")],
+            ));
             // F does both jobs; the label says which one it will do now.
             let framing = match app.tabs.get(app.active) {
                 Some(tab) if !tab.selected.is_empty() => "Frame Selection",
@@ -67,14 +78,14 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The keys the File menu advertises. Read before anything is drawn, and
-/// consumed, so a chord never also lands in whatever has the caret.
+/// The keys the menus advertise. Read before anything is drawn, and consumed,
+/// so a chord never also lands in whatever has the caret — Ctrl+Enter in
+/// particular has to beat the chat box it is aimed at.
 ///
-/// Order matters: `consume_shortcut` ignores an *extra* alt, so Ctrl+Alt+O has
-/// to be taken off the queue before plain Ctrl+O is looked for.
+/// The project chords (New, Open) have none: opening another project is a
+/// deliberate act, not one to trip over next to Ctrl+O.
 pub fn shortcuts(app: &mut ViewerApp, ctx: &egui::Context) {
     use egui::{Key, Modifiers};
-    const ALT_CMD: Modifiers = Modifiers::ALT.plus(Modifiers::COMMAND);
     let hit = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
 
     if hit(Modifiers::COMMAND, Key::Q) {
@@ -82,12 +93,12 @@ pub fn shortcuts(app: &mut ViewerApp, ctx: &egui::Context) {
     }
     // A modal is up: it owns the keyboard until it is answered.
     let busy = app.dialog.is_some() || app.pick.is_some();
-    let action = if hit(ALT_CMD, Key::O) {
+    let action = if hit(Modifiers::COMMAND, Key::O) {
         Some(Action::OpenDoohickey)
-    } else if hit(Modifiers::COMMAND, Key::O) {
-        Some(Action::Open)
-    } else if hit(Modifiers::COMMAND, Key::N) {
-        Some(Action::New)
+    } else if hit(Modifiers::COMMAND, Key::W) {
+        Some(Action::CloseDoohickey)
+    } else if hit(Modifiers::COMMAND, Key::Enter) {
+        Some(Action::FocusAgent)
     } else {
         None
     };
@@ -119,6 +130,9 @@ fn apply(app: &mut ViewerApp, action: Action) {
                 app.open_picker();
             }
         }
+        // Whatever tab is in front; the last one may go, leaving the window
+        // open on the project with nothing in it.
+        Action::CloseDoohickey => app.close_tab(app.active),
         // The site opens on what the viewer is showing: the active tab's view.
         Action::ExportWeb => {
             if let Some(state) = &app.session {
@@ -132,6 +146,12 @@ fn apply(app: &mut ViewerApp, action: Action) {
                     app.sessions.env(),
                 )));
             }
+        }
+        // Down to the caret: the point is to be able to type at the agent
+        // without reaching for the mouse.
+        Action::FocusAgent => {
+            app.dock = super::Dock::Chat;
+            app.focus_chat = true;
         }
         Action::Quit => app.quit.request(),
         Action::Frame => app.frame_scene(),
