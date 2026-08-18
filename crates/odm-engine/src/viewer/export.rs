@@ -8,7 +8,6 @@
 //! thread executes JS aborts the process (`JsEnv::new` says so).
 
 use super::browse::Browser;
-use crate::session::is_project;
 use crate::theme;
 use eframe::egui;
 use odm_build::View;
@@ -51,17 +50,14 @@ pub struct ExportDialog {
 
 impl ExportDialog {
     pub fn new(project: &Path, view: View, env: Arc<JsEnv>) -> ExportDialog {
-        // Offer a sibling of the project, named after it.
-        let name = project
-            .file_name()
-            .map(|n| format!("{}-web", n.to_string_lossy()))
-            .unwrap_or_else(|| "site".to_owned());
+        // Offer a folder in the project: exports are marked, so the scanner
+        // leaves them alone (odm_build::EXPORT_MARKER).
         ExportDialog {
             project: project.to_path_buf(),
             view,
             env,
-            browser: Browser::beside(project),
-            name,
+            browser: Browser::at(project),
+            name: "web-export".to_owned(),
             stage: Stage::Pick,
         }
     }
@@ -159,36 +155,27 @@ impl ExportDialog {
         // Left until the dialog is fully drawn: navigating mid-layout would
         // relist under the rows still being iterated.
         if let Some(dir) = hit.entered {
-            match is_project(&dir) {
-                true => self.browser.report(inside().to_owned()),
-                false => self.browser.navigate(dir),
-            }
+            self.browser.navigate(dir);
         }
         outcome
     }
 
-    /// Where the site would go, if it can go there. Re-exporting over an
-    /// existing site is the normal round trip, so an existing folder is fine.
+    /// Where the site would go, if the fields make sense. Whether it can go
+    /// there (not a project root, not over unmarked project sources) is the
+    /// export's own check — its errors land in the same message line.
     fn resolve(&self) -> Result<PathBuf, String> {
         let dir = self.browser.dir();
         if !dir.is_dir() {
             return Err(format!("{} is not a directory", dir.display()));
         }
         let name = self.name.trim();
-        let out = if name.is_empty() {
-            dir.to_path_buf()
-        } else {
-            if Path::new(name).file_name() != Some(name.as_ref()) {
-                return Err("the name must be one folder name, with no '/' in it".to_owned());
-            }
-            dir.join(name)
-        };
-        // The export writes .js files, and every .js file under a project
-        // belongs to the project: a site in one would be built as doohickeys.
-        if out.ancestors().any(is_project) {
-            return Err(inside().to_owned());
+        if name.is_empty() {
+            return Ok(dir.to_path_buf());
         }
-        Ok(out)
+        if Path::new(name).file_name() != Some(name.as_ref()) {
+            return Err("the name must be one folder name, with no '/' in it".to_owned());
+        }
+        Ok(dir.join(name))
     }
 
     fn start(&mut self, out: PathBuf, ctx: &egui::Context) {
@@ -205,8 +192,4 @@ impl ExportDialog {
         });
         self.stage = Stage::Running(rx);
     }
-}
-
-fn inside() -> &'static str {
-    "a site cannot go inside a project"
 }

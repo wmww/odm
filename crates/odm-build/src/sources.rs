@@ -1,12 +1,18 @@
 //! Project scanning: every `*.js` under the project dir (recursive, skipping
-//! dot-directories like `.odm`/`.git`) is a doohickey. `odm.toml` at the root
-//! is the project marker.
+//! dot-directories like `.odm`/`.git`, `node_modules`, and exported sites —
+//! dirs holding `EXPORT_MARKER`) is a doohickey. `odm.toml` at the root is
+//! the project marker.
 
 use odm_ir::Hash;
 use crate::version::ApiVersion;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// A directory containing this file is an exported site (written by
+/// `odm export`), not project sources: the scanner skips it, so exports may
+/// live inside the project they came from.
+pub const EXPORT_MARKER: &str = ".odm-export";
 
 /// The engine version this build writes into `odm.toml`. An integer,
 /// independent of the per-file JS API version; bumped when the *engine's*
@@ -202,8 +208,12 @@ fn walk(
             .file_type()
             .map_err(|e| ScanError::Io { path: rel.clone(), err: e.to_string() })?;
         if ft.is_dir() {
-            // Skip engine state, VCS, and other dot-dirs; also node_modules.
-            if name.starts_with('.') || name == "node_modules" {
+            // Skip engine state, VCS, and other dot-dirs; also node_modules
+            // and exported sites (their .js files are not doohickeys).
+            if name.starts_with('.')
+                || name == "node_modules"
+                || path.join(EXPORT_MARKER).is_file()
+            {
                 continue;
             }
             walk(&path, &rel, sources, generation_sources)?;

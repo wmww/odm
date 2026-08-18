@@ -99,6 +99,10 @@ globalThis.__odmWeb = {
       installSurface(api);
       const d = B.doohickeys.get(path);
       if (!d) {
+        // The bundler could not transform it (bad import, unsupported
+        // syntax): its builds fail with that error, like the engine's loader.
+        const broken = B.broken.get(path);
+        if (broken) return JSON.stringify({ error: { kind: 'js', message: broken } });
         return JSON.stringify({
           error: { kind: 'internal', message: `bundle has no doohickey at ${path}` },
         });

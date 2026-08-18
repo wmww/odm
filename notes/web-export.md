@@ -43,14 +43,24 @@ odm-render/src/lib.rs — keep both in sync):
   failures are often silent black, not validation errors.
 
 Also in the viewer: File ▸ Export Web… (viewer/export.rs) browses for a
-destination and exports the *active tab's* view — path plus set args/cascade,
-which `ExportOptions.view` (a full `odm_build::View`) now carries into the
+destination (starting in the project; default folder `web-export`) and
+exports the *active tab's* view — path plus set args/cascade, which
+`ExportOptions.view` (a full `odm_build::View`) now carries into the
 manifest; the CLI's `--view` is just `View::of(path)`. The dialog runs the
 export on a background thread (meta extraction can block 10s per broken
 file) and passes the process's one `JsEnv` via `export_web_with_env` —
-`JsEnv::new` aborts the process if another thread is executing JS. It
-refuses a destination inside a project (the site's .js files would be
-scanned as doohickeys).
+`JsEnv::new` aborts the process if another thread is executing JS.
+
+Sites may live inside the project: every export writes
+`odm_build::EXPORT_MARKER` (`.odm-export`, written first) into the out dir,
+and the project scanner skips marked dirs. `check_destination` (odm-export
+lib.rs, shared by CLI and dialog) still refuses a project *root* and an
+unmarked dir inside a project that already holds `.js` files (a stale
+pre-marker export must be deleted once; the error says so). A doohickey the
+bundler cannot transform (bad import etc.) no longer fails the export: it
+ships in `B.broken` (path → bare message) instead of a factory, export
+warns, and the page fails that doohickey's builds with the message —
+engine-like per-file failure.
 
 ## Shape
 

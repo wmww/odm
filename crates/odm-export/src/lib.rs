@@ -69,6 +69,7 @@ pub fn export_web_with_env(
     opts: &ExportOptions,
     env: &odm_js::JsEnv,
 ) -> Result<ExportReport, String> {
+    check_destination(project, out)?;
     let snapshot = odm_build::scan_project(project).map_err(|e| format!("scan: {e}"))?;
     let template_path = find_template(opts)?;
     let template = load_template(&template_path, opts.force)?;
@@ -124,6 +125,9 @@ pub fn export_web_with_env(
     }
 
     let bundle = bundle::bundle(&snapshot)?;
+    for (path, e) in &bundle.broken {
+        warnings.push(format!("{path}: {e} — its builds will fail on the page"));
+    }
 
     let name = snapshot
         .marker
@@ -142,6 +146,8 @@ pub fn export_web_with_env(
     let write = |name: &str, data: &[u8]| -> Result<(), String> {
         std::fs::write(out.join(name), data).map_err(|e| format!("write {name}: {e}"))
     };
+    // First, so a site inside the project is never seen unmarked by a scan.
+    write(odm_build::EXPORT_MARKER, EXPORT_MARKER_TEXT.as_bytes())?;
     write("bundle.js", bundle.js.as_bytes())?;
     write(
         "manifest.json",
@@ -154,6 +160,69 @@ pub fn export_web_with_env(
 
     Ok(ExportReport { out: out.to_path_buf(), files: snapshot.sources.len(), warnings })
 }
+
+/// A site may live inside the project it came from: the marker file makes
+/// the scanner skip it (see `odm_build::EXPORT_MARKER`). Two destinations
+/// stay refused: a project's root (marking it would hide the whole project),
+/// and an unmarked folder that already holds project sources (marking it
+/// would silently hide them).
+fn check_destination(project: &Path, out: &Path) -> Result<(), String> {
+    let out = std::path::absolute(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    if odm_build::is_project(&out) {
+        return Err(format!(
+            "{} is a project's root folder — a site cannot replace a project; \
+             give it a subfolder instead",
+            out.display()
+        ));
+    }
+    if !out.is_dir() || out.join(odm_build::EXPORT_MARKER).is_file() {
+        return Ok(()); // new, or a previous export: the normal round trip
+    }
+    let in_project = std::path::absolute(project)
+        .map(|p| out.starts_with(p))
+        .unwrap_or(false)
+        || out.ancestors().skip(1).any(odm_build::is_project);
+    if in_project && let Some(js) = find_js(&out) {
+        return Err(format!(
+            "{} contains {js}, which the engine scans as project source — \
+             exporting there would hide it from the project. Pick a new or \
+             empty folder (or delete that one first, if it is a stale export).",
+            out.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Any `*.js` the project scanner would see under `dir`, by its rules
+/// (dot-dirs and node_modules skipped; marked exports cannot occur here —
+/// the caller checked `dir`, and a nested one is already skipped by scans).
+fn find_js(dir: &Path) -> Option<String> {
+    let mut stack = vec![(dir.to_path_buf(), String::new())];
+    while let Some((dir, prefix)) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else { continue };
+        for entry in read.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                if !name.starts_with('.')
+                    && name != "node_modules"
+                    && !entry.path().join(odm_build::EXPORT_MARKER).is_file()
+                {
+                    stack.push((entry.path(), rel));
+                }
+            } else if name.ends_with(".js") {
+                return Some(rel);
+            }
+        }
+    }
+    None
+}
+
+const EXPORT_MARKER_TEXT: &str = "\
+This folder is a site written by `odm export`. This marker file makes ODM
+skip it when scanning for project sources.
+";
 
 const SITE_README: &str = "\
 # ODM web export

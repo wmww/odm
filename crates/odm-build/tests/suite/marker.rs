@@ -1,6 +1,6 @@
 //! odm.toml: the project marker, and the ONE file the engine writes back.
 
-use odm_build::{ENGINE_VERSION, is_project, read_marker, sync_marker};
+use odm_build::{ENGINE_VERSION, EXPORT_MARKER, is_project, read_marker, sync_marker};
 
 #[test]
 fn a_project_is_a_dir_with_the_marker_in_it() {
@@ -16,6 +16,24 @@ fn a_project_is_a_dir_with_the_marker_in_it() {
     let odd = tempfile::tempdir().unwrap();
     std::fs::create_dir(odd.path().join("odm.toml")).unwrap();
     assert!(!is_project(odd.path()));
+}
+
+#[test]
+fn scan_skips_exported_sites() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("root.js"), "//! odm unstable\n").unwrap();
+    let site = dir.path().join("web-export");
+    std::fs::create_dir(&site).unwrap();
+    std::fs::write(site.join("runtime.js"), "not a doohickey").unwrap();
+    std::fs::write(site.join(EXPORT_MARKER), "").unwrap();
+    // Plain subdirs still scan.
+    let parts = dir.path().join("parts");
+    std::fs::create_dir(&parts).unwrap();
+    std::fs::write(parts.join("gear.js"), "//! odm unstable\n").unwrap();
+
+    let snap = odm_build::scan_project(dir.path()).unwrap();
+    let paths: Vec<&str> = snap.sources.keys().map(|s| s.as_str()).collect();
+    assert_eq!(paths, ["parts/gear.js", "root.js"]);
 }
 
 #[test]
