@@ -13,6 +13,7 @@ use eframe::egui;
 pub enum Action {
     New,
     Open,
+    OpenDoohickey,
     ExportWeb,
     Quit,
     Frame,
@@ -26,16 +27,19 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
     let mut action = None;
     theme::menu_bar(ui, |ui| {
         let mut file = vec![
-            MenuEntry::item(Action::New, "New Project…"),
-            MenuEntry::item(Action::Open, "Open Project…"),
+            MenuEntry::item(Action::New, "New Project…").shortcut("Ctrl+N"),
+            MenuEntry::item(Action::Open, "Open Project…").shortcut("Ctrl+O"),
         ];
-        // Nothing to export without a project.
+        // Nothing to open into, or to export, without a project.
         if app.session.is_some() {
+            file.push(
+                MenuEntry::item(Action::OpenDoohickey, "Open Doohickey…").shortcut("Ctrl+Alt+O"),
+            );
             file.push(MenuEntry::separator());
             file.push(MenuEntry::item(Action::ExportWeb, "Export Web…"));
         }
         file.push(MenuEntry::separator());
-        file.push(MenuEntry::item(Action::Quit, "Exit"));
+        file.push(MenuEntry::item(Action::Quit, "Quit").shortcut("Ctrl+Q"));
         action = action.or(theme::menu(ui, "File", &file));
         // Nothing to look at without a project, so nothing to say about how.
         if app.session.is_some() {
@@ -63,6 +67,35 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The keys the File menu advertises. Read before anything is drawn, and
+/// consumed, so a chord never also lands in whatever has the caret.
+///
+/// Order matters: `consume_shortcut` ignores an *extra* alt, so Ctrl+Alt+O has
+/// to be taken off the queue before plain Ctrl+O is looked for.
+pub fn shortcuts(app: &mut ViewerApp, ctx: &egui::Context) {
+    use egui::{Key, Modifiers};
+    const ALT_CMD: Modifiers = Modifiers::ALT.plus(Modifiers::COMMAND);
+    let hit = |mods, key| ctx.input_mut(|i| i.consume_key(mods, key));
+
+    if hit(Modifiers::COMMAND, Key::Q) {
+        return apply(app, Action::Quit);
+    }
+    // A modal is up: it owns the keyboard until it is answered.
+    let busy = app.dialog.is_some() || app.pick.is_some();
+    let action = if hit(ALT_CMD, Key::O) {
+        Some(Action::OpenDoohickey)
+    } else if hit(Modifiers::COMMAND, Key::O) {
+        Some(Action::Open)
+    } else if hit(Modifiers::COMMAND, Key::N) {
+        Some(Action::New)
+    } else {
+        None
+    };
+    if let (false, Some(action)) = (busy, action) {
+        apply(app, action);
+    }
+}
+
 fn apply(app: &mut ViewerApp, action: Action) {
     match action {
         // Both browse from the open project, or from wherever we were
@@ -78,6 +111,13 @@ fn apply(app: &mut ViewerApp, action: Action) {
                 Some(state) => OpenDialog::new(state.project()),
                 None => OpenDialog::browse(&super::cwd()),
             }))
+        }
+        // Which doohickey to open in a new tab — the same picker the tab
+        // strip's magnifier puts up.
+        Action::OpenDoohickey => {
+            if app.session.is_some() {
+                app.open_picker();
+            }
         }
         // The site opens on what the viewer is showing: the active tab's view.
         Action::ExportWeb => {

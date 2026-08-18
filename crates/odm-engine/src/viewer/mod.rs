@@ -11,6 +11,7 @@ mod idle;
 mod menu;
 mod new;
 mod open;
+mod pick;
 mod tabs;
 
 use crate::scene;
@@ -127,9 +128,9 @@ pub struct ViewerApp {
     dialog: Option<Dialog>,
     /// Agent-file questions from the last open, asked one at a time.
     agent_questions: Vec<AgentQuestion>,
-    /// The new-tab file picker: Some(list of viewable files).
-    add_tab: Option<Vec<String>>,
-    /// File ▸ Exit; acted on by the event loop (see `idle.rs`).
+    /// The new-tab doohickey picker, when it is up.
+    pick: Option<pick::Picker>,
+    /// File ▸ Quit; acted on by the event loop (see `idle.rs`).
     quit: Quit,
 }
 
@@ -154,7 +155,7 @@ impl ViewerApp {
             dock: Dock::Chat,
             dialog: None,
             agent_questions: Vec::new(),
-            add_tab: None,
+            pick: None,
             quit,
         };
         if app.session.is_some() {
@@ -308,7 +309,7 @@ impl ViewerApp {
     }
 
     /// The tab strip: a row of notebook tabs, each with its own close box, and
-    /// a + at the end that opens the file picker.
+    /// a magnifier at the end that opens the doohickey picker.
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
         /// Face left and right of a tab's contents.
         const PAD: f32 = 8.0;
@@ -317,10 +318,10 @@ impl ViewerApp {
         const CLOSE_GAP: f32 = 5.0;
         /// Narrowest a tab is squeezed to when the strip runs out of room.
         const MIN_TAB: f32 = 52.0;
-        /// The + at the end of the row.
-        const PLUS: egui::Vec2 = egui::Vec2 { x: 20.0, y: 16.0 };
-        /// Gap between the last tab and the +.
-        const PLUS_GAP: f32 = 5.0;
+        /// The picker button at the end of the row.
+        const FIND: egui::Vec2 = egui::Vec2 { x: 20.0, y: 16.0 };
+        /// Gap between the last tab and it.
+        const FIND_GAP: f32 = 5.0;
 
         let grow = theme::TAB_GROW;
         let height = theme::TAB_HEIGHT + grow * 2.0;
@@ -335,7 +336,7 @@ impl ViewerApp {
         let extra = PAD * 2.0 + if closable { CLOSE + CLOSE_GAP } else { 0.0 };
         // Tabs take their natural width, squeezed to an even share of the strip
         // once the row no longer fits.
-        let room = strip.width() - PLUS.x - PLUS_GAP;
+        let room = strip.width() - FIND.x - FIND_GAP;
         let share = (room / self.tabs.len() as f32).max(MIN_TAB);
         let state = self.state();
         let failed: Vec<bool> =
@@ -381,9 +382,9 @@ impl ViewerApp {
         theme::tab_edge(ui.painter(), edge_y, strip.left(), strip.right());
         theme::tab(ui.painter(), tab_rects[self.active]);
 
-        // The + keeps its place at the right end even when the row overruns
-        // the strip, so a full strip can still be added to.
-        let plus_x = (x + PLUS_GAP).min(strip.right() - PLUS.x);
+        // It keeps its place at the right end even when the row overruns the
+        // strip, so a full strip can still be added to.
+        let find_x = (x + FIND_GAP).min(strip.right() - FIND.x);
 
         let mut switch: Option<usize> = None;
         let mut close: Option<usize> = None;
@@ -422,7 +423,7 @@ impl ViewerApp {
             // The rest of the tab switches to it — stopping at the close box
             // rather than running under it, so neither steals the other's click.
             let right = if closable { close_box.left() } else { rect.right() };
-            let body = rect.with_max_x(right.min(plus_x - PLUS_GAP));
+            let body = rect.with_max_x(right.min(find_x - FIND_GAP));
             if body.width() <= 0.0 {
                 continue; // squeezed off the end of the strip
             }
@@ -436,23 +437,18 @@ impl ViewerApp {
             }
         }
 
-        // The +, standing on the page edge past the end of the row.
-        let plus =
-            egui::Rect::from_min_size(theme::snap(ui, egui::pos2(plus_x, edge_y - PLUS.y)), PLUS);
-        let hit = ui.interact(plus, ui.id().with("add-tab"), egui::Sense::click());
-        ui.painter().rect_filled(plus, egui::CornerRadius::ZERO, theme::FACE);
+        // The picker button, standing on the page edge past the end of the row.
+        let find =
+            egui::Rect::from_min_size(theme::snap(ui, egui::pos2(find_x, edge_y - FIND.y)), FIND);
+        let hit = ui.interact(find, ui.id().with("add-tab"), egui::Sense::click());
+        ui.painter().rect_filled(find, egui::CornerRadius::ZERO, theme::FACE);
         let bevel = match hit.is_pointer_button_down_on() {
             true => theme::Bevel::Sunken,
             false => theme::Bevel::Raised,
         };
-        theme::bevel(ui.painter(), plus, bevel);
-        let galley = ui.painter().layout_no_wrap(
-            "+".to_owned(),
-            egui::FontId::proportional(theme::UI_SIZE),
-            theme::TEXT,
-        );
-        ui.painter().galley(theme::snap(ui, plus.center() - galley.size() / 2.0), galley, theme::TEXT);
-        if hit.on_hover_text("new tab").clicked() {
+        theme::bevel(ui.painter(), find, bevel);
+        theme::magnifier(ui.painter(), find.center(), theme::TEXT);
+        if hit.on_hover_text("open doohickey").clicked() {
             add = true;
         }
 
@@ -463,40 +459,27 @@ impl ViewerApp {
             self.close_tab(i);
         }
         if add {
-            // A fresh scan so the picker lists what is on disk right now.
-            let files = match self.state().build_engine().sync() {
-                Ok(sync) => sync.snapshot.sources.keys().cloned().collect(),
-                Err(_) => Vec::new(),
-            };
-            self.add_tab = Some(files);
+            self.open_picker();
         }
     }
 
-    /// The new-tab picker: a modal list of every viewable file.
-    fn add_tab_ui(&mut self, ctx: &egui::Context) {
-        let Some(files) = self.add_tab.clone() else { return };
-        let mut picked: Option<String> = None;
-        let response = theme::dialog(ctx, "add-tab", "New tab", 300.0, |ui| {
-            let size = egui::vec2(ui.available_width(), 180.0);
-            theme::list_box(ui, "add-tab-list", size, egui::Vec2b::new(false, true), |ui| {
-                if files.is_empty() {
-                    ui.label(
-                        egui::RichText::new("no .js files in this project")
-                            .color(theme::WEAK_TEXT),
-                    );
-                }
-                for f in &files {
-                    if theme::list_row(ui, crate::icons::Icon::Project, f, false).clicked() {
-                        picked = Some(f.clone());
-                    }
-                }
-            });
-        });
-        if let Some(path) = picked {
-            self.add_tab = None;
-            self.add_tab(path);
-        } else if response.dismissed {
-            self.add_tab = None;
+    /// Put the doohickey picker up, on a fresh scan so it lists what is on
+    /// disk right now.
+    fn open_picker(&mut self) {
+        let files = match self.state().build_engine().sync() {
+            Ok(sync) => sync.snapshot.sources.keys().cloned().collect(),
+            Err(_) => Vec::new(),
+        };
+        self.pick = Some(pick::Picker::new(files));
+    }
+
+    /// The doohickey picker, when it is up. What it picks opens in a new tab.
+    fn pick_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut picker) = self.pick.take() else { return };
+        match picker.ui(ctx) {
+            pick::Outcome::Idle => self.pick = Some(picker),
+            pick::Outcome::Cancelled => {}
+            pick::Outcome::Pick(path) => self.add_tab(path),
         }
     }
 
@@ -750,6 +733,7 @@ impl ViewerApp {
 
 impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        menu::shortcuts(self, ui.ctx());
         if self.session.is_none() {
             return self.no_project_ui(ui);
         }
@@ -823,12 +807,12 @@ impl eframe::App for ViewerApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                let shortcuts = self.dialog.is_none() && self.add_tab.is_none();
+                let shortcuts = self.dialog.is_none() && self.pick.is_none();
                 let Self { core, tabs, active, renderer, .. } = &mut *self;
                 core.viewport_ui(ui, frame, renderer, &*state, &mut tabs[*active], shortcuts);
             });
 
-        self.add_tab_ui(ui.ctx());
+        self.pick_ui(ui.ctx());
         self.dialog_ui(ui.ctx());
     }
 

@@ -243,7 +243,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   cache stays warm. Default: + eframe
   viewer (menu bar, tab strip — one view per tab, persisted in
   `.odm/viewer.json`; classic notebook tabs, each with its own close box, a
-  red label when that tab's last build failed —, offscreen texture viewport via
+  red label when that tab's last build failed, and a magnifier at the end
+  opening the doohickey picker —, offscreen texture viewport via
   register_native_texture, orbit/pan/zoom, tree panel, generated input panel
   (right side; controls from the tab's fall-through report: label/value
   columns with check boxes, radios, JSON-ish text fields, presets), a
@@ -349,9 +350,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   `watcher.rs`, `server.rs`, `session.rs`, `scene.rs`, and `viewer/` — the
   desktop chrome around odm-viewer-core (`mod.rs` shell: layout, tab strip,
   chat, dialogs, and the `impl odm_viewer_core::Engine for EngineState`;
-  `idle.rs` event loop, `menu.rs` menu bar, `browse.rs` folder list with
-  `open.rs`/`new.rs` on top of it, `tabs.rs` tab persistence, `agent.rs`
-  agent-file question, `activity.rs` — see "Agent activity view" above).
+  `idle.rs` event loop, `menu.rs` menu bar + its accelerators, `browse.rs`
+  folder list with `open.rs`/`new.rs` on top of it, `pick.rs` doohickey
+  picker, `tabs.rs` tab persistence, `agent.rs` agent-file question, `activity.rs` — see "Agent activity view" above).
   odm-viewer-core's `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`,
@@ -477,8 +478,13 @@ labels, real focus, asserting on the painted galley text).
 
 `viewer/menu.rs` is the whole bar: an `Action` enum, a `theme::menu` per
 drop-down listing `MenuEntry`s, and one `apply` that turns an action into an
-effect. File has New Project…/Open Project…/Exit, View has Frame Scene (F) and checkmarked
-Wireframe/Grid. `theme::menu` measures its own entries and pins the popup width
+effect. File has New Project… (Ctrl+N) / Open Project… (Ctrl+O) / Open Doohickey…
+(Ctrl+Alt+O) / Export Web… / Quit (Ctrl+Q), View has Frame Scene (F) and
+checkmarked Wireframe/Grid. `menu::shortcuts` reads those chords off the input
+queue at the top of the frame and `apply`s the same actions — consumed, so a
+chord never also lands in whatever has the caret, and Ctrl+Alt+O is taken
+before Ctrl+O because egui's `consume_shortcut` ignores an *extra* alt. A modal
+owns the keyboard while it is up (only Quit still fires). `theme::menu` measures its own entries and pins the popup width
 before drawing, because an auto-sizing egui popup doesn't know its width until
 the frame after — and a highlight that stops at the text looks broken. Titles
 are painted by hand (open = filled with `ACCENT`, never pressed in) rather than
@@ -518,6 +524,13 @@ which holds because `ui` peels this case off first; everything downstream of
 it (tabs, `self.tabs[self.active]`) assumes a project. Open from here is the
 same `Sessions::open` path as a swap, minus the old session to retire —
 `Sessions::start` is now just `empty()` + `open()`.
+
+`viewer/pick.rs` is the doohickey picker — the tab strip's magnifier and File ▸
+Open Doohickey both put it up, on a fresh `sync()` so it lists what is on disk
+now. An auto-focused filter box over the list: case-insensitive substring,
+up/down walk the highlight, Enter takes it, a click takes the row clicked. The
+keys are consumed before the box is drawn, or Enter would drop its focus and
+the arrows would move its caret.
 
 `viewer/browse.rs` is the directory chooser both project dialogs are built on
 (no portal here, no dialog crate in the tree): "Look in:" + Up over a
@@ -698,7 +711,7 @@ eframe leaves broken here:
   waits for *another* window event before deciding to exit — one a destroyed
   Wayland surface will never send, so the process sat in `epoll` forever with
   nothing on screen. `SlowIdle` watches for `CloseRequested` itself, and
-  File ▸ Exit sets the same shared `Quit` flag; `about_to_wait` acts on it.
+  File ▸ Quit (Ctrl+Q) sets the same shared `Quit` flag; `about_to_wait` acts on it.
   Both paths verified to reach `process::exit(0)`.
 
 ### Viewer fonts

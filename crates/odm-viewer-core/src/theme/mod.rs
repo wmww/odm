@@ -1001,6 +1001,26 @@ pub fn cross(p: &egui::Painter, at: Pos2, color: Color32) {
     p.add(mesh);
 }
 
+/// A magnifier: a five-pixel ring with a two-pixel handle off its corner.
+/// The tab strip's "open a doohickey" button — a glyph rather than an icon
+/// PNG, since it is chrome, in chrome's one color, like the × next to it.
+const MAGNIFIER: [&str; 8] = [
+    " ###    ", //
+    "#   #   ", //
+    "#   #   ", //
+    "#   #   ", //
+    " ###    ", //
+    "   ##   ", //
+    "    ##  ", //
+    "     ## ", //
+];
+
+/// Paint the magnifier centered on `at`.
+pub fn magnifier(p: &egui::Painter, at: Pos2, color: Color32) {
+    let origin = pos2((at.x - 4.0).round(), (at.y - 4.0).round());
+    pixels(p, &MAGNIFIER, origin, color);
+}
+
 /// What a text box pads its text with, on every side.
 pub const TEXT_PAD: f32 = 3.0;
 
