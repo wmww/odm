@@ -202,9 +202,9 @@ const SPLIT: f32 = 0.45;
 /// Gap between the columns.
 const GAP: f32 = 4.0;
 
-/// One input row: label column on the left, the typed control in the value
-/// column, and a reset button pinned to the right edge — grayed when the
-/// value is at its default.
+/// One input row: the label column on the left, ending in a reset button
+/// (drawn only when the value is pinned, but always holding its space), and
+/// the typed control in the value column.
 fn control(
     ui: &mut egui::Ui,
     tab: &mut Tab,
@@ -222,12 +222,13 @@ fn control(
 
     let full = ui.available_width();
     let label_w = (full * SPLIT).floor();
-    let value_w = (full - label_w - theme::RESET_SIDE - GAP * 2.0).max(24.0);
+    let text_w = (label_w - theme::RESET_SIDE - GAP).max(0.0);
+    let value_w = (full - label_w - GAP).max(24.0);
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(full, ROW * rows as f32), egui::Sense::hover());
 
     // Label: clipped to its column, centered on the first row.
-    let label_rect = egui::Rect::from_min_size(rect.min, egui::vec2(label_w, ROW));
+    let label_rect = egui::Rect::from_min_size(rect.min, egui::vec2(text_w, ROW));
     let galley = ui.painter().layout_no_wrap(
         name.clone(),
         egui::FontId::proportional(theme::UI_SIZE),
@@ -303,19 +304,24 @@ fn control(
         }
     }
 
-    // Reset, on the first row's right edge. A pinned value equal to the
-    // default (possible via old persisted tabs; `apply` clears the pin on
-    // set) reads as unset — "set to the default" must not look different
-    // from "cleared".
+    // Reset, at the end of the label column on the first row — shown only
+    // when the value is pinned. A pinned value equal to the default
+    // (possible via old persisted tabs; `apply` clears the pin on set) reads
+    // as unset: "set to the default" must not look different from "cleared".
     let is_set =
         tab.set_values(section).get(&name).is_some_and(|v| !same_value(v, &entry.default));
-    let reset_rect = egui::Rect::from_min_size(
-        egui::pos2(rect.right() - theme::RESET_SIDE, rect.top() + (ROW - theme::RESET_SIDE) / 2.0),
-        egui::Vec2::splat(theme::RESET_SIDE),
-    );
-    let id = egui::Id::new(("reset", section, &name));
-    if theme::reset_button(ui, id, reset_rect, is_set).clicked() {
-        events.push(Event::Clear(section, name.clone()));
+    if is_set {
+        let reset_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                rect.left() + label_w - theme::RESET_SIDE,
+                rect.top() + (ROW - theme::RESET_SIDE) / 2.0,
+            ),
+            egui::Vec2::splat(theme::RESET_SIDE),
+        );
+        let id = egui::Id::new(("reset", section, &name));
+        if theme::reset_button(ui, id, reset_rect).clicked() {
+            events.push(Event::Clear(section, name.clone()));
+        }
     }
 }
 
@@ -476,14 +482,16 @@ mod tests {
             self.click_at(rect.center());
         }
 
-        /// Click arg `name`'s reset button. Always present; inert at default.
+        /// Click arg `name`'s reset button. Only drawn while the value is
+        /// pinned, so this asserts it is there.
         fn click_reset(&mut self, name: &str) {
-            let rect = self
-                .ctx
-                .read_response(egui::Id::new(("reset", Section::Arg, name)))
-                .unwrap_or_else(|| panic!("no reset for {name:?}"))
-                .rect;
+            let rect = self.reset_rect(name).unwrap_or_else(|| panic!("no reset for {name:?}"));
             self.click_at(rect.center());
+        }
+
+        /// Where arg `name`'s reset button is, if it is shown at all.
+        fn reset_rect(&self, name: &str) -> Option<egui::Rect> {
+            self.ctx.read_response(egui::Id::new(("reset", Section::Arg, name))).map(|r| r.rect)
         }
 
         /// Click arg `name`'s check box.
@@ -624,7 +632,7 @@ mod tests {
 
     /// A preset value equal to the declared default doesn't pin either, and
     /// a legacy pinned-at-default value (old persisted tabs; floats vs
-    /// integer defaults) reads as unset: its reset button is inert.
+    /// integer defaults) reads as unset: no reset button at all.
     #[test]
     fn default_valued_pins_read_as_unset() {
         let mut h = Harness::new(InputReport {
@@ -637,12 +645,12 @@ mod tests {
         assert_eq!(h.tab.set_args["wall"], json!(1));
 
         // 30.0 == 30: a float pin at an integer default is still "unset",
-        // so its reset button does nothing.
+        // so no reset button is drawn for it.
         h.tab.set_args.insert("height".into(), json!(30.0));
         h.frame(Vec::new());
-        h.click_reset("height");
-        assert_eq!(h.tab.set_args["height"], json!(30.0), "inert reset leaves the legacy pin");
+        assert!(h.reset_rect("height").is_none(), "no reset for a default-valued pin");
 
+        assert!(h.reset_rect("wall").is_some(), "a pinned value has a reset");
         h.click_reset("wall");
         assert!(!h.tab.set_args.contains_key("wall"), "a live reset clears its pin");
     }

@@ -357,32 +357,32 @@ fn radio_circle(p: &egui::Painter, pos: Pos2, selected: bool) {
 /// Side of a [`reset_button`].
 pub const RESET_SIDE: f32 = 18.0;
 
-/// The circle arrow of a [`reset_button`]: a ring open at the top with the
-/// head pointing down its left side.
+/// The revert arrow of a [`reset_button`]: a hooked arrow (bar to the right
+/// edge, up and over) with a solid head on the left. Solid beats curved at
+/// this size — the old open ring read as a filled circle.
 const RESET_ARROW: [&str; 7] = [
-    "...##..", //
-    "###..#.", //
-    "##....#", //
-    "#.....#", //
-    "#.....#", //
-    ".#...#.", //
-    "..###..", //
+    "........#", //
+    "........#", //
+    "..#.....#", //
+    ".##.....#", //
+    "#########", //
+    ".##......", //
+    "..#......", //
 ];
 
 /// A square icon button that resets a value to its default: raised, pressing
-/// like any button — grayed and inert while `enabled` is off (a value already
-/// at its default has nothing to reset, but the button holds its place).
-pub fn reset_button(ui: &mut Ui, id: egui::Id, rect: Rect, enabled: bool) -> Response {
+/// like any button. Only drawn when there is something to reset — the caller
+/// keeps its space, so rows do not shift as values are set and cleared.
+pub fn reset_button(ui: &mut Ui, id: egui::Id, rect: Rect) -> Response {
     let rect = Rect::from_min_size(snap(ui, rect.min), rect.size());
-    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
-    let response = ui.interact(rect, id, sense);
-    let pressed = enabled && response.is_pointer_button_down_on();
+    let response = ui.interact(rect, id, egui::Sense::click());
+    let pressed = response.is_pointer_button_down_on();
     let p = ui.painter();
     p.rect_filled(rect, CornerRadius::ZERO, FACE);
     bevel(p, rect, if pressed { Bevel::Sunken } else { Bevel::Raised });
     let nudge = if pressed { 1.0 } else { 0.0 };
-    let pos = snap(ui, rect.center() + vec2(nudge - 3.5, nudge - 3.5));
-    pixels(p, &RESET_ARROW, pos, if enabled { TEXT } else { WEAK_TEXT });
+    let pos = snap(ui, rect.center() + vec2(nudge - 4.5, nudge - 3.5));
+    pixels(p, &RESET_ARROW, pos, TEXT);
     response
 }
 

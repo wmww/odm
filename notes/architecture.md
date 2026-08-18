@@ -416,8 +416,10 @@ overruns, so a full strip can still be added to. Labels elide
 
 odm-viewer-core `inputs.rs` + `tab.rs`. Reworked 2026-08-17 to the era's
 property-sheet shape: fixed label column left (45%, hard-clipped,
-description on hover), value column right, and a circle-arrow reset button
-per row on the right edge — always present, grayed/inert at the default.
+description on hover), value column right. The reset button ends the label
+column (a hooked revert arrow — a circle arrow has too few pixels to read as
+anything but a dot); it is drawn only for a pinned value, but its space is
+always reserved so rows don't shift.
 Booleans are `theme::check_box`, enum choices stack `theme::radio` rows,
 everything else is a text field (numbers shown rounded to 4 decimals).
 Trackbars are gone from the panel until the slider UX is settled
