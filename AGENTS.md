@@ -18,6 +18,7 @@ Future plans live in `plans/`. Do not execute them unless asked, or write new pl
 - Commit to the current branch unless asked, don't make feature branches.
 - Do not run code formatting tools unless explicitly asked.
 - Keep prose, comments, errors, and commit messages short unless extra detail is genuinely useful.
+- Build with `cargo build/test --workspace`, not `-p` subsets, and never set `CARGO_INCREMENTAL`: inconsistent invocations mint a whole new set of half-GB artifact hashes (see notes/build-environment.md). If `target/` balloons anyway, run `scripts/sweep-target.py`.
 - Avoid opening windows in the user's desktop, to test, interact with and screenshot GUI apps use the gui-testing skill from https://github.com/wmww/agent-skills.
 
 ## Running the engine

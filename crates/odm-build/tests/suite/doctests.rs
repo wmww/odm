@@ -12,16 +12,10 @@
 //! snapshots exist, their blocks must run under version N instead.
 
 use odm_build::{BuildEngine, View};
-use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::Store;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
-
-fn env() -> Arc<JsEnv> {
-    static ENV: OnceLock<Arc<JsEnv>> = OnceLock::new();
-    ENV.get_or_init(|| Arc::new(JsEnv::new().unwrap())).clone()
-}
+use crate::env;
 
 struct Block {
     /// docs-relative file plus the opening fence's line, for messages.

@@ -70,6 +70,10 @@ for prof in "$tmp"/*/; do
     rm -rf "$prof/deps/$c"-* "$prof/deps/$u"-* "$prof/deps/lib$u"-* \
            "$prof/.fingerprint/$c"-* "$prof/build/$c"-*
   done
+  # Integration-test binaries are named after the test *file* (report-<hash>),
+  # so the per-crate purge misses them. Every extensionless file in deps/ is a
+  # workspace executable (external deps only produce .rlib/.rmeta/.so/.d).
+  find "$prof/deps" -maxdepth 1 -type f ! -name '*.*' -delete 2>/dev/null || true
 
   # Break the hardlinks on everything cargo rewrites in place.
   for d in .fingerprint build gn_out; do

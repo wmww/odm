@@ -4,6 +4,31 @@ Machine facts: 24 cores, Radeon GPU (no lavapipe installed — golden PNG
 diffs would be CI-only), cmake 4.4 + ninja, node 26.4, rustc 1.93
 (edition 2024), network available. Clean Manifold (clone + cmake) build ~37s.
 
+## Disk: where debug-build bytes actually go
+
+Measured 2026-08-17, before the fixes below: `target/` hit 31 GiB and two
+worktree targets hit ~13 GiB *unique* data each. Attribution:
+
+- **Not V8.** The prebuilt `librusty_v8.a` contributes only ~31 MiB of code
+  and ~16 MiB of debug lines per linked binary.
+- **Full Rust debuginfo was ~85% of every binary**: `odm` was 630 MiB, of
+  which ~525 MiB DWARF for the dep tree and 48 MiB actual `.text`. Fix:
+  `[profile.dev] debug = "line-tables-only"` (nobody here runs a debugger;
+  backtraces keep file:line) → `odm` is 245 MiB.
+- **~30 binaries per full build**: `--all-targets` links a test binary per
+  `tests/*.rs` file, each embedding the whole stack. odm-build's 8 files are
+  now modules of one `tests/suite/` binary (see architecture.md, Testing).
+- **cargo keeps every artifact generation forever**, and each distinct
+  invocation shape mints a new one: toggling `CARGO_INCREMENTAL` changes the
+  profile hash (verified empirically — one toggle = a full new set of
+  workspace artifact filenames), and `-p` subset builds unify features
+  differently than `--workspace` (resolver v3), cascading new `-C metadata`
+  into every workspace crate above the affected dep. One agent session was
+  observed minting ~7 such universes (10 GiB) in an afternoon. Mitigation:
+  stick to `--workspace`, never set `CARGO_INCREMENTAL` (rule in AGENTS.md);
+  `resolver.feature-unification = "workspace"` would pin the -p case but is
+  still nightly-only in cargo 1.93. The sweep below self-heals any mess.
+
 ## Every checkout gets its own target dir, seeded from the main one
 
 `scripts/seed-target.sh` gives a linked checkout its own `target/`, copied from
@@ -29,7 +54,9 @@ What the seed does, and why each part:
   rewrite in place, and `build/*/output` records absolute paths into the target
   dir it ran under, so the copies get those paths rewritten to point here.
 - local-crate artifacts, `incremental/`, uplifted binaries **skipped**. This
-  checkout builds its own in 6 s.
+  checkout builds its own in 6 s. The purge also drops every extensionless
+  file in `deps/` — integration-test binaries are named after the test
+  *file* (`report-<hash>`), so a by-crate-name purge misses them.
 
 Do not "optimize" the copy into a `cp -al` of the whole tree. Measured: the
 seeded checkout's build then rewrote the *peer's*
@@ -74,8 +101,14 @@ in a young target dir — `--time 1` here would have deleted ~everything, `--tim
 plus `build-script-executed.out_dir`, which yields the `-<hash>` of every live
 unit) and deletes only unreferenced entries in `deps/`, `build/`, and
 `.fingerprint/`. Over-deleting would only cost a rebuild, never break anything.
-`incremental/` is dropped wholesale (it's a recompile accelerator, not an input
-to freshness — dropping it doesn't even make the next build non-fresh).
+It enumerates dev *and* release (the sweep walks every profile dir; release
+live-set comes from plain `--release`, no `--all-targets`, so it never builds
+release test binaries just to enumerate them). `incremental/` can't be
+liveness-matched (its dir suffix is a different hash than artifact names —
+verified), so it's pruned by idle time instead: unit dirs untouched for 7
+days go, `--drop-incremental` drops it all. Over-deleting incremental only
+slows that crate's next recompile; it's an accelerator, not a freshness
+input.
 
 In a seeded checkout most of `deps/` is hardlinked, so sweeping there frees real
 disk only for entries the seed source no longer holds.

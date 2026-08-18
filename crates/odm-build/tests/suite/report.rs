@@ -2,17 +2,12 @@
 //! view, with winning declarations and the conflict lint.
 
 use odm_build::{BuildEngine, InputKind, ValueSource, View, check_input_names, declared_entries};
-use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::Store;
 use serde_json::{Map, json};
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
-
-fn env() -> Arc<JsEnv> {
-    static ENV: OnceLock<Arc<JsEnv>> = OnceLock::new();
-    ENV.get_or_init(|| Arc::new(JsEnv::new().unwrap())).clone()
-}
+use crate::env;
+use std::sync::Arc;
 
 fn engine(project: &Path) -> Arc<BuildEngine> {
     let store = Store::new();

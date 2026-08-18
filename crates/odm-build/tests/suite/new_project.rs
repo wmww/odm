@@ -1,10 +1,8 @@
 //! `create_project`: what File ▸ New Project writes, and that it builds.
 
 use odm_build::{BuildEngine, ENGINE_VERSION, View, create_project, is_project, read_marker};
-use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::Store;
-use std::sync::Arc;
 
 #[test]
 fn a_new_project_is_a_project_that_builds() {
@@ -26,7 +24,7 @@ fn a_new_project_is_a_project_that_builds() {
 
     let store = Store::new();
     let kernel = Kernel::new(store.clone());
-    let engine = BuildEngine::new(store, kernel, Arc::new(JsEnv::new().unwrap()), project);
+    let engine = BuildEngine::new(store, kernel, crate::env(), project);
     let sync = engine.sync().unwrap();
     let view = View {
         path: "root.js".into(),

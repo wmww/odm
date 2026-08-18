@@ -878,8 +878,14 @@ Two data-driven suites guard the JS API:
   Add a test with every feature and every bug found — it seeds the frozen
   v1 suite.
 - **Doctests**: every fenced ```js block under `docs/` must build
-  (`cargo test -p odm-build --test doctests`; ` ```js skip` opts out).
+  (`cargo test -p odm-build --test suite doctests::`; ` ```js skip` opts out).
   Keep docs examples self-contained — free variables fail the build.
+
+odm-build's integration tests are modules of one `tests/suite/` binary, not
+separate `tests/*.rs` files — every test binary there links the full V8/engine
+stack, so each extra file costs its own huge link. Filter with
+`cargo test -p odm-build --test suite <mod>::`. Apply the same pattern if
+another heavy-linking crate grows past a couple of test files.
 
 Manifests suppress empty harness output: `doctest = false` on every lib (we
 write no *Rust* doctests, and `odm-js` otherwise inherits an ignored one

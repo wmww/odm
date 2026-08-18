@@ -3,16 +3,11 @@
 //! (Pixel goldens are CI/lavapipe-only and live with the render pipeline.)
 
 use odm_build::{BuildEngine, View};
-use odm_js::JsEnv;
 use odm_kernel::Kernel;
 use odm_store::{Object, Store};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
-
-fn env() -> Arc<JsEnv> {
-    static ENV: OnceLock<Arc<JsEnv>> = OnceLock::new();
-    ENV.get_or_init(|| Arc::new(JsEnv::new().unwrap())).clone()
-}
+use crate::env;
+use std::sync::Arc;
 
 fn engine(name: &str) -> Arc<BuildEngine> {
     let store = Store::new();

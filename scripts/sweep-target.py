@@ -9,8 +9,8 @@ current builds actually reference, and deletes only what nothing points at.
 
 Usage:
   scripts/sweep-target.py --dry-run            # report, delete nothing
-  scripts/sweep-target.py                      # prune
-  scripts/sweep-target.py --keep-incremental   # don't drop incremental/
+  scripts/sweep-target.py                      # prune (incremental idle >7d)
+  scripts/sweep-target.py --drop-incremental   # drop all of incremental/
 Sweeps this checkout by default; pass checkout paths to sweep others too.
 """
 
@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HASH = re.compile(r"-([0-9a-f]{8,32})(?:\.|$)")
@@ -41,16 +42,30 @@ def target_dir(checkout: Path) -> Path:
 
 
 def live_hashes(checkout: Path):
-    """Hashes of every unit the current build graph references, per cargo itself."""
-    proc = subprocess.run(
-        ["cargo", "build", "--workspace", "--all-targets", "--message-format=json"],
-        cwd=checkout, capture_output=True, text=True,
-    )
-    if proc.returncode != 0:
-        sys.exit(f"cargo build failed in {checkout} — refusing to sweep:\n"
-                 f"{proc.stderr[-2000:]}")
+    """Hashes of every unit the current build graph references, per cargo itself.
+
+    Runs both profiles: the sweep walks every profile dir, so an existing
+    release/ must contribute its live set too or it would be deleted wholesale.
+    Release skips --all-targets — nobody wants release test binaries, and
+    enumerating them would build them.
+    """
     hashes, files = set(), set()
-    for line in proc.stdout.splitlines():
+    for extra in (["--all-targets"], ["--release"]):
+        if "--release" in extra and not (target_dir(checkout) / "release").is_dir():
+            continue
+        proc = subprocess.run(
+            ["cargo", "build", "--workspace", "--message-format=json", *extra],
+            cwd=checkout, capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            sys.exit(f"cargo build failed in {checkout} — refusing to sweep:\n"
+                     f"{proc.stderr[-2000:]}")
+        _collect(proc.stdout, hashes, files)
+    return hashes, files
+
+
+def _collect(stdout: str, hashes: set, files: set):
+    for line in stdout.splitlines():
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:
@@ -71,7 +86,6 @@ def live_hashes(checkout: Path):
                 # .../build/<pkg>-<hash>/out
                 if h := hash_of(Path(out).parent.name):
                     hashes.add(h)
-    return hashes, files
 
 
 def sweep(root: Path, live: set, dry: bool, drop_incremental: bool):
@@ -99,12 +113,21 @@ def sweep(root: Path, live: set, dry: bool, drop_incremental: bool):
                 removed.append(entry)
                 if not dry:
                     shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+        # Incremental caches can't be liveness-matched (their dir suffix is a
+        # different hash than artifact filenames), and a cache is only worth
+        # keeping for code being actively recompiled anyway. Prune by idle
+        # time; a false positive just slows that crate's next recompile.
         inc = profile_dir / "incremental"
-        if drop_incremental and inc.is_dir():
-            freed += size(inc)
-            removed.append(inc)
-            if not dry:
-                shutil.rmtree(inc)
+        if inc.is_dir():
+            cutoff = float("inf") if drop_incremental else time.time() - 7 * 86400
+            for entry in inc.iterdir():
+                if entry.stat().st_mtime >= cutoff:
+                    kept += 1
+                    continue
+                freed += size(entry)
+                removed.append(entry)
+                if not dry:
+                    shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
     return freed, kept, removed
 
 
@@ -112,7 +135,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("checkouts", nargs="*", type=Path)
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--keep-incremental", action="store_true")
+    ap.add_argument("--drop-incremental", action="store_true")
     args = ap.parse_args()
 
     checkouts = args.checkouts or [Path(__file__).resolve().parent.parent]
@@ -139,7 +162,7 @@ def main():
     for root, live in roots.items():
         before = sum(f.stat().st_size for f in root.rglob("*") if f.is_file())
         freed, kept, removed = sweep(root, live, args.dry_run,
-                                     not args.keep_incremental)
+                                     args.drop_incremental)
         total += freed
         verb = "would free" if args.dry_run else "freed"
         print(f"{root}: {before/2**30:.1f} GiB -> {verb} {freed/2**30:.1f} GiB "
