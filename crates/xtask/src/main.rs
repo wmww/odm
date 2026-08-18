@@ -5,7 +5,8 @@
 //!
 //! Deliberately NOT part of any normal build: the Manifold wasm lane needs
 //! clang + wasm-ld + libc++ headers (via wasm-cxx-shim). Rootless setups
-//! point WASM_CXX_SHIM_LIBCXX_HEADERS / WASM_CXX_SHIM_WASM_LD at them.
+//! point WASM_CXX_SHIM_LIBCXX_HEADERS / WASM_CXX_SHIM_WASM_LD at them, or
+//! just keep them in ~/.local/opt/wasm-cxx, which `shim_env` finds.
 
 // Link the workspace stack dynamically (see odm-dylib).
 use odm_dylib as _;
@@ -62,15 +63,21 @@ fn build_web_template() -> anyhow::Result<()> {
     }
 
     eprintln!("building odm-web for wasm32-unknown-unknown (release)…");
-    let status = Command::new("cargo")
+    let mut cargo = Command::new("cargo");
+    cargo
         .current_dir(&root)
-        .args(["build", "-p", "odm-web", "--target", "wasm32-unknown-unknown", "--release"])
-        .status()?;
+        .args(["build", "-p", "odm-web", "--target", "wasm32-unknown-unknown", "--release"]);
+    let found = shim_env(&mut cargo);
+    let status = cargo.status()?;
     if !status.success() {
         bail!(
             "wasm build failed. The Manifold wasm lane needs clang, wasm-ld and libc++ \
-             headers — without root, set WASM_CXX_SHIM_LIBCXX_HEADERS and \
-             WASM_CXX_SHIM_WASM_LD (see notes/web-export.md)."
+             headers{}. Install them (`pacman -S libc++ lld` / `apt install \
+             clang-20 lld-20 libc++-20-dev`), drop them in {}, or set \
+             WASM_CXX_SHIM_LIBCXX_HEADERS and WASM_CXX_SHIM_WASM_LD (see \
+             notes/web-export.md).",
+            if found { ", and the ones found were rejected" } else { "" },
+            SHIM_DIR,
         );
     }
 
@@ -112,4 +119,31 @@ fn build_web_template() -> anyhow::Result<()> {
         &odm_export::TEMPLATE_STAMP[..12],
     );
     Ok(())
+}
+
+/// Rootless toolchain convention (notes/build-environment.md): a machine with
+/// no system libc++/wasm-ld keeps them here, and the -sys build script only
+/// looks at standard prefixes. Fill the shim vars in for the child build when
+/// they are unset, so `scripts/install.sh` needs no wrapper env. Returns
+/// whether anything (env or directory) points at a shim toolchain.
+const SHIM_DIR: &str = "~/.local/opt/wasm-cxx";
+
+fn shim_env(cargo: &mut Command) -> bool {
+    let dir = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/opt/wasm-cxx"));
+    let mut found = false;
+    for (var, entry) in
+        [("WASM_CXX_SHIM_LIBCXX_HEADERS", "libcxx-headers"), ("WASM_CXX_SHIM_WASM_LD", "wasm-ld")]
+    {
+        if std::env::var_os(var).is_some() {
+            found = true;
+            continue;
+        }
+        let Some(path) = dir.as_ref().map(|d| d.join(entry)).filter(|p| p.exists()) else {
+            continue;
+        };
+        eprintln!("using {}={}", var, path.display());
+        cargo.env(var, path);
+        found = true;
+    }
+    found
 }

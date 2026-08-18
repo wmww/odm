@@ -11,8 +11,8 @@
 # Builds in the repo's target/ dir, so it reuses whatever is already compiled
 # (unlike `cargo install --path crates/odm`, which builds from scratch).
 # The template build needs the wasm toolchain (clang + wasm-ld + libc++
-# headers, wasm-bindgen-cli) — see notes/web-export.md; xtask says what is
-# missing if something is.
+# headers, wasm-bindgen-cli) — see notes/web-export.md. xtask picks up a
+# rootless one from ~/.local/opt/wasm-cxx and says what is missing otherwise.
 set -eu
 
 top=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)

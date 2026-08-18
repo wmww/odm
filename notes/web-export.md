@@ -114,11 +114,13 @@ clang + wasm-ld against wasm-cxx-shim — no emscripten, one module. On this
 machine (no root libc++/lld):
 
 ```sh
-export WASM_CXX_SHIM_LIBCXX_HEADERS=~/.local/opt/wasm-cxx/libcxx-headers
-export WASM_CXX_SHIM_WASM_LD=~/.local/opt/wasm-cxx/wasm-ld
-# (or: pacman -S libc++ lld and skip both)
-cargo xtask build-web-template
+cargo xtask build-web-template   # picks up ~/.local/opt/wasm-cxx itself
 ```
+
+xtask fills WASM_CXX_SHIM_LIBCXX_HEADERS / WASM_CXX_SHIM_WASM_LD in for the
+wasm build from `~/.local/opt/wasm-cxx/{libcxx-headers,wasm-ld}` when they
+are unset; set them by hand to point elsewhere (or `pacman -S libc++ lld`
+with root and neither is needed).
 
 `wasm-bindgen-cli` must match the Cargo.lock pin (xtask checks and says
 the install command). The wasm lane is target-gated in the -sys build

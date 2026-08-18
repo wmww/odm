@@ -168,7 +168,9 @@ fn find_template(opts: &ExportOptions) -> Result<PathBuf, String> {
     let mut tried = Vec::new();
     let candidates: Vec<PathBuf> = if let Some(file) = &opts.template {
         vec![file.clone()]
-    } else if let Ok(file) = std::env::var("ODM_WEB_TEMPLATE") {
+    } else if let Some(file) =
+        std::env::var("ODM_WEB_TEMPLATE").ok().filter(|f| !f.is_empty())
+    {
         vec![PathBuf::from(file)]
     } else {
         let mut v = Vec::new();
