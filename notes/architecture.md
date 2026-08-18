@@ -272,8 +272,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   and no status band), one resizable bottom dock holding **Agent** and a devtools-style **Output**
   as two tabs
   (`theme::tab_strip`, the plain version of the view strip; one dock per
-  window, showing the active tab's console; the Output label carries the
-  entry count and goes amber/red for a warning/error, so a failed build says
+  window, showing the active tab's console; the Output label carries a lamp of
+  its own — absent when the build said nothing, gray for logs, amber for a
+  warning/logged error, red for a thrown one, so a failed build says
   so from the Agent tab; the Agent label carries a status lamp —
   `StripTab::lamp` — dark red when nothing is listening, green when an
   `odm poll` is waiting, blinking while the agent has a task)
@@ -785,9 +786,10 @@ agent-agnostic and enough.
   poll blocks for minutes, and must hold up nothing.
   `state::tests::chat_commands_skip_the_build_gate` guards it.
 - Viewer: the dock's Agent tab —
-  `theme::tail_box` transcript (user lines `> …` white, dimmed while
-  undelivered; agent lines in `theme::AGENT_TEXT`; action lines in
-  `theme::ACTION_TEXT`) plus one `theme::text_edit`
+  `theme::tail_box` transcript (user lines `> …` in `theme::USER_TEXT` blue,
+  dimmed while undelivered, but white as they are typed in the input box;
+  agent lines white; action lines gray in `theme::ACTION_TEXT`; the live task
+  line green in `theme::TASK_TEXT`) plus one `theme::text_edit`
   where Enter sends and keeps focus. The transcript takes the panel's height
   less the input line, exactly (item spacing included) — get that arithmetic
   wrong and the panel grows a few px every frame until it eats the window.

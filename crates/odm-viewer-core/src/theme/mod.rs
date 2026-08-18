@@ -47,11 +47,17 @@ pub const ACCENT: Color32 = Color32::from_rgb(0x20, 0x40, 0x8c);
 pub const ERROR: Color32 = Color32::from_rgb(0xff, 0x6b, 0x6b);
 /// Warnings — console.warn lines in the console pane.
 pub const WARN: Color32 = Color32::from_rgb(0xe6, 0xc4, 0x5c);
-/// The agent's chat lines, against the user's white ones.
-pub const AGENT_TEXT: Color32 = Color32::from_rgb(0x8c, 0xc8, 0xff);
+/// The user's own chat lines, against the agent's white ones. Only in the
+/// transcript — what is being typed stays plain white in the input box.
+pub const USER_TEXT: Color32 = Color32::from_rgb(0x8c, 0xc8, 0xff);
 /// What the agent *did* — CLI commands, file edits — in the chat log:
-/// the same weight as its words, told apart by hue.
-pub const ACTION_TEXT: Color32 = Color32::from_rgb(0x8c, 0xd0, 0x94);
+/// legible, but muted well under what it said.
+pub const ACTION_TEXT: Color32 = Color32::from_rgb(0x8c, 0x8c, 0x8c);
+/// The live task line under the transcript — work in hand, not yet said.
+pub const TASK_TEXT: Color32 = Color32::from_rgb(0x6c, 0xd0, 0x7c);
+/// A status lamp with nothing to report beyond its own presence — the
+/// console's, when the build only logged.
+pub const LAMP_QUIET: Color32 = Color32::from_rgb(0x88, 0x88, 0x88);
 
 /// Slider handle aspect ratio. Mirrored by [`trackbar`], which paints the
 /// handle itself but must land where egui's hit-testing puts it.

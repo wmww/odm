@@ -157,7 +157,7 @@ impl eframe::App for WebApp {
                 theme::band(ui, tree.response.rect);
             });
         // The console dock.
-        let (console, console_color) = console_tab(&self.tab);
+        let console = console_tab(&self.tab);
         let dock = egui::Panel::bottom("dock")
             .resizable(true)
             .default_size(110.0)
@@ -165,7 +165,7 @@ impl eframe::App for WebApp {
             .max_size((ui.available_height() * PANEL_SHARE).max(110.0))
             .frame(theme::panel_frame())
             .show(ui, |ui| {
-                theme::tab_strip(ui, "dock", &[theme::StripTab::new(console, console_color)], 0);
+                theme::tab_strip(ui, "dock", &[console], 0);
                 console_ui(ui, &self.tab);
             });
         theme::band(ui, dock.response.rect);

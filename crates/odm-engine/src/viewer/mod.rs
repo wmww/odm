@@ -565,9 +565,11 @@ impl ViewerApp {
                         // Dimmed until the agent has actually acknowledged it,
                         // so a message that never got through still looks like
                         // one.
-                        Who::User if undelivered => (quoted(), theme::WEAK_TEXT),
-                        Who::User => (quoted(), theme::TEXT),
-                        Who::Agent => (entry.text.clone(), theme::AGENT_TEXT),
+                        Who::User if undelivered => {
+                            (quoted(), theme::USER_TEXT.gamma_multiply(0.6))
+                        }
+                        Who::User => (quoted(), theme::USER_TEXT),
+                        Who::Agent => (entry.text.clone(), theme::TEXT),
                         // What the agent did, as against what it said: one
                         // compact line per command it ran or file it changed.
                         Who::Action => (entry.text.clone(), theme::ACTION_TEXT),
@@ -587,7 +589,7 @@ impl ViewerApp {
                     let dots = 1 + (ui.input(|i| i.time) / 0.4) as usize % 3;
                     ui.label(
                         egui::RichText::new(format!("{task}{}", ".".repeat(dots)))
-                            .color(theme::AGENT_TEXT.gamma_multiply(0.6)),
+                            .color(theme::TASK_TEXT),
                     );
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
                 }
@@ -657,13 +659,13 @@ impl ViewerApp {
     /// project — what the agent said, and what the build said — so they share
     /// the space rather than stacking and squeezing the viewport.
     fn dock_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let (console, console_color) = match self.tab() {
+        let console = match self.tab() {
             Some(tab) => console_tab(tab),
-            None => ("Output".to_owned(), theme::TEXT),
+            None => theme::StripTab::new("Output", theme::TEXT),
         };
         let tabs = [
             theme::StripTab::new("Agent", theme::TEXT).lamp(self.agent_lamp(ui)),
-            theme::StripTab::new(console, console_color),
+            console,
         ];
         let selected = match self.dock {
             Dock::Chat => 0,

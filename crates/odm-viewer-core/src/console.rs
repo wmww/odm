@@ -7,24 +7,26 @@ use crate::theme;
 use eframe::egui;
 use odm_store::LogLevel;
 
-/// The console's label and color for whatever the host tabs it under: how
-/// much the last build attempt had to say, red for a thrown error and amber
-/// for a warning logged, so a failed build says so from wherever it is.
-pub fn console_tab(tab: &Tab) -> (String, egui::Color32) {
+/// The console's tab label, for whatever the host tabs it under. A lamp says
+/// what the last build attempt had to say: none at all when it said nothing,
+/// gray for plain logs, amber for a warning or a logged error, red for a
+/// thrown one — so a failed build says so from wherever the console sits.
+pub fn console_tab(tab: &Tab) -> theme::StripTab {
     let logs = &tab.published.logs;
-    let error = tab.published.error.is_some();
-    let color = if error {
-        theme::ERROR
+    let lamp = if tab.published.error.is_some() {
+        Some(theme::ERROR)
     } else if logs.iter().any(|(_, l)| matches!(l.level, LogLevel::Warn | LogLevel::Error)) {
-        theme::WARN
+        Some(theme::WARN)
+    } else if logs.is_empty() {
+        None
     } else {
-        theme::TEXT
+        Some(theme::LAMP_QUIET)
     };
-    let label = match logs.len() + error as usize {
-        0 => "Output".to_owned(),
-        n => format!("Output ({n})"),
-    };
-    (label, color)
+    let tab = theme::StripTab::new("Output", theme::TEXT);
+    match lamp {
+        Some(color) => tab.lamp(color),
+        None => tab,
+    }
 }
 
 /// One console, browser-devtools style: the last build attempt's output in
