@@ -182,11 +182,13 @@ captioned tile. Explicit only — no ranged sampling, no cartesian form;
 writing the values costs tokens ~nothing vs reading tiles.
 
 - **Shared framing**: every frame builds first, then tiles whose camera
-  has no `fit` get `fit = union of all frames' bounds`. Works across
-  mixed per-frame `look`s because `Camera::resolve` fits a bounding
-  *sphere* — fitted distance/height are direction-independent. A
-  frame's `focus` (own fit) or `eye`/`zoom` opts out per parameter,
-  through the normal overlay — no new mechanism.
+  has no `fit` get `fit = union of all frames' bounds`. The auto-fit is
+  a direction-dependent corner fit (same `fit_distance` as the viewer's
+  F-frame), so equal scale across mixed per-frame `look`s is explicit:
+  `odm_render::share_fitted_scale` resolves the participating tiles,
+  takes the largest fitted world half-height at the target plane, and
+  sets each tile's `zoom` to match it. A frame's `focus` (own fit) or
+  `eye`/`zoom`/`ortho_height` opts out per parameter.
 - Whole-sheet fields, rejected inside a frame: `frames` (no recursion),
   `width`/`height` (per-tile size; sheet default 512×384 — `RenderReq`
   sizes became `Option<f64>` so given-ness survives to commands),

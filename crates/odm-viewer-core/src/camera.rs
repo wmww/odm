@@ -1,7 +1,7 @@
 //! The viewport's orbit camera.
 
-use odm_render::Camera;
-use odm_render::math::{cross, dot, normalize, sub};
+use odm_render::math::{cross, normalize};
+use odm_render::{Camera, FIT_MARGIN, fit_distance};
 
 /// Vertical field of view every viewport camera uses — also what hosts quote
 /// when they describe the camera (e.g. the chat view snapshot).
@@ -31,8 +31,7 @@ impl Orbit {
     /// corner fits the viewport (both fov axes, per-corner depth), keeping
     /// the view direction — reframing should not spin the model.
     pub fn frame(&mut self, bounds: Option<([f64; 3], [f64; 3])>, aspect: f64) {
-        const MARGIN: f64 = 1.1;
-        let fallback = MARGIN / (FOV_Y_DEG / 2.0).to_radians().sin();
+        let fallback = FIT_MARGIN / (FOV_Y_DEG / 2.0).to_radians().sin();
         let Some((min, max)) = bounds else {
             self.target = [0.0; 3];
             self.distance = fallback;
@@ -40,24 +39,9 @@ impl Orbit {
         };
         self.target =
             [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0, (min[2] + max[2]) / 2.0];
-        let (s, u, f) = self.basis();
         let tan_y = (FOV_Y_DEG / 2.0).to_radians().tan();
-        let tan_x = tan_y * aspect.max(1e-3);
-        let mut dist: f64 = 0.0;
-        for i in 0..8 {
-            let corner = [
-                if i & 1 == 0 { min[0] } else { max[0] },
-                if i & 2 == 0 { min[1] } else { max[1] },
-                if i & 4 == 0 { min[2] } else { max[2] },
-            ];
-            let v = sub(corner, self.target);
-            // Forward depth relative to the target plane: a corner nearer
-            // the camera (w < 0) needs proportionally more distance.
-            let w = dot(v, f);
-            let x = dot(v, s).abs() * MARGIN;
-            let y = dot(v, u).abs() * MARGIN;
-            dist = dist.max(x / tan_x - w).max(y / tan_y - w);
-        }
+        let dist =
+            fit_distance((min, max), self.target, self.basis(), tan_y * aspect.max(1e-3), tan_y);
         // Degenerate bounds (a point) fall back like an empty scene.
         self.distance = if dist > 1e-9 { dist } else { fallback };
     }
@@ -99,6 +83,7 @@ impl Orbit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use odm_render::math::dot;
 
     /// A stick along x, viewed with the given angles at the given aspect.
     fn frame_stick(yaw: f64, pitch: f64, aspect: f64) -> Orbit {

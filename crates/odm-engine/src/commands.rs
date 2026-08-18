@@ -629,10 +629,7 @@ impl EngineState {
             )
         });
 
-        let mut slot = self.renderer()?;
-        let renderer = slot.as_mut().unwrap();
-        let mut tiles = Vec::with_capacity(frames.len());
-        let mut cameras = Vec::with_capacity(frames.len());
+        let mut tile_opts = Vec::with_capacity(frames.len());
         for (i, (f, fs)) in frames.iter().zip(&built).enumerate() {
             let mut opts =
                 Self::tile_opts(&f.req, tw, th, base.supersample).map_err(|e| name_frame(i, f, e))?;
@@ -640,8 +637,32 @@ impl EngineState {
             if opts.camera.fit.is_none() {
                 opts.camera.fit = union;
             }
+            tile_opts.push(opts);
+        }
+        // The corner fit is direction-dependent, so tiles that kept the
+        // shared framing also get a shared scale — otherwise mixed `look`s
+        // would each frame to their own tightest distance.
+        odm_render::share_fitted_scale(
+            tile_opts
+                .iter_mut()
+                .map(|o| &mut o.camera)
+                .filter(|c| {
+                    c.fit == union
+                        && c.eye.is_none()
+                        && c.zoom.is_none()
+                        && !(c.ortho && c.ortho_height.is_some())
+                })
+                .collect(),
+            tw as f64 / th as f64,
+        );
+
+        let mut slot = self.renderer()?;
+        let renderer = slot.as_mut().unwrap();
+        let mut tiles = Vec::with_capacity(frames.len());
+        let mut cameras = Vec::with_capacity(frames.len());
+        for (i, (f, (fs, opts))) in frames.iter().zip(built.iter().zip(&tile_opts)).enumerate() {
             let rgba = renderer
-                .render_rgba(&fs.scene, &opts)
+                .render_rgba(&fs.scene, opts)
                 .map_err(|e| name_frame(i, f, CmdError::new("render", e.to_string())))?;
             cameras.push(opts.camera.resolve(fs.scene.bounds, tw as f64 / th as f64));
             tiles.push(sheet::Tile { rgba, caption: caption_for(&f.overrides) });
