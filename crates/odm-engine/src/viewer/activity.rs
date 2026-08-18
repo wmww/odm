@@ -173,17 +173,9 @@ impl ActivityView {
     }
 
     /// Paint the current card into `rect`, caption in the top-right corner.
+    /// Nothing to show is shown as nothing: an empty well says it already.
     fn paint(&self, painter: &egui::Painter, rect: egui::Rect) {
-        let Some(card) = &self.current else {
-            painter.text(
-                rect.left_top() + egui::vec2(4.0, 2.0),
-                egui::Align2::LEFT_TOP,
-                "Nothing from the agent yet.",
-                egui::FontId::proportional(theme::UI_SIZE),
-                theme::WEAK_TEXT,
-            );
-            return;
-        };
+        let Some(card) = &self.current else { return };
         let full = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
         match &card.kind {
             ActivityKind::Render { width, height, .. } => {

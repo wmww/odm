@@ -498,6 +498,25 @@ pub fn tab_edge(p: &egui::Painter, y: f32, x0: f32, x1: f32) {
     p.add(mesh);
 }
 
+/// One notebook tab: its label, the label's color, and an optional status
+/// lamp painted after it.
+pub struct StripTab {
+    pub label: String,
+    pub color: Color32,
+    pub lamp: Option<Color32>,
+}
+
+impl StripTab {
+    pub fn new(label: impl Into<String>, color: Color32) -> Self {
+        Self { label: label.into(), color, lamp: None }
+    }
+
+    pub fn lamp(mut self, color: Color32) -> Self {
+        self.lamp = Some(color);
+        self
+    }
+}
+
 /// A plain row of notebook tabs at the top of a panel, opening into the page
 /// below it. The fixed set a dock switches between: no close boxes, no +, no
 /// squeezing — a host's view tabs paint their own strip for those.
@@ -505,11 +524,14 @@ pub fn tab_edge(p: &egui::Painter, y: f32, x0: f32, x1: f32) {
 pub fn tab_strip(
     ui: &mut Ui,
     id_salt: &str,
-    tabs: &[(String, Color32)],
+    tabs: &[StripTab],
     selected: usize,
 ) -> Option<usize> {
     /// Face left and right of a tab's label.
     const PAD: f32 = 8.0;
+    /// A status lamp's radius, and the gap between it and the label.
+    const LAMP: f32 = 3.5;
+    const LAMP_GAP: f32 = 5.0;
 
     let height = TAB_HEIGHT + TAB_GROW * 2.0;
     let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
@@ -520,16 +542,17 @@ pub fn tab_strip(
 
     let galleys: Vec<_> = tabs
         .iter()
-        .map(|(text, color)| {
-            ui.painter().layout_no_wrap(text.clone(), FontId::proportional(UI_SIZE), *color)
-        })
+        .map(|t| ui.painter().layout_no_wrap(t.label.clone(), FontId::proportional(UI_SIZE), t.color))
         .collect();
+    // Room a tab's lamp takes after its label, if it has one.
+    let lamp_room =
+        |t: &StripTab| if t.lamp.is_some() { LAMP_GAP + LAMP * 2.0 } else { 0.0 };
     let mut x = origin.x;
     let rects: Vec<Rect> = galleys
         .iter()
         .enumerate()
         .map(|(i, galley)| {
-            let width = (galley.size().x + PAD * 2.0).round();
+            let width = (galley.size().x + lamp_room(&tabs[i]) + PAD * 2.0).round();
             let out = if i == selected { TAB_GROW } else { 0.0 };
             let rect = Rect::from_min_max(
                 pos2(x - out, origin.y + TAB_GROW - out),
@@ -559,6 +582,12 @@ pub fn tab_strip(
         let pos = pos2(rect.left() + out + PAD, mid - galley.size().y / 2.0);
         // The color is baked into the galley by `layout_no_wrap`.
         ui.painter().galley(snap(ui, pos), galley.clone(), TEXT);
+        if let Some(color) = tabs[i].lamp {
+            let cx = pos.x + galley.size().x + LAMP_GAP + LAMP;
+            let center = snap(ui, pos2(cx, mid));
+            ui.painter().circle_filled(center, LAMP, color);
+            ui.painter().circle_stroke(center, LAMP, egui::Stroke::new(1.0, SHADOW));
+        }
         if ui.interact(*rect, ui.id().with((id_salt, i)), egui::Sense::click()).clicked() {
             clicked = Some(i);
         }

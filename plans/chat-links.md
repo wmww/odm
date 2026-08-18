@@ -91,8 +91,8 @@ feels short.
 
 A miss is silent for now. The alternative — surfacing `locate`'s
 candidate list — wants a message line the viewer doesn't have; if silence
-turns out to be confusing, the status band is the place, as an
-`Option<String>` field cleared by the next click. Not in this plan.
+turns out to be confusing, an engine line in the transcript is the place.
+Not in this plan.
 
 ## Look: links, not buttons
 

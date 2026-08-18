@@ -173,7 +173,7 @@ impl eframe::App for WebApp {
             .max_size((ui.available_height() * PANEL_SHARE).max(110.0))
             .frame(theme::panel_frame())
             .show(ui, |ui| {
-                theme::tab_strip(ui, "dock", &[(console, console_color)], 0);
+                theme::tab_strip(ui, "dock", &[theme::StripTab::new(console, console_color)], 0);
                 console_ui(ui, &self.tab);
             });
         theme::band(ui, dock.response.rect);

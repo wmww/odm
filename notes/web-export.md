@@ -96,7 +96,8 @@ odm-kernel with `wasm-uu`.
   start runs pending synchronously (latest-wins), publishes with
   last-good root semantics + `input_report`, pins roots + gc. `app.rs` is
   the desktop chrome minus everything editable: menu bar (View only),
-  tree, inputs, status band + transport, console dock, viewport; integer
+  tree, inputs, status band + transport (the web app keeps its own status
+  band; the desktop viewer dropped its), output dock, viewport; integer
   pixels_per_point forced.
 
 ## Isolation & drift (accepted, by design)

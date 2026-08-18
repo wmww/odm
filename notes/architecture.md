@@ -245,12 +245,16 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (right side; controls from the tab's fall-through report: trackbars for
   ranged numbers, toggles, choice buttons, JSON-ish text fields, presets), a
   `t` transport when a ranged cascade number named t falls through
-  (scrub + play at 1 unit/sec looping), one resizable bottom dock above the
-  status band holding **Chat** and a devtools-style **Console** as two tabs
+  (scrub + play at 1 unit/sec looping; its bottom panel is only up when the
+  view has one — there is no status band, and nothing else lives down there),
+  one resizable bottom dock holding **Agent** and a devtools-style **Output**
+  as two tabs
   (`theme::tab_strip`, the plain version of the view strip; one dock per
-  window, showing the active tab's console; the Console label carries the
+  window, showing the active tab's console; the Output label carries the
   entry count and goes amber/red for a warning/error, so a failed build says
-  so from the Chat tab)
+  so from the Agent tab; the Agent label carries a status lamp —
+  `StripTab::lamp` — dark red when nothing is listening, green when an
+  `odm poll` is waiting, blinking while the agent has a task)
   with last-good scene (`Published.logs` is latest-attempt: success or
   failure, colored by `LogLevel`; a failed build's error is the final
   red entry — presentation-only merge, `Published.error` stays its own
@@ -647,16 +651,16 @@ agent-agnostic and enough.
 - **`poll`/`say` never sync or build** (and never touch the build gate): a
   poll blocks for minutes, and must hold up nothing.
   `state::tests::chat_commands_skip_the_build_gate` guards it.
-- Viewer: a resizable panel above the status band —
+- Viewer: the dock's Agent tab —
   `theme::tail_box` transcript (user lines `> …` white, dimmed while
   undelivered; agent lines in `theme::AGENT_TEXT`; action lines in
   `theme::ACTION_TEXT`) plus one `theme::text_edit`
   where Enter sends and keeps focus. The transcript takes the panel's height
   less the input line, exactly (item spacing included) — get that arithmetic
   wrong and the panel grows a few px every frame until it eats the window.
-  The status band says whether the agent is listening, which is the user's cue
-  to go prod it in its own terminal. All of it repaints through the existing
-  `EngineState::wake`.
+  The lamp on the tab says whether the agent is listening, which is the user's
+  cue to go prod it in its own terminal. All of it repaints through the
+  existing `EngineState::wake`.
 
 ### Owning the event loop
 

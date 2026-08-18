@@ -51,8 +51,7 @@ Decisions from the 2026-08-17 design discussion:
   socket, or builds, so headless is untouched and project consistency
   invariants don't apply.
 - Panels: with a terminal tab active, tree/inputs/timeline are view
-  concepts — hide them. Menu bar, tab strip, chat panel and status band
-  stay. CentralPanel = the terminal widget.
+  concepts — hide them. Menu bar, tab strip and the dock stay. CentralPanel = the terminal widget.
 - The add-tab modal gets a Terminal entry; labels "Terminal", "Terminal
   2", … Tab close kills the PTY.
 - Rendering (if hand-rolled): 7×14 cell grid in `odm-mono-14`, positions

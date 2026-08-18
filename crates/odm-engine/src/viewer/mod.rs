@@ -40,6 +40,13 @@ const INPUT_MAX_SHARE: f32 = 0.5;
 const DOCK_HEIGHT: f32 = 150.0;
 const DOCK_MIN: f32 = 100.0;
 
+/// The lamp on the Agent tab: nothing listening, listening, and the dim half
+/// of the blink while it works — plus how long each half of that blink lasts.
+const LAMP_OFF: egui::Color32 = egui::Color32::from_rgb(0x8c, 0x2c, 0x2c);
+const LAMP_ON: egui::Color32 = egui::Color32::from_rgb(0x4c, 0xd0, 0x60);
+const LAMP_DIM: egui::Color32 = egui::Color32::from_rgb(0x1e, 0x50, 0x28);
+const BLINK: f64 = 0.45;
+
 /// The agent activity column in the chat tab: where its edge starts, the
 /// least it can be dragged to, and the most of the chat it may take.
 const ACTIVITY_WIDTH: f32 = 220.0;
@@ -615,36 +622,30 @@ impl ViewerApp {
         })
     }
 
-    fn bottom_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            theme::status_field(ui, format!("gen {}", self.tab().published.generation));
-            if self.tab().published.building {
-                theme::status_field(ui, "Building…");
-            }
-            // The user's cue to go prod the agent in its own terminal.
-            theme::status_field(
-                ui,
-                match self.state().listeners() {
-                    0 => "agent is not listening",
-                    _ => "agent is listening",
-                },
-            );
-            match self.tab().selected.as_slice() {
-                [] => {}
-                [(id, _)] => theme::status_field(
-                    ui,
-                    format!("selected: {}", if id.is_empty() { "(root)" } else { id }),
-                ),
-                sel => theme::status_field(ui, format!("selected: {} nodes", sel.len())),
-            }
-        });
-
-        // The t transport: a ranged fall-through number named `t` becomes a
-        // timeline (scrub + play at 1 unit/sec, looping over its range).
+    /// The t transport: a ranged fall-through number named `t` becomes a
+    /// timeline (scrub + play at 1 unit/sec, looping over its range). Its
+    /// panel is only up when the view has one — nothing else lives down there.
+    fn transport_ui(&mut self, ui: &mut egui::Ui) {
         if let Some(entry) = inputs::transport_entry(self.tab()) {
             let events = inputs::transport_ui(ui, self.tab(), &entry);
             self.apply_input_events(events);
         }
+    }
+
+    /// The agent's state, as the lamp on its tab: dark red when nothing is
+    /// listening (the user's cue to go prod the agent in its own terminal),
+    /// green when an `odm poll` is waiting, and blinking while the agent has
+    /// a task in hand. The blink is the same exception the busy dots are —
+    /// work in progress is the one thing a still frame can't show.
+    fn agent_lamp(&self, ui: &egui::Ui) -> egui::Color32 {
+        if self.state().listeners() == 0 {
+            return LAMP_OFF;
+        }
+        if self.state().task().is_none() {
+            return LAMP_ON;
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        if (ui.input(|i| i.time) / BLINK) as u64 % 2 == 0 { LAMP_ON } else { LAMP_DIM }
     }
 
     /// The bottom dock: chat and console as two tabs of one panel, sitting
@@ -653,7 +654,10 @@ impl ViewerApp {
     /// the space rather than stacking and squeezing the viewport.
     fn dock_ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let (console, console_color) = console_tab(self.tab());
-        let tabs = [("Chat".to_owned(), theme::TEXT), (console, console_color)];
+        let tabs = [
+            theme::StripTab::new("Agent", theme::TEXT).lamp(self.agent_lamp(ui)),
+            theme::StripTab::new(console, console_color),
+        ];
         let selected = match self.dock {
             Dock::Chat => 0,
             Dock::Console => 1,
@@ -808,12 +812,15 @@ impl eframe::App for ViewerApp {
                 self.apply_input_events(events);
             });
         theme::band(ui, right.response.rect);
-        // The status band is the last thing the window pushed down.
-        let bottom = egui::Panel::bottom("timeline")
-            .frame(theme::panel_frame())
-            .show(ui, |ui| self.bottom_ui(ui));
-        theme::band(ui, bottom.response.rect);
-        // Above the status band, below the viewport.
+        // The transport is the last thing the window pushed down, and only
+        // there when the view is animated.
+        if inputs::transport_entry(self.tab()).is_some() {
+            let bottom = egui::Panel::bottom("timeline")
+                .frame(theme::panel_frame())
+                .show(ui, |ui| self.transport_ui(ui));
+            theme::band(ui, bottom.response.rect);
+        }
+        // Above the transport, below the viewport.
         let dock = egui::Panel::bottom("dock")
             .resizable(true)
             .default_size(DOCK_HEIGHT)

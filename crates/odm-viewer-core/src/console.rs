@@ -21,8 +21,8 @@ pub fn console_tab(tab: &Tab) -> (String, egui::Color32) {
         theme::TEXT
     };
     let label = match logs.len() + error as usize {
-        0 => "Console".to_owned(),
-        n => format!("Console ({n})"),
+        0 => "Output".to_owned(),
+        n => format!("Output ({n})"),
     };
     (label, color)
 }
