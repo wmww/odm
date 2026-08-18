@@ -44,17 +44,21 @@ def target_dir(checkout: Path) -> Path:
 def live_hashes(checkout: Path):
     """Hashes of every unit the current build graph references, per cargo itself.
 
-    Runs both profiles: the sweep walks every profile dir, so an existing
-    release/ must contribute its live set too or it would be deleted wholesale.
-    Release skips --all-targets — nobody wants release test binaries, and
-    enumerating them would build them.
+    Runs every invocation shape whose artifacts should survive: the sweep
+    walks every profile dir, so an existing release/ must contribute its live
+    set too or it would be deleted wholesale. Release skips --all-targets —
+    nobody wants release test binaries, and enumerating them would build them.
+    The scoped --no-default-features pass is install.sh's static odm, a
+    different feature universe than the workspace release build.
     """
+    invocations = [["--workspace", "--all-targets"]]
+    if (target_dir(checkout) / "release").is_dir():
+        invocations += [["--workspace", "--release"],
+                        ["-p", "odm", "--release", "--no-default-features"]]
     hashes, files = set(), set()
-    for extra in (["--all-targets"], ["--release"]):
-        if "--release" in extra and not (target_dir(checkout) / "release").is_dir():
-            continue
+    for extra in invocations:
         proc = subprocess.run(
-            ["cargo", "build", "--workspace", "--message-format=json", *extra],
+            ["cargo", "build", "--message-format=json", *extra],
             cwd=checkout, capture_output=True, text=True,
         )
         if proc.returncode != 0:

@@ -787,3 +787,6 @@ fn stalled_top_level_await_errors_not_hangs() {
         "unexpected error: {msg}"
     );
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

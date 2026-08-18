@@ -24,5 +24,6 @@ manifold-csg = { version = "=0.3.3", default-features = false }
 thiserror.workspace = true
 
 [dev-dependencies]
+odm-dylib = { path = "../odm-dylib" }  # thin test binaries: link the stack via one .so
 # tests cross-check clearance against Manifold's own min_gap
 manifold-csg = { version = "=0.3.3", default-features = false }

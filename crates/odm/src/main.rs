@@ -5,6 +5,10 @@
 use anyhow::bail;
 use std::path::PathBuf;
 
+// Links the workspace stack dynamically in dev builds (see odm-dylib).
+#[cfg(feature = "dynamic")]
+use odm_dylib as _;
+
 fn usage() -> String {
     format!(
         "\

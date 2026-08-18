@@ -339,3 +339,6 @@ fn bad_size_rejected() {
     let opts = RenderOptions::default_with(0, 100);
     assert!(renderer.render_png(&scene, &opts).is_err());
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

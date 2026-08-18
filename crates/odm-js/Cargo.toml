@@ -31,5 +31,6 @@ include_dir = "0.7"
 thiserror.workspace = true
 
 [dev-dependencies]
+odm-dylib = { path = "../odm-dylib" }  # thin test binaries: link the stack via one .so
 # Self-dependency: turns the test-api-version surface on for our own tests.
 odm-js = { path = ".", features = ["test-api-version"] }

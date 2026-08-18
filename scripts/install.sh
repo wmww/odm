@@ -19,7 +19,9 @@ top=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 bindir=${BINDIR:-$HOME/.local/bin}
 datadir=${DATADIR:-$HOME/.local/share/odm}
 
-cargo build --release --manifest-path "$top/Cargo.toml" --bin odm
+# --no-default-features: the default `dynamic` feature links against
+# libodm_dylib.so in the target dir; an installed binary must be self-contained.
+cargo build --release --manifest-path "$top/Cargo.toml" --bin odm --no-default-features
 cargo run -q --release --manifest-path "$top/Cargo.toml" -p xtask -- build-web-template
 
 mkdir -p "$bindir"

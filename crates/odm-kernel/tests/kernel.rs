@@ -380,3 +380,6 @@ fn segments_validated() {
     assert!(k.sphere(1.0, 2).is_err());
     assert!(k.sphere(1.0, 0).is_err());
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

@@ -2731,6 +2731,7 @@ dependencies = [
  "anyhow",
  "libc",
  "odm-cli",
+ "odm-dylib",
  "odm-engine",
  "odm-export",
 ]
@@ -2740,6 +2741,7 @@ name = "odm-build"
 version = "0.1.0"
 dependencies = [
  "jsonschema",
+ "odm-dylib",
  "odm-ir",
  "odm-js",
  "odm-kernel",
@@ -2758,9 +2760,22 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "include_dir",
+ "odm-dylib",
  "odm-prompt",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "odm-dylib"
+version = "0.1.0"
+dependencies = [
+ "odm-build",
+ "odm-cli",
+ "odm-engine",
+ "odm-export",
+ "odm-js",
+ "odm-kernel",
 ]
 
 [[package]]
@@ -2792,6 +2807,7 @@ dependencies = [
  "blake3",
  "include_dir",
  "odm-build",
+ "odm-dylib",
  "odm-ir",
  "odm-js",
  "odm-kernel",
@@ -2819,6 +2835,7 @@ dependencies = [
  "futures",
  "include_dir",
  "odm-build",
+ "odm-dylib",
  "odm-ir",
  "odm-js",
  "odm-kernel",
@@ -2833,6 +2850,7 @@ name = "odm-kernel"
 version = "0.1.0"
 dependencies = [
  "manifold-csg",
+ "odm-dylib",
  "odm-ir",
  "odm-store",
  "thiserror 2.0.19",
@@ -2852,6 +2870,7 @@ dependencies = [
  "bytemuck",
  "font8x8",
  "futures",
+ "odm-dylib",
  "odm-ir",
  "odm-kernel",
  "odm-store",
@@ -5102,6 +5121,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "odm-dylib",
  "odm-export",
 ]
 

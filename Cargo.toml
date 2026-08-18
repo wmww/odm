@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Not a member: cargo only passes -C prefer-dynamic (dynamic libstd) when a
+# dylib is built as a dependency, not as a requested root. As a member,
+# `cargo build --workspace` would build it with static libstd and every
+# consumer would fail with "cannot satisfy dependencies so `std` only shows
+# up once". It still builds as a path dep of odm and of the test binaries.
+exclude = ["crates/odm-dylib"]
 
 [workspace.package]
 edition = "2024"

@@ -1,0 +1,33 @@
+[package]
+name = "odm-dylib"
+version = "0.1.0"
+# Explicit (not .workspace = true): this crate is workspace-excluded, see the
+# root Cargo.toml.
+edition = "2024"
+license = "MIT"
+
+# Dev-only dynamic-link shim (bevy_dylib pattern): compiled as a Rust dylib,
+# it embeds the whole workspace stack once, so every binary that links it
+# (the odm bin under the default `dynamic` feature, integration-test binaries
+# via dev-deps) becomes a thin stub instead of re-embedding ~150-250 MB of
+# statically linked code per link. Never ship a binary linked against this —
+# install.sh builds with --no-default-features.
+[lib]
+crate-type = ["dylib"]
+doctest = false
+test = false
+
+[dependencies]
+odm-cli = { path = "../odm-cli" }
+odm-engine = { path = "../odm-engine" }
+odm-export = { path = "../odm-export" }
+# test-api-version matches what workspace-wide resolution enables via dev-deps
+# (odm-build's and odm-js's own tests). Without it, `cargo build -p odm` and
+# `cargo build --workspace` would resolve two different instantiations of these
+# crates — fatal with a dylib, whose deps/libodm_dylib.so path is unhashed, so
+# the two universes fight over one file and consumers hit "cannot satisfy
+# dependencies so `std` only shows up once".
+odm-build = { path = "../odm-build", features = ["test-api-version"] }
+odm-js = { path = "../odm-js", features = ["test-api-version"] }
+# ...and odm-web enables kernel wasm-uu, which workspace resolution unions in.
+odm-kernel = { path = "../odm-kernel", features = ["wasm-uu"] }

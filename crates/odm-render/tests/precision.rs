@@ -71,3 +71,6 @@ fn wire_projection_matches_near_and_far() {
     );
     assert!((near.depth - far.depth).abs() < 1e-6);
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

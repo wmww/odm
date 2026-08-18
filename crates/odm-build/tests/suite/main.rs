@@ -21,3 +21,6 @@ mod meta_extract;
 mod new_project;
 mod report;
 mod versions;
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

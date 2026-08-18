@@ -31,6 +31,7 @@ jsonschema = { version = "0.49.2", default-features = false }
 toml = "1.1.4"
 
 [dev-dependencies]
+odm-dylib = { path = "../odm-dylib" }  # thin test binaries: link the stack via one .so
 tempfile = "3"
 # Tests exercise the multi-version machinery via the test-only API version.
 odm-js = { path = "../odm-js", features = ["test-api-version"] }

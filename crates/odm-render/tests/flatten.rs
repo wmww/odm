@@ -93,3 +93,6 @@ fn mesh_as_root_rejected() {
     let mesh = store.put(Object::Mesh(tri_mesh(0.0).into()));
     assert!(matches!(flatten_scene(&store, mesh), Err(RenderError::BadScene(_))));
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

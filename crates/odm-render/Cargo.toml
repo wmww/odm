@@ -18,5 +18,6 @@ futures = "0.3"
 thiserror.workspace = true
 
 [dev-dependencies]
+odm-dylib = { path = "../odm-dylib" }  # thin test binaries: link the stack via one .so
 odm-kernel = { path = "../odm-kernel" }
 png = "0.18"

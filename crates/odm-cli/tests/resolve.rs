@@ -44,3 +44,6 @@ fn a_named_dir_is_never_walked_up_from() {
     let missing = proj.join("nope");
     assert!(project_dir(missing).is_err());
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

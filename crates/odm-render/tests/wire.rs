@@ -157,3 +157,6 @@ fn wires_are_wire_width_px_wide() {
         "wire measured {coverage:.2} px wide, expected {WIRE_WIDTH_PX}"
     );
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

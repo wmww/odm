@@ -45,3 +45,6 @@ fn store_rebuild_survives_far_from_origin() {
     let b = k.bounds(far).unwrap().unwrap();
     assert_eq!(b.min[0], 1e7 + 0.25, "translation must survive the store exactly");
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

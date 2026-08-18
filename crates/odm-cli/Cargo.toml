@@ -17,4 +17,5 @@ anyhow.workspace = true
 include_dir = "0.7"
 
 [dev-dependencies]
+odm-dylib = { path = "../odm-dylib" }  # thin test binaries: link the stack via one .so
 tempfile = "3"

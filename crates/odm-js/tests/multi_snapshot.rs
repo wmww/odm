@@ -163,3 +163,6 @@ fn snapshot_creation_during_builds_aborts() {
         builder.join().expect("builder thread panicked");
     });
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

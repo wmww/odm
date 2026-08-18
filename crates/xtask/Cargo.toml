@@ -17,4 +17,7 @@ test = false
 # For TEMPLATE_STAMP — the same compile-time content hash the exporter
 # checks, so a freshly built template always matches a freshly built odm.
 odm-export = { path = "../odm-export" }
+# xtask only ever runs under `cargo xtask`, so it can always link the stack
+# dynamically — a ~2MB relink instead of ~120MB static.
+odm-dylib = { path = "../odm-dylib" }
 anyhow.workspace = true

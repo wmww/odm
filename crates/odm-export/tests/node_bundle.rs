@@ -129,3 +129,6 @@ fn bundle_runs_in_node() {
         "node driver failed:\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
+
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;

@@ -8,7 +8,16 @@ license.workspace = true
 odm-cli = { path = "../odm-cli" }
 odm-engine = { path = "../odm-engine" }
 odm-export = { path = "../odm-export" }
+odm-dylib = { path = "../odm-dylib", optional = true }
 anyhow.workspace = true
+
+[features]
+# Dynamic linking by default: dev binaries are thin stubs over libodm_dylib.so
+# (found via the rpath in .cargo/config.toml, so target/debug/odm runs
+# standalone). Shipping builds must be self-contained — install.sh passes
+# --no-default-features.
+default = ["dynamic"]
+dynamic = ["dep:odm-dylib"]
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

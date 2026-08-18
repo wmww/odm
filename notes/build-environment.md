@@ -122,6 +122,43 @@ invocations orphans another ~200 MiB. Expect to re-run the sweep periodically.
 (A seeded target dir does *not* trip this: cargo kept every build script fresh
 across the copy.)
 
+## Dynamic linking in dev builds (crates/odm-dylib)
+
+Dev binaries link the workspace stack through one Rust dylib
+(bevy_dylib pattern): `crates/odm-dylib` is `crate-type = ["dylib"]`,
+re-exporting odm-cli/engine/export (+ build/js/kernel for feature parity).
+The odm bin pulls it via the default `dynamic` feature; heavy integration-test
+binaries and xtask via a plain dep + `use odm_dylib as _;`. Measured: `odm`
+245 MB → 0.1 MB, test binaries 139 MB → 2–4 MB, one 284 MB .so relinked only
+when workspace code changes; an odm-engine edit + `cargo build --workspace`
+writes ~0.4 GiB (was ~2.5 GiB pre-dylib at line-tables, ~4 GiB before that).
+Lib *unit*-test binaries stay static: they compile the crate itself under
+cfg(test), a second instantiation that can't dedupe against the dylib's copy.
+
+Hard-won constraints, in dependency order:
+
+- **odm-dylib is workspace-EXCLUDED** (root Cargo.toml `exclude`; its manifest
+  can't use `.workspace = true` inheritance because of that). Cargo only
+  passes `-C prefer-dynamic` (= dynamic libstd) when a dylib is built as a
+  *dependency*; built as a requested root (any `--workspace` build, were it a
+  member), it gets static libstd and every consumer fails with "cannot
+  satisfy dependencies so `std` only shows up once".
+- **A dylib's output path is unhashed** (`deps/libodm_dylib.so`), so feature
+  universes that were merely wasteful for rlibs are thrash (or, pre-exclusion,
+  that same std error) here. odm-dylib therefore mirrors what workspace-wide
+  resolution enables via dev-deps: `test-api-version` (odm-build's/odm-js's
+  own tests) and kernel `wasm-uu` (leaked by odm-web). Symptom of a new
+  mismatch: libodm_dylib.so relinks when alternating `-p` and `--workspace`
+  builds — mirror the new feature into odm-dylib's deps.
+- **Standalone runs need the rpath from crates/odm/build.rs** ($ORIGIN,
+  $ORIGIN/deps, and the toolchain libdir for libstd.so — linking any Rust
+  dylib forces libstd dynamic). `cargo run`/`cargo test` work regardless
+  (LD_LIBRARY_PATH). The dev binary is only relocatable together with its .so.
+- **Shipping stays static**: install.sh builds `-p odm --release
+  --no-default-features` (verified: no NEEDED beyond system libs). That is a
+  third feature universe; sweep-target.py enumerates it explicitly so a sweep
+  doesn't GC the installed flavor's artifacts.
+
 ## mold / sccache: installed, deliberately unused
 
 Both would force a full rebuild to adopt: `RUSTFLAGS` and `RUSTC_WRAPPER` are

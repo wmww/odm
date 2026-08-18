@@ -7,6 +7,9 @@
 //! clang + wasm-ld + libc++ headers (via wasm-cxx-shim). Rootless setups
 //! point WASM_CXX_SHIM_LIBCXX_HEADERS / WASM_CXX_SHIM_WASM_LD at them.
 
+// Link the workspace stack dynamically (see odm-dylib).
+use odm_dylib as _;
+
 use anyhow::{Context, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
