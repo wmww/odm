@@ -432,6 +432,14 @@ and *widens the scroll content*, poisoning `available_width` for every
 later row. Wanted later: nested/structured inputs (tree-mirrored or
 selection-contextual — undecided), and some way to bring sliders back.
 
+`examples/input-gallery` is the panel's fixture project: one input per
+control it can draw (every extension type, an enum on a non-string type,
+array/object/untyped inputs, presets, the `t` transport, and a cascade
+input declared only in `parts/`). Open it when changing this file;
+`examples::input_gallery_covers_every_control` guards the report side.
+Known gap it makes obvious: long values are clipped
+(issues/panel-clips-long-input-values).
+
 Controls come from the tab's
 fall-through report; interactions come back as `Event`s which
 `inputs::apply` folds into the tab's `set_args`/`set_cascade` (pure and

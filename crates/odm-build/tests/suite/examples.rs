@@ -2,7 +2,7 @@
 //! across engines, and behave (animation, composition) as documented.
 //! (Pixel goldens are CI/lavapipe-only and live with the render pipeline.)
 
-use odm_build::{BuildEngine, View};
+use odm_build::{BuildEngine, InputKind, View};
 use odm_kernel::Kernel;
 use odm_store::{Object, Store};
 use std::path::PathBuf;
@@ -45,6 +45,7 @@ fn example_scene_hashes_are_stable() {
         ("parametric-box", "3be3042ff294a6948f991fb1aff0a44065db34fdf8f7195c6af9e4b63947de75"),
         ("assembly", "b921962bd68306ff5b0fa9e4e444a5be5cec324a1245ebe40a1318918a7bf093"),
         ("piston", "13cf6f151978621e9c0f68d37b7aa3ed29a975aa82f9461ffa032e7211cd5db8"),
+        ("input-gallery", "6e6e9e160cefe7abee4220e420946752cae99a72ec9307b59ad7a0abc495b8a3"),
     ];
     let mut failures = vec![];
     for (name, want) in golden {
@@ -60,7 +61,7 @@ fn example_scene_hashes_are_stable() {
 
 #[test]
 fn all_examples_build_and_are_deterministic() {
-    for name in ["hello-bracket", "parametric-box", "assembly", "piston"] {
+    for name in ["hello-bracket", "parametric-box", "assembly", "piston", "input-gallery"] {
         let (_e1, r1) = build_example(name, 0.0);
         let (_e2, r2) = build_example(name, 0.0);
         assert_eq!(r1, r2, "{name}: fresh engines must agree on the scene hash");
@@ -156,4 +157,49 @@ fn parametric_box_partial_rebuild() {
     e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
     let builds_before = e.stats.builds.load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(builds_before, 2, "root.js + lip.js");
+}
+
+/// input-gallery is the input panel's coverage example: one input per
+/// control the panel can draw. Guards the *report* those controls are
+/// generated from — a check box, radios, every extension type, a cascade
+/// input that fell through from a part — and that it stays lint-clean.
+#[test]
+fn input_gallery_covers_every_control() {
+    let e = engine("input-gallery");
+    let sync = e.sync().unwrap();
+    let pass = e.start_pass(&sync, View::of("root.js"));
+    e.build_view(&pass).unwrap();
+    let report = e.input_report(&pass);
+    let entry = |name: &str| {
+        report
+            .inputs
+            .iter()
+            .find(|i| i.name == name)
+            .unwrap_or_else(|| panic!("no {name:?} in the report"))
+    };
+
+    assert_eq!(entry("windows").ty.as_deref(), Some("boolean"), "the check box");
+    assert!(entry("roof").choices.is_some(), "string radios");
+    assert!(entry("spacing").choices.is_some(), "numeric radios");
+    for ty in ["vector2", "vector3", "quaternion", "matrix4", "color"] {
+        assert!(
+            report.inputs.iter().any(|i| i.ty.as_deref() == Some(ty)),
+            "no {ty} input in the gallery"
+        );
+    }
+    assert!(entry("note").ty.is_none(), "note takes any JSON");
+    assert!(entry("hole").default.get("r").is_some(), "object input with properties");
+
+    // The transport: a ranged cascade number named t.
+    let t = entry("t");
+    assert_eq!(t.kind, InputKind::Cascade);
+    assert_eq!((t.minimum, t.maximum), (Some(0.0), Some(2.0)));
+
+    // Declared only in parts/, settable from the view anyway.
+    let detail = entry("detail");
+    assert_eq!(detail.kind, InputKind::Cascade);
+    assert_eq!(detail.declared_in, ["parts/chart.js", "parts/tower.js"]);
+
+    assert!(report.presets.len() >= 3, "presets are part of the panel");
+    assert!(report.warnings.is_empty() && report.errors.is_empty(), "{report:?}");
 }
