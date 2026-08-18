@@ -129,8 +129,10 @@ function fatal(message) {
 }
 
 async function boot() {
-  if (!navigator.gpu) {
-    fatal('This page needs WebGPU, which this browser does not offer.');
+  // wgpu picks WebGPU when navigator.gpu exists, WebGL2 otherwise (a scratch
+  // canvas probes it — the real canvas must stay context-free for wgpu).
+  if (!navigator.gpu && !document.createElement('canvas').getContext('webgl2')) {
+    fatal('This page needs WebGPU or WebGL2, and this browser offers neither.');
     return;
   }
   try {

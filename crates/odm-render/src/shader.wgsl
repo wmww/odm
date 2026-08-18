@@ -16,9 +16,15 @@ struct InstanceData {
 };
 @group(1) @binding(0) var<uniform> inst: InstanceData;
 
-// Depth peeling inputs (peel geometry + tail passes).
+// Depth peeling inputs (peel geometry + tail passes). Read through
+// comparison samplers, never textureLoad: WebGL2 can only read a depth
+// texture through depth-compare sampling (anything else is undefined
+// there, and naga's GLSL writer rejects textureLoad on depth outright).
 @group(2) @binding(0) var prev_peel: texture_depth_2d;
 @group(2) @binding(1) var opaque_depth: texture_depth_2d;
+// Nearest-filtered comparison samplers: LessEqual and GreaterEqual.
+@group(2) @binding(2) var peel_lte: sampler_comparison;
+@group(2) @binding(3) var peel_gte: sampler_comparison;
 
 // Fullscreen composite inputs.
 @group(3) @binding(0) var layer_tex: texture_2d<f32>;
@@ -151,12 +157,15 @@ fn fs_line_translucent(in: WireOut) -> @location(0) vec4<f32> {
 }
 
 // True where a translucent fragment was already composited (at or nearer
-// than the previous peel depth) or is hidden behind opaque geometry. Exact
-// equality is what collapses coplanar translucent surfaces into one layer.
+// than the previous peel depth) or is hidden behind opaque geometry. The
+// inclusive compares (LEQUAL/GEQUAL samplers) are what collapse coplanar
+// translucent surfaces into one layer.
 fn peeled_or_hidden(clip: vec4<f32>) -> bool {
-    let px = vec2<i32>(clip.xy);
-    return clip.z <= textureLoad(prev_peel, px, 0)
-        || clip.z >= textureLoad(opaque_depth, px, 0);
+    let uv = clip.xy / globals.viewport.xy;
+    // The Level form: implicit-derivative sampling would trip WGSL's
+    // uniform-control-flow analysis (|| short-circuits).
+    return textureSampleCompareLevel(prev_peel, peel_lte, uv, clip.z) > 0.5
+        || textureSampleCompareLevel(opaque_depth, peel_gte, uv, clip.z) > 0.5;
 }
 
 // Translucent mesh fragments, premultiplied. Used by both the per-layer peel
@@ -208,12 +217,21 @@ fn unpremultiply(c: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(c.rgb / c.a, c.a);
 }
 
+// The final target is plain Rgba8Unorm (no sRGB reinterpretation on the
+// WebGL2 lane), so the last write encodes sRGB itself — exact spec math,
+// same on every backend.
+fn srgb_encode(c: vec4<f32>) -> vec4<f32> {
+    let lo = c.rgb * 12.92;
+    let hi = 1.055 * pow(max(c.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.4)) - 0.055;
+    return vec4<f32>(select(hi, lo, c.rgb <= vec3<f32>(0.0031308)), c.a);
+}
+
 // Final compose: translucent accumulation over the opaque pass (both
 // premultiplied; the opaque target was cleared to the premultiplied
 // background), un-premultiplied for the sRGB target.
 @fragment
 fn fs_compose(in: FsQuad) -> @location(0) vec4<f32> {
-    return unpremultiply(compose_at(vec2<i32>(in.pos.xy)));
+    return srgb_encode(unpremultiply(compose_at(vec2<i32>(in.pos.xy))));
 }
 
 // Supersampled variant: same compose, kept premultiplied linear so the
@@ -234,5 +252,5 @@ fn fs_downsample(in: FsQuad) -> @location(0) vec4<f32> {
             sum += textureLoad(super_tex, vec2<i32>(base + vec2<u32>(x, y)), 0);
         }
     }
-    return unpremultiply(sum / f32(k * k));
+    return srgb_encode(unpremultiply(sum / f32(k * k)));
 }

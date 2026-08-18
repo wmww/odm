@@ -37,12 +37,16 @@ mod entry {
             .ok_or_else(|| JsValue::from_str("canvas element missing"))?
             .dyn_into::<web_sys::HtmlCanvasElement>()?;
 
-        // WebGPU only — same renderer of record as native, no fallback path.
+        // WebGPU when the browser offers it (same renderer of record as
+        // native), WebGL2 otherwise — wgpu picks at instance creation from
+        // `navigator.gpu`. The GL lane is why odm-render must stay within
+        // wgpu's downlevel/WebGL2 envelope (see odm-render/src/lib.rs).
         let mut options = eframe::WebOptions::default();
         if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) =
             &mut options.wgpu_options.wgpu_setup
         {
-            setup.instance_descriptor.backends = odm_render::wgpu::Backends::BROWSER_WEBGPU;
+            setup.instance_descriptor.backends =
+                odm_render::wgpu::Backends::BROWSER_WEBGPU | odm_render::wgpu::Backends::GL;
         }
 
         eframe::WebRunner::new()

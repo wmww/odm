@@ -4,6 +4,20 @@
 //! Conventions: Z-up, right-handed, meshes are indexed CCW triangles with
 //! positions only — flat normals come from screen-space derivatives in the
 //! fragment shader.
+//!
+//! CONSTRAINT: the web export runs this renderer on WebGL2 when the browser
+//! has no WebGPU (wgpu's GL backend), so everything here must stay inside
+//! wgpu's downlevel_webgl2 envelope: no compute or storage buffers, at most
+//! 4 bind groups (we use exactly 4), fill-only polygon mode, no
+//! Features:: requests, no texture view reinterpretation (VIEW_FORMATS —
+//! hence the explicit sRGB encode into a plain Rgba8Unorm final target),
+//! depth textures read ONLY through comparison samplers
+//! (`textureSampleCompareLevel`; `textureLoad`/plain sampling of depth is
+//! undefined on GL, and the non-Level form trips WGSL uniformity analysis
+//! under `||`), float render targets only where EXT_color_buffer_float
+//! reaches (Rgba16Float is fine). Anything richer needs a WebGL-side
+//! fallback or a conscious decision to drop that lane
+//! (notes/web-export.md).
 
 mod camera;
 mod flatten;

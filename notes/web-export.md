@@ -6,7 +6,41 @@ read side (viewport, tree, input panel, `t` transport, console, View menu)
 around a frozen generation, built client-side. No editing, no agent, no
 sockets. Verified interactive in Chromium (WebGPU/Vulkan): initial build,
 transport play, input edits → rebuilds, click-select, error + weld-failure
-paths all behave like the desktop.
+paths all behave like the desktop. The WebGL2 lane (below) verified
+headless: boot, build, full render matching the WebGPU lane.
+
+## Rendering backends: WebGPU preferred, WebGL2 fallback — POLICY
+
+The page requests `BROWSER_WEBGPU | GL`; wgpu picks WebGPU when
+`navigator.gpu` exists and WebGL2 otherwise (browsers only expose
+`navigator.gpu` in secure contexts — https or localhost — and Linux
+browsers still often ship it off, so the GL lane is what most shared links
+hit today). The app logs `ODM viewer: WebGPU/WebGL2 (<adapter>)` to the
+browser console at startup.
+
+Standing constraints this creates (also documented at the top of
+odm-render/src/lib.rs — keep both in sync):
+
+- **odm-render must stay inside wgpu's downlevel_webgl2 envelope.** No
+  compute/storage buffers, ≤4 bind groups (we use exactly 4), fill-only
+  polygon mode, no `Features::` requests, no texture view reinterpretation
+  (VIEW_FORMATS), depth textures readable ONLY via comparison samplers
+  (`textureSampleCompareLevel`; `textureLoad` on depth is undefined on GL
+  and naga rejects it — this is why peeled_or_hidden uses LEQUAL/GEQUAL
+  samplers), float targets only where EXT_color_buffer_float reaches
+  (Rgba16Float accum is fine). `textureSampleCompare` (implicit-LOD) also
+  trips WGSL uniformity analysis under `||` — use the Level form.
+- **The final target is plain Rgba8Unorm** with sRGB encoded explicitly in
+  fs_compose/fs_downsample (no sRGB view reinterpretation anywhere); egui
+  samples those gamma bytes directly, PNG readback gets them unchanged.
+- **Ship both backends.** Size is a non-argument: egui-wgpu's default
+  features compile both lanes anyway. Measured (bindgen'd wasm, release):
+  both 14.13 MB (4.84 MB gz); webgpu-only 10.72 MB (3.73 MB gz) — the GL
+  lane (wgpu-core/hal + naga's GLSL writer) is the ~3.4 MB; webgl-only
+  saves only ~0.2 MB over both. Dropping the fallback is the only real
+  size lever, and we're not taking it.
+- Renderer changes must be tested on BOTH lanes (recipe below); GL
+  failures are often silent black, not validation errors.
 
 Also in the viewer: File ▸ Export Web… (viewer/export.rs) browses for a
 destination and exports the *active tab's* view — path plus set args/cascade,
@@ -142,23 +176,35 @@ error paths (weld NotManifold diagnosis verified in-browser) are fine, but
 an unexpected Manifold-internal throw would be a wasm trap, not an error.
 `MANIFOLD_PAR=OFF` (main-thread MVP).
 
-## Testing an export
+## Testing an export (BOTH lanes)
 
 ```sh
 cargo xtask build-web-template
 cargo run -p odm -- export --web /tmp/site examples/piston
 (cd /tmp/site && python -m http.server 8742)
+# WebGPU lane:
 chromium --headless=new --no-sandbox --enable-unsafe-webgpu \
   --enable-features=Vulkan --use-angle=vulkan --window-size=1280,800 \
   --virtual-time-budget=20000 --screenshot=shot.png http://127.0.0.1:8742/
+# WebGL2 lane: copy the site and hide navigator.gpu before the scripts —
+#   <script>Object.defineProperty(Navigator.prototype,"gpu",{value:undefined});</script>
+# in index.html above the bundle.js tag, then (SwiftShader is fine):
+chromium --headless=new --no-sandbox --enable-unsafe-swiftshader \
+  --window-size=1280,800 --virtual-time-budget=20000 \
+  --screenshot=shot-gl.png http://127.0.0.1:8743/
+# --enable-logging=stderr shows the "ODM viewer: <lane>" console line.
 # interactive: gui-testing skill + windowed chromium (same flags) works
 ```
+
+Last cross-check (piston, 2026-08-17): 154 of 1,024,000 pixels differed
+>2/255 between lanes (edge AA between different rasterizers) — treat a
+bigger divergence as a bug.
 
 ## Not built (demand-driven, was phase 4)
 
 Worker split (builds off the main thread; the executor seam's cancel
 handle is a no-op on web until then), multiple exported tabs / presets as
-a scenes menu, WebGL2 fallback, size pass (wasm is ~14 MB release at
-opt-level 3 before any effort; kernel+core alone measured 497 KB in the
-spike — egui/wgpu dominate; try opt-level="s" + wasm-opt first),
-supersample control on the page, mobile/touch mapping.
+a scenes menu, size pass (wasm is ~14 MB release at opt-level 3 before
+any effort; kernel+core alone measured 497 KB in the spike — egui/wgpu
+dominate, see the backend-size table above; try opt-level="s" +
+wasm-opt first), supersample control on the page, mobile/touch mapping.

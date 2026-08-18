@@ -5,7 +5,11 @@ use odm_ir::Hash;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
-pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// Final target format. Non-sRGB on purpose: the compose/downsample shaders
+/// encode sRGB explicitly, so the texture holds gamma bytes that egui can
+/// sample directly and read_back can hand to PNG — no sRGB view
+/// reinterpretation, which the WebGL2 lane doesn't have (VIEW_FORMATS).
+pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Intermediate color targets (opaque, peel layer, accumulation): linear
 /// premultiplied, float so under-compositing doesn't quantize per layer.
@@ -82,6 +86,8 @@ pub struct Renderer {
     pipe_compose_premul: wgpu::RenderPipeline,
     pipe_downsample: wgpu::RenderPipeline,
     instance_stride: u64,
+    /// LessEqual / GreaterEqual comparison samplers for the peel depth reads.
+    peel_samplers: [wgpu::Sampler; 2],
     mesh_cache: HashMap<Hash, GpuMesh>,
     targets: Option<Targets>,
 }
@@ -126,9 +132,16 @@ impl Renderer {
             label: Some("instance"),
             entries: &[uniform_entry(0, true)],
         });
+        // Depth textures read via comparison samplers (LEQUAL "peeled yet?",
+        // GEQUAL "behind opaque?") — the only depth read WebGL2 defines.
         let peel_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("peel"),
-            entries: &[depth_entry(0), depth_entry(1)],
+            entries: &[
+                depth_entry(0),
+                depth_entry(1),
+                comparison_sampler_entry(2),
+                comparison_sampler_entry(3),
+            ],
         });
         let layer_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("layer"),
@@ -190,6 +203,20 @@ impl Renderer {
         let instance_stride =
             INSTANCE_SIZE.max(device.limits().min_uniform_buffer_offset_alignment as u64);
 
+        // Nearest filtering (the default) → each compare hits exactly the
+        // fragment's own texel.
+        let cmp_sampler = |label: &str, compare| {
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some(label),
+                compare: Some(compare),
+                ..Default::default()
+            })
+        };
+        let peel_samplers = [
+            cmp_sampler("peel-lte", wgpu::CompareFunction::LessEqual),
+            cmp_sampler("peel-gte", wgpu::CompareFunction::GreaterEqual),
+        ];
+
         Renderer {
             device,
             queue,
@@ -209,6 +236,7 @@ impl Renderer {
             pipe_compose_premul,
             pipe_downsample,
             instance_stride,
+            peel_samplers,
             mesh_cache: HashMap::new(),
             targets: None,
         }
@@ -291,6 +319,14 @@ impl Renderer {
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::TextureView(&opaque_depth),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.peel_samplers[0]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&self.peel_samplers[1]),
                     },
                 ],
             })
@@ -1011,6 +1047,15 @@ fn depth_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },
+        count: None,
+    }
+}
+
+fn comparison_sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
         count: None,
     }
 }

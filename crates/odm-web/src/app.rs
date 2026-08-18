@@ -18,6 +18,16 @@ impl WebApp {
     pub fn new(cc: &eframe::CreationContext<'_>, engine: WebEngine) -> WebApp {
         theme::install(&cc.egui_ctx);
         let rs = cc.wgpu_render_state.as_ref().expect("wgpu render state");
+        // Say which lane wgpu picked — parity questions start here.
+        let info = rs.adapter.get_info();
+        let lane = match info.backend {
+            odm_render::wgpu::Backend::BrowserWebGpu => "WebGPU",
+            _ => "WebGL2",
+        };
+        web_sys::console::info_1(&wasm_bindgen::JsValue::from_str(&format!(
+            "ODM viewer: {lane} ({})",
+            info.name
+        )));
         let renderer = Renderer::with_device(rs.device.clone(), rs.queue.clone());
 
         let mut tab = Tab::new("view".into(), engine.view.path.clone());

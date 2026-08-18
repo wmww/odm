@@ -9,10 +9,10 @@ use odm_render::wgpu;
 
 pub struct OffscreenTarget {
     size: [u32; 2],
+    /// One view for both the renderer and egui: the target is gamma-space
+    /// Rgba8Unorm (the shader encodes sRGB itself), which is exactly what
+    /// egui samples. Held so the texture stays alive for egui's sampling.
     target_view: wgpu::TextureView,
-    /// egui samples in gamma space: a non-sRGB view of the sRGB target. Held
-    /// so the texture stays alive for egui's sampling.
-    _egui_view: wgpu::TextureView,
     tex_id: egui::TextureId,
 }
 
@@ -40,34 +40,26 @@ impl OffscreenTarget {
             dimension: wgpu::TextureDimension::D2,
             format: odm_render::COLOR_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+            view_formats: &[],
         });
-        let egui_view = target.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(wgpu::TextureFormat::Rgba8Unorm),
-            ..Default::default()
-        });
+        let view = target.create_view(&Default::default());
 
         let mut egui_renderer = rs.renderer.write();
         let tex_id = match slot.take() {
             Some(old) => {
                 egui_renderer.update_egui_texture_from_wgpu_texture(
                     device,
-                    &egui_view,
+                    &view,
                     wgpu::FilterMode::Linear,
                     old.tex_id,
                 );
                 old.tex_id
             }
             None => {
-                egui_renderer.register_native_texture(device, &egui_view, wgpu::FilterMode::Linear)
+                egui_renderer.register_native_texture(device, &view, wgpu::FilterMode::Linear)
             }
         };
-        *slot = Some(OffscreenTarget {
-            size,
-            target_view: target.create_view(&Default::default()),
-            _egui_view: egui_view,
-            tex_id,
-        });
+        *slot = Some(OffscreenTarget { size, target_view: view, tex_id });
         true
     }
 

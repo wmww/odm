@@ -168,7 +168,10 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   registry's cross-thread dedup/cycle machinery is what makes that safe
   (`concurrent_same_pass_dedups`, `commands_overlap_an_in_flight_build`).
   Within one pass `get_or_build` still recurses inline.
-- `odm-render` — wgpu =29.0.4 (MUST track egui's pinned wgpu major);
+- `odm-render` — wgpu =29.0.4 (MUST track egui's pinned wgpu major).
+  MUST stay WebGL2/downlevel-compatible: the web export falls back to
+  wgpu's GL backend (constraint list at the top of odm-render/src/lib.rs;
+  policy + both-lane test recipe in notes/web-export.md);
   the single flattener `flatten_node` (color replace-wins inheritance,
   multiplicative opacity product into instance alpha, sRGB→linear — the
   only conversion in the system, world AABB, node ids for picking — engine
