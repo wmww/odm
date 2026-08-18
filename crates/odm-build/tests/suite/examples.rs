@@ -45,7 +45,7 @@ fn example_scene_hashes_are_stable() {
         ("parametric-box", "3be3042ff294a6948f991fb1aff0a44065db34fdf8f7195c6af9e4b63947de75"),
         ("assembly", "b921962bd68306ff5b0fa9e4e444a5be5cec324a1245ebe40a1318918a7bf093"),
         ("piston", "13cf6f151978621e9c0f68d37b7aa3ed29a975aa82f9461ffa032e7211cd5db8"),
-        ("input-gallery", "6e6e9e160cefe7abee4220e420946752cae99a72ec9307b59ad7a0abc495b8a3"),
+        ("input-gallery", "904eefa21a4256d29a210593525099962469863c65fdffded4084ca5293520f7"),
     ];
     let mut failures = vec![];
     for (name, want) in golden {
@@ -192,6 +192,35 @@ fn input_gallery_covers_every_control() {
     assert!(entry("note").ty().is_none(), "note takes any JSON");
     assert!(entry("hole").default.get("r").is_some(), "object input with properties");
 
+    // The report carries the full schema — how the panel renders structure
+    // and how the agent learns an input's element shape.
+    assert_eq!(entry("bars").schema["items"]["type"], serde_json::json!("number"));
+    let hole_at = &entry("hole").schema["properties"]["at"];
+    assert_eq!(hole_at["type"], serde_json::json!("vector3"), "ext type at depth");
+    assert_eq!(hole_at["default"], serde_json::json!([68, -28, 0]), "nested default");
+    assert_eq!(
+        entry("hole").default.get("at"),
+        Some(&serde_json::json!([68, -28, 0])),
+        "nested defaults are applied into the declared default"
+    );
+
+    // The headline structure exhibit: an array of union-shaped objects
+    // (vector3 two levels down — arbitrary depth, demonstrated).
+    let objects = entry("objects");
+    let items = &objects.schema["items"];
+    assert_eq!(items["properties"]["position"]["type"], serde_json::json!("vector3"));
+    let shape = &items["properties"]["shape"];
+    assert!(shape["variants"]["box"].is_object() && shape["variants"]["sphere"].is_object());
+    assert_eq!(
+        objects.default[0]["shape"],
+        serde_json::json!({ "kind": "box", "size": [8, 8, 8] }),
+        "union defaults fill through the element default"
+    );
+
+    // The map exhibit.
+    let anchors = entry("anchors");
+    assert_eq!(anchors.schema["additionalProperties"]["type"], serde_json::json!("vector3"));
+
     // The transport: a ranged cascade number named t.
     let t = entry("t");
     assert_eq!(t.kind, InputKind::Cascade);
@@ -204,4 +233,27 @@ fn input_gallery_covers_every_control() {
 
     assert!(report.presets.len() >= 3, "presets are part of the panel");
     assert!(report.warnings.is_empty() && report.errors.is_empty(), "{report:?}");
+}
+
+/// The per-element-invoke memo pattern: editing one `objects` element
+/// rebuilds root.js and that one marker; every other marker memo-hits.
+#[test]
+fn input_gallery_object_edits_memo_hit_the_rest() {
+    let e = engine("input-gallery");
+    let sync = e.sync().unwrap();
+    e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap();
+    let before = e.stats.builds.load(std::sync::atomic::Ordering::Relaxed);
+
+    // Move the first object; the second element stays byte-identical.
+    let mut view = View::of("root.js");
+    view.args.insert(
+        "objects".into(),
+        serde_json::json!([
+            { "position": [30, -8, 12] },
+            { "position": [52, -8, 5], "shape": { "kind": "sphere" } },
+        ]),
+    );
+    e.build_view(&e.start_pass(&sync, view)).unwrap();
+    let after = e.stats.builds.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(after - before, 2, "root.js + the one moved marker");
 }

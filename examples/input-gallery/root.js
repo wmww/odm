@@ -46,6 +46,36 @@ export const meta = {
     label: { type: 'string', default: 'gallery', description: 'name of the root node' },
     note: { default: null, description: 'no type declared: any JSON at all, logged at build' },
 
+    // --- Structure: a growable object list (array of union-shaped objects,
+    // one parts/marker.js invoke per element) and a string-keyed map ---
+    objects: {
+      type: 'array',
+      default: [
+        { position: [30, -8, 4] },
+        { position: [52, -8, 5], shape: { kind: 'sphere' } },
+      ],
+      items: {
+        type: 'object',
+        properties: {
+          position: { type: 'vector3', default: [0, -8, 4] },
+          shape: {
+            variants: {
+              box: { properties: { size: { type: 'vector3', default: [8, 8, 8] } } },
+              sphere: { properties: { radius: { type: 'number', default: 5, minimum: 0.5 } } },
+            },
+            default: { kind: 'box' },
+          },
+        },
+      },
+      description: 'editable object list; each element is one marker invoke',
+    },
+    anchors: {
+      type: 'object',
+      additionalProperties: { type: 'vector3' },
+      default: { ne: [85, 40, 3], nw: [-85, 40, 3] },
+      description: 'named positions: a string-keyed map, one ball each',
+    },
+
     // --- Check box ---
     windows: { type: 'boolean', default: true, description: 'cut windows in the tower' },
 
@@ -60,7 +90,7 @@ export const meta = {
   },
   presets: {
     showy: { roof: 'domed', windows: true, tint: '#c05746', bars: [4, 18, 9, 22, 13, 7], columns: 7, spacing: 6, beam: 5, t: 0.5 },
-    bare: { roof: 'flat', windows: false, columns: 1, bars: [8], thickness: 2, hole: { r: 2, depth: 12 } },
+    bare: { roof: 'flat', windows: false, columns: 1, bars: [8], thickness: 2, hole: { r: 2, depth: 12 }, objects: [], anchors: {} },
     askew: {
       tilt: [0.3827, 0, 0, 0.9239],
       placement: [0.7071, 0.7071, 0, 0, -0.7071, 0.7071, 0, 0, 0, 0, 1, 0, 0, -28, 14, 1],
@@ -142,5 +172,24 @@ export default function build(ctx) {
     .color('#f2e8cf')
     .name('beacon');
 
-  return odm.group(base, tower, chart, pins, rotor, gizmo, plaque, beacon).name(ctx.input('label'));
+  // The object list: one marker invoke per element, so editing one element
+  // rebuilds one marker and memo-hits the rest.
+  const objects = odm
+    .group(ctx.input('objects').map((o, i) => ctx.invoke('parts/marker.js', o).name(`object-${i}`)))
+    .color('#7f9c96')
+    .name('objects');
+
+  // The anchor map: one ball per named position.
+  const anchors = odm
+    .group(
+      Object.entries(ctx.input('anchors')).map(([key, at]) =>
+        odm.sphere(2.5, { segments: 24 }).translate(at.x, at.y, at.z).name(key),
+      ),
+    )
+    .color('#d8b4e2')
+    .name('anchors');
+
+  return odm
+    .group(base, tower, chart, pins, rotor, gizmo, plaque, beacon, objects, anchors)
+    .name(ctx.input('label'));
 }

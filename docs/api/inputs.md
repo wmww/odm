@@ -45,11 +45,15 @@ silently downstream.
 
 An input entry is a JSON Schema in a strict profile: `type`, `enum`,
 `default`, `description`, `minimum`/`maximum`, `items` (arrays),
-`properties`/`required` (objects) — plus the ODM key `cascade`. Unknown
-keys are rejected. `type` may be omitted (any JSON value). `default`
-has real semantics (it is applied, not just documented). The engine
-validates every value at invoke and view boundaries against the
-declared schema.
+`properties`/`required` (objects), `additionalProperties` (maps),
+`variants`/`tag` (tagged unions) — plus the ODM key `cascade`. Unknown
+keys are rejected. `type` may be omitted (any JSON value). The grammar
+is recursive: a nested schema at any depth is this same grammar, minus
+`cascade` (which names a resolution channel, not a shape) and minus
+`type: 'solid'` (an opaque handle with no authorable value — top level
+only). `default` has real semantics (it is applied, not just
+documented). The engine validates every value at invoke and view
+boundaries against the declared schema.
 
 Beyond the JSON types, `type` can name an ODM extension type:
 
@@ -64,10 +68,11 @@ Beyond the JSON types, `type` can name an ODM extension type:
 
 Senders may pass THREE instances or the JSON form; values are
 normalized to the wire form at the boundary (so hashing and
-memoization only ever see canonical JSON). A `solid` input cannot have
-a `default` (and therefore cannot cascade). Extension types also drive
-the viewer's typed controls (vector/quaternion component rows, a matrix
-grid; a color picker is still wanted).
+memoization only ever see canonical JSON), at any depth. A `solid`
+input cannot have a `default` (and therefore cannot cascade).
+Extension types also drive the viewer's typed controls
+(vector/quaternion component rows, a matrix grid; a color picker is
+still wanted).
 
 ```js
 //! odm unstable
@@ -79,6 +84,102 @@ export const meta = {
 export default function build(ctx) {
   const off = ctx.input('offset'); // a real THREE.Vector3
   return odm.box(5).translate(off.x, off.y, off.z);
+}
+```
+
+## Structured inputs
+
+Schemas nest to arbitrary depth, and the viewer's panel renders the
+structure as real controls — object properties as labelled rows,
+arrays and maps with Add/remove, unions as a choice — while the CLI
+keeps setting whole JSON values (`{"inputs": {"objects": [...]}}`).
+`odm inspect '{"fields": ["inputs"]}'` reports each input's full
+`schema`, which is how you learn an element's shape.
+
+`default` nests too, with two meanings:
+
+- An **object property's** `default` is *applied*: an absent property
+  is filled in at normalization, so the build, memo identity, and the
+  panel all see the same filled value.
+- An **array's** `items.default` is the *new-element template* (absent
+  elements don't exist to fill); it seeds the panel's Add button.
+
+The worked pattern — a scene as an editable object list, one invoke
+per element so editing one object rebuilds one part and memo-hits the
+rest (`"stats": true` shows it):
+
+```js
+//! odm unstable
+export const meta = {
+  inputs: {
+    objects: {
+      type: 'array',
+      default: [],
+      items: {
+        type: 'object',
+        properties: {
+          position: { type: 'vector3', default: [0, 0, 0] },
+          shape: {
+            variants: {
+              box: { properties: { size: { type: 'vector3', default: [10, 10, 10] } } },
+              sphere: { properties: { radius: { type: 'number', default: 5 } } },
+            },
+            default: { kind: 'box' },
+          },
+        },
+      },
+    },
+  },
+};
+export default function build(ctx) {
+  return odm.group(
+    ctx.input('objects').map((o, i) =>
+      ctx.invoke('parts/marker.js', { position: o.position, shape: o.shape }).name(`object-${i}`),
+    ),
+  );
+}
+```
+
+`ctx.input` hydrates through the structure: `o.position` above is a
+real `THREE.Vector3`.
+
+### Tagged unions (`variants`)
+
+A union declares one shape per variant, selected by a tag property in
+the value (`kind` by default; rename it with `tag: '<name>'`). The
+wire form is internally tagged — `{ kind: 'box', size: [...] }` — so
+variant bodies are object schemas (`properties`/`required`). A union's
+`default` must carry a tag; the declared defaults of that variant fill
+in the rest. In the panel the tag renders as a choice, and switching
+variants replaces the subtree with the new variant's template — keep
+fields shared between variants (like `position` above) *outside* the
+union, on the enclosing object, so they survive a switch.
+
+### String-keyed maps (`additionalProperties`)
+
+`additionalProperties: <schema>` on `type: 'object'` declares a map —
+arbitrary string keys, one value schema — and excludes
+`properties`/`required` (a map has no fixed keys). Key order does not
+matter for identity; the panel shows entries key-sorted, with an
+editable key column.
+
+```js
+//! odm unstable
+export const meta = {
+  inputs: {
+    anchors: {
+      type: 'object',
+      default: { lid: [0, 0, 20] },
+      additionalProperties: { type: 'vector3' },
+    },
+  },
+};
+export default function build(ctx) {
+  return odm.group(
+    Object.entries(ctx.input('anchors')).map(([key, at]) =>
+      odm.sphere(2).translate(at.x, at.y, at.z).name(key),
+    ),
+  );
 }
 ```
 
