@@ -23,8 +23,20 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   cascade?)`.
   Extension types (solid/vector2/vector3/quaternion/matrix4/color) are
   canonical JSON on the wire, hydrated to THREE instances by ctx.input.
+  Schemas are recursive (2026-08-17, was plans/structured-inputs.md):
+  ext types at any depth (solid top-level-only), nested `default`s
+  *applied* — an absent object property with a default is filled at
+  normalization; an array `items.default` is the panel's new-element
+  template (`meta::synthesize`) — plus `variants`/`tag` tagged unions
+  (internally tagged wire form, if/then desugar, own error for a bad
+  tag) and `additionalProperties` maps. `ctx.input` hydrates by walking
+  the declared schema (decls carry the whole schema). Cascade values
+  are not normalized into the env (memo identity keeps the raw form);
+  the JS-side hydrate walk fills their nested defaults so both channels
+  read the same.
   Validation at every boundary via the `jsonschema` crate; unknown
-  args/schema keys/input names are errors.
+  args/schema keys/input names are errors, and nested value errors name
+  the path (`at /0/position`).
 - The `//!` comment block doubles as prose description (summary line +
   body), parsed at sync time without evaluating the module.
 - `.odm/` is engine-owned (socket `.odm/engine.sock`, `renders/`,
@@ -147,7 +159,10 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (`BuildEngine::meta`, extraction via `extract_export`); `report.rs` =
   post-build input report walked from memo entries: ONE flat list of
   everything view-settable (target's plain inputs + fall-through cascade
-  names, each entry carrying `kind`), winning declarations, lints
+  names, each entry carrying `kind` and the winning declaration's full
+  `schema` — flat type/range/choices fields are derived methods; `to_json`
+  prints the schema, so `odm inspect` shows element shapes), winning
+  declarations, lints
   (conflicting defaults/types, unread cascade values, plain-shadows-cascade)
   — the input panel's data source and the input-name typo check
   (`check_input_names`); `declared_entries` is the failure-path subset
@@ -439,8 +454,35 @@ value. Per type:
   x/y/z/w letter; matrix4 → a 4x4 grid of bare fields (sixteen adjusters
   is too much), laid out **as the matrix reads** (row r, column c =
   element `c * 4 + r`) over the column-major wire form.
-- everything else (arrays, objects, strings, untyped) → one full-width
-  JSON-ish text field. Numbers show rounded to 4 decimals.
+- **structure recurses** (2026-08-17, was plans/structured-inputs.md):
+  `object`+`properties` → one labelled sub-block per property (the
+  top-level block shape, indented `INDENT`=10px per level; bools keep
+  the box-beside-label row); `array`+`items` → per-element rows
+  (single-row leaves inline beside the index label, structured elements
+  as an indented block) each with a `theme::remove_button` ×, plus Add
+  (new element = `odm_build::synthesize(items)` — items.default, else
+  nested defaults/type-blanks/required fills); `variants` unions → tag
+  as radio rows, the active variant's properties beneath, switching
+  replaces the subtree with `synthesize_variant` (shared fields belong
+  outside the union); `object`+`additionalProperties` maps → the array
+  control with an editable key column (key-sorted display; rename =
+  remove+insert, empty/duplicate discards; Add picks `new`/`new-2`/…
+  and focuses the key field). Anything unrenderable (untyped, `object`
+  with neither properties nor additionalProperties, array without
+  items) → the JSON text field for that subtree.
+- Numbers show rounded to 4 decimals.
+
+Addressing: a leaf is `inputs::Field { section, name, path, slot }` —
+`path` = `Vec<Seg>` (`Key`/`Index`) from the input root, `slot` =
+`Component(i)` (vectors/matrices spread one leaf over fields) or
+`MapKey`. Widget ids carry the path. **Events stay whole-value**:
+`Event::Set(section, name, value)` splices the leaf edit into a clone
+of the shown top value (`splice` creates intermediate containers), so
+pin/reset/`set_or_clear`/persistence are untouched and comparison stays
+whole-value — growing an array pins it, shrinking back to the default
+clears. Shown leaf value = navigate the top value by path, else
+`synthesize(node schema)` (nested default, else type-blank). Reset
+stays one button per top-level input.
 
 A text field **commits on losing focus**, not just on Enter — clicking
 away applies what you typed; only Escape discards (egui's own
@@ -463,13 +505,20 @@ ranged cascade number). The one special case is the Play/Stop button
 parked at the right end of its row; `Viewer::advance_transport` still
 drives it at 1 unit/sec, looping.
 
-Wanted later: nested/structured inputs (plans/structured-inputs.md), a
-color swatch/picker.
+Wanted later: a color swatch/picker; element reorder buttons and
+per-path reset; selection↔panel linking (authored provenance tags
+mapping scene nodes → input paths, needs an IR field + FORMAT_VERSION
+bump — wait for demonstrated need); doohickey-typed inputs (`items`
+referencing another file's declared inputs would de-duplicate the
+gallery's marker schema and make a real scene composer).
 
 `examples/input-gallery` is the panel's fixture project: one input per
 control it can draw (every extension type, an enum on a non-string type,
-array/object/untyped inputs, presets, the `t` transport, and a cascade
-input declared only in `parts/`). Open it when changing this file;
+array/object/map/union/untyped inputs, presets, the `t` transport, a
+cascade input declared only in `parts/`, and the headline `objects`
+array — one `parts/marker.js` invoke per element, so editing one
+element memo-hits the rest; `input_gallery_object_edits_memo_hit_the_rest`
+guards the pattern). Open it when changing this file;
 `examples::input_gallery_covers_every_control` guards the report side.
 Known gap it makes obvious: long values still clip in matrix cells and
 in the array/object text fields (issues/panel-clips-long-input-values).

@@ -94,9 +94,13 @@ export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('
 ```
 
 - Entries are strict-profile JSON Schemas (`type`, `enum`, `default`,
-  `description`, `minimum`/`maximum`, `items`, `properties`/`required`)
+  `description`, `minimum`/`maximum`, `items`, `properties`/`required`,
+  `additionalProperties` for maps, `variants` for tagged unions)
   plus ODM types `solid`, `vector2/3`, `quaternion`, `matrix4`,
   `color` (hydrated to real THREE values). No `default` = required.
+  Schemas nest to any depth and the viewer renders the structure as
+  real controls (arrays grow with an Add button) — see `odm docs
+  inputs` for nested defaults, unions, and maps.
 - **Plain inputs** come from the immediate caller (invoke args, or the
   view's `inputs`). Declaring `cascade: true` (default mandatory)
   instead makes an input deep inside a model settable from anywhere

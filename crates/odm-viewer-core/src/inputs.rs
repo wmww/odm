@@ -543,10 +543,13 @@ impl Cx<'_> {
             }
             NodeKind::MapOf(values) => {
                 let values = values.clone();
-                // serde_json's Map is key-sorted; the panel shows entries in
-                // that (identity) order.
+                // Identity is unordered (canonical hashing sorts keys); the
+                // panel shows entries key-sorted so a rename lands somewhere
+                // predictable.
                 let map = self.at(schema, path).as_object().cloned().unwrap_or_default();
-                for k in map.keys() {
+                let mut keys: Vec<String> = map.keys().cloned().collect();
+                keys.sort();
+                for k in &keys {
                     let mut p = path.clone();
                     p.push(Seg::Key(k.clone()));
                     let rect = self.row(ui, indent);
