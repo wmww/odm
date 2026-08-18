@@ -1,5 +1,6 @@
 //! The menu bar: what is on it, and what picking an item does.
 
+use super::export::ExportDialog;
 use super::new::NewDialog;
 use super::open::OpenDialog;
 use super::{Dialog, ViewerApp};
@@ -12,6 +13,7 @@ use eframe::egui;
 pub enum Action {
     New,
     Open,
+    ExportWeb,
     Quit,
     Frame,
     Wireframe,
@@ -23,16 +25,18 @@ pub enum Action {
 pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
     let mut action = None;
     theme::menu_bar(ui, |ui| {
-        action = action.or(theme::menu(
-            ui,
-            "File",
-            &[
-                MenuEntry::item(Action::New, "New Project…"),
-                MenuEntry::item(Action::Open, "Open Project…"),
-                MenuEntry::separator(),
-                MenuEntry::item(Action::Quit, "Exit"),
-            ],
-        ));
+        let mut file = vec![
+            MenuEntry::item(Action::New, "New Project…"),
+            MenuEntry::item(Action::Open, "Open Project…"),
+        ];
+        // Nothing to export without a project.
+        if app.session.is_some() {
+            file.push(MenuEntry::separator());
+            file.push(MenuEntry::item(Action::ExportWeb, "Export Web…"));
+        }
+        file.push(MenuEntry::separator());
+        file.push(MenuEntry::item(Action::Quit, "Exit"));
+        action = action.or(theme::menu(ui, "File", &file));
         // Nothing to look at without a project, so nothing to say about how.
         if app.session.is_some() {
             // F does both jobs; the label says which one it will do now.
@@ -74,6 +78,20 @@ fn apply(app: &mut ViewerApp, action: Action) {
                 Some(state) => OpenDialog::new(state.project()),
                 None => OpenDialog::browse(&super::cwd()),
             }))
+        }
+        // The site opens on what the viewer is showing: the active tab's view.
+        Action::ExportWeb => {
+            if let Some(state) = &app.session {
+                let view = match app.tabs.get(app.active) {
+                    Some(tab) => tab.view(),
+                    None => odm_build::View::of(odm_build::DEFAULT_ROOT),
+                };
+                app.dialog = Some(Dialog::Export(ExportDialog::new(
+                    state.project(),
+                    view,
+                    app.sessions.env(),
+                )));
+            }
         }
         Action::Quit => app.quit.request(),
         Action::Frame => app.frame_scene(),

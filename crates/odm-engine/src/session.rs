@@ -54,6 +54,13 @@ impl Sessions {
         self.current.lock().unwrap().clone()
     }
 
+    /// The process's one V8 snapshot, for anything else that must run JS
+    /// (web export's meta extraction) — making a second would abort, as
+    /// `JsEnv::new` says.
+    pub fn env(&self) -> Arc<JsEnv> {
+        self.env.clone()
+    }
+
     /// Register the viewer's repaint hook, now and for every project after.
     pub fn set_wake(&self, wake: Arc<dyn Fn() + Send + Sync>) {
         if let Some(state) = self.current() {

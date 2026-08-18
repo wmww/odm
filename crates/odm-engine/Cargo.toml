@@ -16,6 +16,7 @@ odm-store = { path = "../odm-store" }
 odm-kernel = { path = "../odm-kernel" }
 odm-js = { path = "../odm-js" }
 odm-build = { path = "../odm-build" }
+odm-export = { path = "../odm-export" }
 odm-prompt = { path = "../odm-prompt" }
 odm-render = { path = "../odm-render" }
 odm-viewer-core = { path = "../odm-viewer-core" }

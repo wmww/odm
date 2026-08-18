@@ -13,6 +13,7 @@ pub mod template;
 mod transform;
 
 use odm_build::{ApiVersion, EXTRACT_TIMEOUT, Executor};
+pub use odm_build::View;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
@@ -30,7 +31,7 @@ pub const TEMPLATE_NAME: &str = "web-template.bin";
 
 pub struct ExportOptions {
     /// The view the page opens with; default `root.js` with no inputs.
-    pub view_path: Option<String>,
+    pub view: Option<View>,
     /// Explicit template file (`--template`); overrides the lookup.
     pub template: Option<PathBuf>,
     /// Skip the stamp check (`--force`).
@@ -39,7 +40,7 @@ pub struct ExportOptions {
 
 impl Default for ExportOptions {
     fn default() -> ExportOptions {
-        ExportOptions { view_path: None, template: None, force: false }
+        ExportOptions { view: None, template: None, force: false }
     }
 }
 
@@ -54,22 +55,35 @@ pub fn export_web(
     out: &Path,
     opts: &ExportOptions,
 ) -> Result<ExportReport, String> {
+    // Meta extraction needs the real executor (metas are computed by JS).
+    let env = odm_js::JsEnv::new().map_err(|e| format!("js snapshot: {e}"))?;
+    export_web_with_env(project, out, opts, &env)
+}
+
+/// `export_web` for hosts that already run V8 (the viewer): the snapshot is a
+/// once-per-process job, and creating another while any thread executes JS
+/// aborts the process — so such a host must pass its own.
+pub fn export_web_with_env(
+    project: &Path,
+    out: &Path,
+    opts: &ExportOptions,
+    env: &odm_js::JsEnv,
+) -> Result<ExportReport, String> {
     let snapshot = odm_build::scan_project(project).map_err(|e| format!("scan: {e}"))?;
     let template_path = find_template(opts)?;
     let template = load_template(&template_path, opts.force)?;
 
     let mut warnings = Vec::new();
-    let view_path = opts.view_path.clone().unwrap_or_else(|| odm_build::DEFAULT_ROOT.to_string());
-    if !snapshot.sources.contains_key(&view_path) {
+    let view = opts.view.clone().unwrap_or_else(|| View::of(odm_build::DEFAULT_ROOT));
+    if !snapshot.sources.contains_key(&view.path) {
         warnings.push(format!(
-            "{view_path} does not exist — the exported page will show that error"
+            "{} does not exist — the exported page will show that error",
+            view.path
         ));
     }
 
-    // Meta extraction needs the real executor (metas are computed by JS).
     let store = odm_store::Store::new();
     let kernel = odm_kernel::Kernel::new(store.clone());
-    let env = odm_js::JsEnv::new().map_err(|e| format!("js snapshot: {e}"))?;
 
     let mut files = Map::new();
     for (path, source) in &snapshot.sources {
@@ -120,7 +134,7 @@ pub fn export_web(
     let manifest = json!({
         "stamp": TEMPLATE_STAMP,
         "name": name,
-        "view": { "path": view_path, "args": {}, "cascade": {} },
+        "view": { "path": view.path, "args": view.args, "cascade": view.cascade },
         "files": files,
     });
 

@@ -2786,6 +2786,7 @@ dependencies = [
  "eframe",
  "notify",
  "odm-build",
+ "odm-export",
  "odm-ir",
  "odm-js",
  "odm-kernel",

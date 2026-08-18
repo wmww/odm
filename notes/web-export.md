@@ -8,6 +8,16 @@ sockets. Verified interactive in Chromium (WebGPU/Vulkan): initial build,
 transport play, input edits → rebuilds, click-select, error + weld-failure
 paths all behave like the desktop.
 
+Also in the viewer: File ▸ Export Web… (viewer/export.rs) browses for a
+destination and exports the *active tab's* view — path plus set args/cascade,
+which `ExportOptions.view` (a full `odm_build::View`) now carries into the
+manifest; the CLI's `--view` is just `View::of(path)`. The dialog runs the
+export on a background thread (meta extraction can block 10s per broken
+file) and passes the process's one `JsEnv` via `export_web_with_env` —
+`JsEnv::new` aborts the process if another thread is executing JS. It
+refuses a destination inside a project (the site's .js files would be
+scanned as doohickeys).
+
 ## Shape
 
 Two halves with different lifecycles:

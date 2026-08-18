@@ -6,6 +6,7 @@
 mod activity;
 mod agent;
 mod browse;
+mod export;
 mod idle;
 mod menu;
 mod new;
@@ -90,6 +91,7 @@ impl Engine for EngineState {
 enum Dialog {
     Open(open::OpenDialog),
     New(new::NewDialog),
+    Export(export::ExportDialog),
     AgentFiles(agent::AgentDialog),
 }
 
@@ -729,6 +731,11 @@ impl ViewerApp {
                         self.dialog = Some(Dialog::Open(open));
                     }
                 }
+            },
+            // Self-contained: the dialog runs the export itself, off-thread.
+            Some(Dialog::Export(mut dialog)) => match dialog.ui(ctx) {
+                export::Outcome::Idle => self.dialog = Some(Dialog::Export(dialog)),
+                export::Outcome::Closed => {}
             },
             Some(Dialog::AgentFiles(mut dialog)) => match dialog.ui(ctx) {
                 agent::Outcome::Idle => self.dialog = Some(Dialog::AgentFiles(dialog)),

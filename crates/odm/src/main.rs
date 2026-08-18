@@ -88,9 +88,9 @@ fn export_site(args: &[String]) -> anyhow::Result<i32> {
                 ));
             }
             "--view" => {
-                opts.view_path = Some(
+                opts.view = Some(odm_export::View::of(
                     it.next().ok_or_else(|| anyhow::anyhow!("--view takes a doohickey path"))?.clone(),
-                );
+                ));
             }
             "--template" => {
                 opts.template = Some(PathBuf::from(
