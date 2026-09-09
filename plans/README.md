@@ -14,6 +14,10 @@ discussions that followed. Cross-references note where plans touch.
   inline links (era hypertext, not buttons): a file opens a tab, a node
   selects in that path's tab. Spans on the action transcript entries,
   resolved on click through `scene::locate`.
+- `sweep.md` — `odm.sweep(profile, path, opts)`: Manifold extrude +
+  `warp` over JS-computed parallel-transport frames (mitered corners,
+  `up` hint), 3D curve classes exported from the THREE subset. Resolves
+  issues/no-sweep-along-3d-path.md.
 Done and deleted: `structured-inputs.md` (executed 2026-08-17 —
 arbitrary-depth input schemas, unions, maps, the recursive panel; see
 notes/architecture.md "Input panel" and docs/api/inputs.md);
