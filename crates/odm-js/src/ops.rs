@@ -116,6 +116,18 @@ pub fn op_solid_revolve(
 
 #[op2]
 #[string]
+pub fn op_solid_sweep(
+    state: &mut OpState,
+    #[serde] polygons: Vec<Vec<[f64; 2]>>,
+    #[serde] frames: Vec<[f64; 12]>,
+) -> Result<String, JsErrorBox> {
+    let s = sess(state);
+    let h = s.kernel.sweep(&polygons, &frames).map_err(kerr)?;
+    Ok(h.to_hex())
+}
+
+#[op2]
+#[string]
 pub fn op_solid_from_mesh(
     state: &mut OpState,
     #[buffer] positions: &[f64],
@@ -343,6 +355,7 @@ deno_core::extension!(
         op_solid_sphere,
         op_solid_extrude,
         op_solid_revolve,
+        op_solid_sweep,
         op_solid_from_mesh,
         op_boolean,
         op_hull,

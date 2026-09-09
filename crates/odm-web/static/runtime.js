@@ -48,6 +48,8 @@ const opsGlue = {
   op_solid_extrude: (polys, h, slices, twistDeg, scaleTop) =>
     wasm.op_solid_extrude(JSON.stringify(polys), h, slices, twistDeg, f64(scaleTop)),
   op_solid_revolve: (polys, seg, deg) => wasm.op_solid_revolve(JSON.stringify(polys), seg, deg),
+  op_solid_sweep: (polys, frames) =>
+    wasm.op_solid_sweep(JSON.stringify(polys), JSON.stringify(frames)),
   op_solid_from_mesh: (positions, indices) => wasm.op_solid_from_mesh(f64(positions), u32(indices)),
   op_boolean: (kind, operands) => wasm.op_boolean(kind, JSON.stringify(operands)),
   op_hull: (operands) => wasm.op_hull(JSON.stringify(operands)),

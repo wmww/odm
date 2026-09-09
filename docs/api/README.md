@@ -7,7 +7,7 @@ case.
 | Topic | Covers |
 | --- | --- |
 | [doohickeys.md](doohickeys.md) | The file model, `build(ctx)`, return values, sandbox, console |
-| [solids.md](solids.md) | `box`, `cylinder`, `sphere`, `extrude`, `revolve`, `fromThreeGeometry`, 2D profiles |
+| [solids.md](solids.md) | `box`, `cylinder`, `sphere`, `extrude`, `revolve`, `sweep`, `fromThreeGeometry`, 2D profiles |
 | [transforms.md](transforms.md) | `translate`/`rotate*`/`scale`/`applyMatrix4`, the `about` pivot, `color`, `name` |
 | [csg.md](csg.md) | `union`/`subtract`/`intersect`/`hull` and their semantics |
 | [queries.md](queries.md) | `volume`, `area`, `bounds`, `raycast` |
@@ -27,7 +27,7 @@ use `ctx.invoke` to reach other doohickeys.)
 - **`odm`** — the framework:
   classes `Solid`, `Group`, `Instance` (usable for `instanceof`);
   constructors `box`, `cylinder`, `sphere`, `extrude`, `revolve`,
-  `fromThreeGeometry`; `group`; and `deg` (degrees → radians). CSG
+  `sweep`, `fromThreeGeometry`; `group`; and `deg` (degrees → radians). CSG
   (`union`/`subtract`/`intersect`/`hull`) lives as methods on `Solid`.
 - **`THREE`** — a vendored subset of three.js ([three.md](three.md)).
 - **`console`** — `log`/`info`/`debug`/`warn`/`error`, captured into

@@ -100,7 +100,10 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   re-run invokes, `Dep::Cascade` a value hash — missing keys hash a
   sentinel, use `odm_js::cascade_value_hash`).
 - `odm-kernel` — manifold-csg wrapper: primitives (cylinder along Z),
-  extrude/revolve (around Z), booleans/hull with per-operand transforms,
+  extrude/revolve (around Z), sweep (= extrude with one slice per station,
+  then `Manifold::warp` onto JS-computed affine frames; the kernel never
+  sees a path, so caps/holes/fill/welding are the extrude path's),
+  booleans/hull with per-operand transforms,
   weld with boundary-edge diagnosis (Manifold's own error is bare
   NotManifold), raycast (Manifold returns distance as a *fraction* of the
   segment; kernel converts), clearance (signed distance via the dist.rs

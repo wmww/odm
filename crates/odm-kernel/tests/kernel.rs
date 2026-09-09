@@ -383,3 +383,66 @@ fn segments_validated() {
 
 // Link the workspace stack dynamically (see odm-dylib).
 use odm_dylib as _;
+
+/// Row-major 3x4 affine from three basis columns plus origin.
+fn frame(x: [f64; 3], y: [f64; 3], o: [f64; 3]) -> [f64; 12] {
+    // z basis is unused (the profile is flat) but keep the matrix sane.
+    let z = [
+        x[1] * y[2] - x[2] * y[1],
+        x[2] * y[0] - x[0] * y[2],
+        x[0] * y[1] - x[1] * y[0],
+    ];
+    [x[0], y[0], z[0], o[0], x[1], y[1], z[1], o[1], x[2], y[2], z[2], o[2]]
+}
+
+#[test]
+fn sweep_straight_matches_extrude() {
+    let store = Store::new();
+    let k = Kernel::new(store.clone());
+    let square = vec![vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]];
+    // Frames marching up +Z with the profile in XY: exactly an extrude.
+    let frames: Vec<[f64; 12]> = (0..5)
+        .map(|i| frame([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, i as f64]))
+        .collect();
+    let swept = k.sweep(&square, &frames).unwrap();
+    let vol = k.volume(swept).unwrap();
+    assert!((vol - 16.0).abs() < 1e-9, "straight sweep volume {vol}");
+    let b = k.bounds(swept).unwrap().unwrap();
+    assert_eq!(b.min, [-1.0, -1.0, 0.0]);
+    assert_eq!(b.max, [1.0, 1.0, 4.0]);
+}
+
+#[test]
+fn sweep_quarter_circle_volume() {
+    let store = Store::new();
+    let k = Kernel::new(store.clone());
+    // Circle profile of radius r swept along a quarter circle of radius R in
+    // the XY plane: volume = pi r^2 * (pi R / 2) (Pappus; the profile centre
+    // is the path).
+    let (r, big_r, sides, stations) = (0.5, 5.0, 64, 400);
+    let circle: Vec<[f64; 2]> = (0..sides)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / sides as f64;
+            [r * a.cos(), r * a.sin()]
+        })
+        .collect();
+    let frames: Vec<[f64; 12]> = (0..=stations)
+        .map(|i| {
+            let a = std::f64::consts::FRAC_PI_2 * i as f64 / stations as f64;
+            // Profile x -> outward radial, y -> -Z, so x cross y is the
+            // tangent (-sin a, cos a, 0): a right-handed frame, as required.
+            frame(
+                [a.cos(), a.sin(), 0.0],
+                [0.0, 0.0, -1.0],
+                [big_r * a.cos(), big_r * a.sin(), 0.0],
+            )
+        })
+        .collect();
+    let swept = k.sweep(&[circle], &frames).unwrap();
+    let vol = k.volume(swept).unwrap();
+    let want = std::f64::consts::PI * r * r * std::f64::consts::FRAC_PI_2 * big_r;
+    assert!((vol - want).abs() / want < 2e-3, "quarter-torus volume {vol}, want {want}");
+
+    assert!(k.sweep(&[vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]], &frames[..1]).is_err());
+}
+

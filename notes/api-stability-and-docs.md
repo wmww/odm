@@ -17,7 +17,8 @@ Rules to preserve in future API work:
   free-function CSG all removed). Required dimensions positional,
   options object holds only optional knobs: `box(size, opts)`,
   `cylinder(r, h, {r2, segments, center})`, `sphere(r, opts)`,
-  `extrude(profile, height, opts)`, `revolve(profile, opts)`.
+  `extrude(profile, height, opts)`, `revolve(profile, opts)`,
+  `sweep(profile, path, opts)`.
 - **Fail loud**: unknown option keys throw; every numeric arg
   validated; `translate`/`scale` require all three components
   (`scale(k)` uniform removed — matched three and killed the

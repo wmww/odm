@@ -41,12 +41,15 @@ Centered on the origin.
 
 ## 2D profiles
 
-`extrude` and `revolve` take a profile, which may be:
+`extrude`, `revolve` and `sweep` take a profile, which may be:
 
 - one polygon: `[[x, y], ...]` or an array of `THREE.Vector2`s (any
   winding; no need to close — the last point connects to the first);
-- a list of polygons — filled by the **even-odd** rule, so the usual
-  arrangement is first outer, rest holes;
+- a list of polygons — first outer, rest holes, and **a hole must wind
+  the opposite way** to the outer loop (outer counterclockwise, holes
+  clockwise). A nested loop wound the same way adds nothing; the solid
+  comes out with no hole and no error. `THREE.Shape` holes are passed
+  through as drawn, so this applies to them too.
 - a `THREE.Shape` (holes included) or `THREE.Path` — curves are
   flattened; `curveSegments` in the options (default 32) sets how
   finely.
@@ -81,6 +84,58 @@ Revolves the profile around the Z axis; profile `(x, y)` maps to
 `(radius, z)`, so **x must be ≥ 0**. Options: `angle` (default 2π —
 partial angles leave flat end caps), `segments` (default 64, for the
 full turn), `curveSegments`.
+
+## odm.sweep(profile, path, opts?)
+
+```js
+// A cable: a round profile through waypoints, smoothed by a spline.
+const waypoints = [[0, 0, 0], [30, 10, 12], [60, -5, 4]].map((p) => new THREE.Vector3(...p));
+const circle = new THREE.Shape().absarc(0, 0, 1.5, 0, Math.PI * 2);
+odm.sweep(circle, new THREE.CatmullRomCurve3(waypoints), { segments: 96 });
+
+// A mitered square tube through two corners: the polyline is used as given.
+odm.sweep([[-2, -2], [2, -2], [2, 2], [-2, 2]], [[0, 0, 0], [20, 0, 0], [20, 15, 0], [20, 15, 9]]);
+
+// A ribbon lying flat: the profile's +y follows `up`.
+odm.sweep([[-6, -0.3], [6, -0.3], [6, 0.3], [-6, 0.3]], [[0, 0, 0], [10, 0, 0]], { up: [0, 0, 1] });
+```
+
+Sweeps the profile along a 3D path — ropes, cables, hoses, wires, bent
+tube and channel. Always capped (the ends are flat, square to the path)
+and never closed into a ring; for a ring use `revolve` or
+`THREE.TorusGeometry`.
+
+`path` is either:
+
+- an **array of points** (`[x, y, z]`, `[x, y]`, `Vector3` or
+  `Vector2`; z defaults to 0) — a polyline through exactly those
+  points, **not smoothed**. To smooth it, wrap it:
+  `new THREE.CatmullRomCurve3(pts)`. Consecutive duplicate points are
+  dropped; fewer than two distinct points is an error.
+- a **`THREE.Curve`** ([three.md](three.md)) — sampled into `segments`
+  equal-length pieces.
+
+Options:
+
+- `segments` (default 64) — path sampling, for a `THREE.Curve` only;
+  passing it with a point array is an error (nothing to sample).
+- `up` (default `[0, 0, 1]`) — which way the profile's **+y** leans,
+  projected perpendicular to the first tangent. From there the frame is
+  carried along by parallel transport, so the profile never spins of its
+  own accord. `up` parallel to the first segment is an error; the
+  default falls back to `[0, 1, 0]` when the path starts (near) vertical.
+- `curveSegments` — Shape/Path flattening of the *profile* (see above).
+
+Corners are **mitered**: at a turn of θ the profile sits in the bisector
+plane, stretched by `1/cos(θ/2)` into the bend, so a wall keeps its
+thickness through the corner — an a×a tube on a centred profile has
+volume exactly `a²` × centreline length, corners and all. Turns sharper
+than 150° are a `RangeError` — add intermediate points or use a curve.
+
+A bend tighter than the profile is wide folds the solid through itself.
+That is a `console.warn`, not an error (it usually still looks right),
+but volume, area and CSG are wrong there — widen the bend or shrink the
+profile if you need them.
 
 ## odm.fromThreeGeometry(geometry)
 

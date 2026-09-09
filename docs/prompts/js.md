@@ -30,17 +30,22 @@ odm.box([20, 10, 4]);                   // per-axis; odm.box(10) is a cube
 odm.cylinder(3, 10);                    // (r, h), along Z; { r2 } tapers the top
 odm.sphere(5, { segments: 64 });        // segment defaults: cylinder 64, sphere 48
 const outer = [[0, 0], [20, 0], [20, 10], [0, 10]];  // 2D profile: [x,y] loops
-const hole = [[8, 4], [12, 4], [12, 6], [8, 6]];
+const hole = [[8, 4], [8, 6], [12, 6], [12, 4]];  // holes wind OPPOSITE the outer loop
 odm.extrude([outer, hole], 4, { twist: odm.deg(45), scale: 0.5 });  // along +Z from z=0
 odm.revolve(outer, { angle: Math.PI, segments: 96 });  // around Z; (x,y) → (radius, z), x ≥ 0
+odm.sweep([[-2, -2], [2, -2], [2, 2], [-2, 2]], [[0, 0, 0], [0, 0, 20], [15, 0, 20]]);  // 3D path, mitered corners
 odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48));  // closed geometry only
 ```
 
 Primitives are centered on the origin unless `center: false`, which puts a
 box's corner (or a cylinder's base) there instead. 2D profiles are
-`[[x, y], ...]`, a list of those (even-odd holes), or a `THREE.Shape`
+`[[x, y], ...]`, a list of those (first outer, rest holes — each wound
+the opposite way, or it silently fills), or a `THREE.Shape`
 (curves flatten; `curveSegments` sets how finely). A revolve profile's x
-is a radius, so it must be ≥ 0.
+is a radius, so it must be ≥ 0. A sweep path is a polyline used as given
+(wrap it in `new THREE.CatmullRomCurve3(pts)` to smooth it, or pass any
+`THREE.Curve` with `{ segments }`); the profile's +y follows `up`
+(default +Z), and it is always capped, never closed.
 
 ```js
 const [a, b, s] = [odm.box(10), odm.sphere(6), odm.cylinder(2, 12)];
@@ -130,9 +135,9 @@ translucent. `.opacity(x)` multiplies a whole subtree's alpha
 A vendored subset of three.js r185: math (`Vector2/3/4`, `Matrix3/4`,
 `Quaternion`, `Euler`, `Box3`), `BufferGeometry`/`BufferAttribute`, the
 geometry generators (`Box`, `Cylinder`, `Sphere`, `Torus`, `Extrude`,
-`Lathe`, `Shape`), `Shape`/`Path`, curves, `MathUtils`. No renderer,
-scene or DOM classes. Three's generators are Y-up; ODM's primitives are
-Z-up.
+`Lathe`, `Shape`), `Shape`/`Path`, 2D and 3D curves (`CatmullRomCurve3`
+& friends, for `sweep`), `MathUtils`. No renderer, scene or DOM classes.
+Three's generators are Y-up; ODM's primitives are Z-up.
 
 ## Conventions
 

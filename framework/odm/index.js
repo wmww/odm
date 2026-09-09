@@ -424,7 +424,8 @@ function pt2(p, what) {
 /**
  * Profile → list of polygons. Accepts a THREE.Shape (with holes; curves are
  * flattened with `curveSegments`), one polygon `[[x,y], ...]`, or a list of
- * polygons (first outer, rest holes — or any even-odd arrangement).
+ * polygons (first outer, rest holes — each hole wound the opposite way, which
+ * is what the kernel's Positive fill rule means by a hole).
  */
 function toPolygons(profile, curveSegments) {
   const cs = curveSegments === undefined ? 32 : num(curveSegments, 'curveSegments');
@@ -485,6 +486,158 @@ export function revolve(profile, opts) {
   const segments = o.segments === undefined ? 64 : num(o.segments, 'revolve segments');
   const polys = toPolygons(profile, o.curveSegments);
   return new Solid(ops().op_solid_revolve(polys, segments, (angle * 180) / Math.PI));
+}
+
+/** A sweep path point: [x, y, z], [x, y], Vector3 or Vector2 (z defaults to 0). */
+function pathPoint(p) {
+  const what = 'sweep path point';
+  if (Array.isArray(p) && (p.length === 2 || p.length === 3)) {
+    return new THREE.Vector3(num(p[0], what), num(p[1], what), p.length === 3 ? num(p[2], what) : 0);
+  }
+  if (p && typeof p.x === 'number' && typeof p.y === 'number') {
+    return new THREE.Vector3(p.x, p.y, typeof p.z === 'number' ? p.z : 0);
+  }
+  throw new TypeError(`${what} must be [x, y, z] or a THREE.Vector3`);
+}
+
+/** Path → distinct station points. A THREE.Curve is sampled; an array is used as given. */
+function pathStations(path, o) {
+  let raw;
+  if (path instanceof THREE.Curve) {
+    const segments = o.segments === undefined ? 64 : num(o.segments, 'sweep segments');
+    if (!Number.isInteger(segments) || segments < 1) {
+      throw new RangeError(`sweep segments must be an integer >= 1, got ${segments}`);
+    }
+    raw = path.getSpacedPoints(segments);
+  } else if (Array.isArray(path)) {
+    if (o.segments !== undefined) {
+      throw new TypeError(
+        'sweep segments only applies to a THREE.Curve path; a point array is swept as given',
+      );
+    }
+    raw = path;
+  } else {
+    throw new TypeError('sweep path must be an array of points or a THREE.Curve');
+  }
+  const pts = [];
+  for (const p of raw) {
+    const v = pathPoint(p);
+    if (pts.length === 0 || pts[pts.length - 1].distanceTo(v) > 0) pts.push(v);
+  }
+  if (pts.length < 2) {
+    throw new TypeError(`sweep path needs 2 or more distinct points, got ${pts.length}`);
+  }
+  return pts;
+}
+
+/** Sharper than this and the miter blows up; the agent should add points. */
+const MAX_SWEEP_TURN = (150 * Math.PI) / 180;
+
+/**
+ * Rotation-minimizing frames along the station points: one row-major 3x4
+ * affine per station, mapping profile (x, y) into place. Right-handed with
+ * x cross y along the direction of travel, as the kernel requires.
+ */
+function sweepFrames(pts, o, reach) {
+  const n = pts.length;
+  const seg = [];
+  for (let i = 0; i < n - 1; i++) seg.push(pts[i + 1].clone().sub(pts[i]).normalize());
+
+  // Station tangents: the segment tangent at the ends, the bisector inside.
+  const tangent = [seg[0]];
+  const turn = [0];
+  for (let i = 1; i < n - 1; i++) {
+    const angle = Math.acos(Math.min(1, Math.max(-1, seg[i - 1].dot(seg[i]))));
+    if (angle > MAX_SWEEP_TURN) {
+      throw new RangeError(
+        `sweep path turns ${Math.round((angle * 180) / Math.PI)}° at point ${i}; ` +
+          'the miter is only defined below 150° — add intermediate points or use a curve',
+      );
+    }
+    turn.push(angle);
+    tangent.push(seg[i - 1].clone().add(seg[i]).normalize());
+  }
+  tangent.push(seg[n - 2]);
+  turn.push(0);
+  warnTightBends(pts, turn, reach);
+
+  // Profile +y follows `up`, projected perpendicular to the first tangent.
+  const auto = o.up === undefined;
+  const up = auto ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(...vec3(o.up, 'sweep up'));
+  if (up.lengthSq() === 0) throw new TypeError('sweep up must not be the zero vector');
+  up.normalize();
+  // Z-up default: a horizontal path gets a flat ribbon. Vertical paths fall
+  // back to +Y, where +Z would be degenerate.
+  if (auto && Math.abs(up.dot(tangent[0])) > Math.cos((1 * Math.PI) / 180)) up.set(0, 1, 0);
+  const carried = up.clone().addScaledVector(tangent[0], -up.dot(tangent[0]));
+  if (carried.length() < 1e-9) {
+    throw new Error("sweep up is parallel to the path's first segment; pass a different up");
+  }
+  carried.normalize();
+
+  const frames = [];
+  for (let i = 0; i < n; i++) {
+    if (i > 0) {
+      // Parallel transport: the minimal rotation taking the previous station's
+      // tangent to this one carries the frame with no extra spin.
+      carried.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(tangent[i - 1], tangent[i]));
+      carried.addScaledVector(tangent[i], -carried.dot(tangent[i])).normalize();
+    }
+    const ay = carried.clone();
+    const ax = ay.clone().cross(tangent[i]);
+    if (turn[i] > 0) {
+      // Miter: the profile sits in the bisector plane, stretched by
+      // 1/cos(turn/2) along the in-bend direction, so walls keep their
+      // thickness through the corner.
+      const d = seg[i].clone().sub(seg[i - 1]).normalize();
+      const s = 1 / Math.cos(turn[i] / 2) - 1;
+      ax.addScaledVector(d, s * d.dot(ax));
+      ay.addScaledVector(d, s * d.dot(ay));
+    }
+    const p = pts[i];
+    const t = tangent[i];
+    frames.push([ax.x, ay.x, t.x, p.x, ax.y, ay.y, t.y, p.y, ax.z, ay.z, t.z, p.z]);
+  }
+  return frames;
+}
+
+/**
+ * A bend tighter than the profile is wide folds the solid through itself:
+ * Manifold accepts the mesh but volume and booleans go wrong. Warn (once) —
+ * a slightly overlapping cable usually still looks right.
+ */
+function warnTightBends(pts, turn, reach) {
+  for (let i = 1; i < pts.length - 1; i++) {
+    if (turn[i] <= 0) continue;
+    const legs = Math.min(pts[i].distanceTo(pts[i - 1]), pts[i].distanceTo(pts[i + 1]));
+    const radius = legs / 2 / Math.tan(turn[i] / 2);
+    if (radius < reach) {
+      console.warn(
+        `sweep: the bend at path point ${i} has radius ~${radius.toPrecision(3)}, tighter than ` +
+          `the profile's ${reach.toPrecision(3)} reach — the solid self-intersects there, ` +
+          'so volume and CSG will be wrong',
+      );
+      return;
+    }
+  }
+}
+
+/**
+ * Sweep a 2D profile along a 3D path.
+ * `odm.sweep(profile, path, { segments = 64, up, curveSegments })` — `path`
+ * is a point array (a polyline, used as given) or a `THREE.Curve` (sampled
+ * into `segments` pieces). Profile +y follows `up` (default +Z); corners are
+ * mitered so walls keep their thickness. Always capped, never closed.
+ */
+export function sweep(profile, path, opts) {
+  const o = checkOpts(opts, ['segments', 'up', 'curveSegments'], 'sweep');
+  const polys = toPolygons(profile, o.curveSegments);
+  let reach = 0;
+  for (const poly of polys) {
+    for (const [x, y] of poly) reach = Math.max(reach, Math.hypot(x, y));
+  }
+  const frames = sweepFrames(pathStations(path, o), o, reach);
+  return new Solid(ops().op_solid_sweep(polys, frames));
 }
 
 // ---------- three.js interop ----------
@@ -722,6 +875,7 @@ export function installGlobals(g) {
     sphere,
     extrude,
     revolve,
+    sweep,
     fromThreeGeometry,
     group,
     deg,

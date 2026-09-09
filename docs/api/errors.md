@@ -44,6 +44,14 @@ level). Create geometry inside the build function.
 **Revolve profile with x < 0** — a revolve profile's x is a radius and
 must be ≥ 0.
 
+**"sweep path turns …° at point n"** — a corner sharper than 150°, where
+the miter would run away. Add intermediate points to round it off, or
+sweep a `THREE.CatmullRomCurve3` through the waypoints instead. Related:
+`sweep up is parallel to the path's first segment` (pick another `up`),
+`sweep path needs 2 or more distinct points`, and `sweep segments only
+applies to a THREE.Curve path` (a point array is swept as given —
+smooth it with a curve if you wanted sampling).
+
 **Sizes must be finite numbers** — `NaN`/`Infinity`/missing dimensions
 are rejected at the constructor (`box size must be a number or
 [x, y, z]`, `cylinder radius must be a finite number`, …). Usually a

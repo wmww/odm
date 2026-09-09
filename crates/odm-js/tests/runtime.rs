@@ -790,3 +790,72 @@ fn stalled_top_level_await_errors_not_hangs() {
 
 // Link the workspace stack dynamically (see odm-dylib).
 use odm_dylib as _;
+
+#[test]
+fn sweep_argument_errors() {
+    let w = world();
+    let tri = "[[0, 0], [2, 0], [0, 2]]";
+    for (expr, want) in [
+        ("odm.sweep(P, [[0, 0, 0]])", "2 or more distinct points"),
+        ("odm.sweep(P, [[0, 0, 0], [0, 0, 0]])", "2 or more distinct points"),
+        ("odm.sweep(P, [[0, 0, 0], [1, 0, 0]], { segments: 8 })", "only applies to a THREE.Curve"),
+        ("odm.sweep(P, [[0, 0, 0], [1, 0, 0]], { up: [1, 0, 0] })", "parallel to the path"),
+        ("odm.sweep(P, [[0, 0, 0], [10, 0, 0], [0, 0.1, 0]])", "only defined below 150"),
+        ("odm.sweep(P, new THREE.LineCurve3(new THREE.Vector3(), new THREE.Vector3(0, 0, 1)), { segments: 0 })", "segments must be an integer"),
+        ("odm.sweep(P, 'nope')", "path must be an array of points"),
+        ("odm.sweep(P, [[0, 0, 0], [1, 0, 0]], { updir: [0, 1, 0] })", "unknown sweep option"),
+    ] {
+        let code = format!(
+            "export default function build() {{ const P = {tri}; return {expr}; }}"
+        );
+        let err = build(&w, &code).unwrap_err().to_string();
+        assert!(err.contains(want), "{expr}\nwanted {want:?}, got: {err}");
+    }
+}
+
+#[test]
+fn sweep_tight_bend_warns() {
+    let w = world();
+    // Profile reach 5, bend radius 10/2/tan(45°) = 5 - fine; halve the legs
+    // and the solid folds through itself.
+    let code = |leg: f64| {
+        format!(
+            "export default function build() {{
+                const p = [[-5, -5], [5, -5], [5, 5], [-5, 5]];
+                return odm.sweep(p, [[0, 0, 0], [{leg}, 0, 0], [{leg}, {leg}, 0]]);
+            }}"
+        )
+    };
+    let ok = build(&w, &code(20.0)).unwrap();
+    assert!(ok.logs.is_empty(), "wide bend must not warn: {:?}", ok.logs);
+    let tight = build(&w, &code(4.0)).unwrap();
+    let msg = tight.logs.iter().map(|l| l.message.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(msg.contains("bend at path point 1"), "expected a tight-bend warning, got {msg:?}");
+    assert!(msg.contains("self-intersects"), "{msg}");
+}
+
+#[test]
+fn sweep_along_a_curve() {
+    let w = world();
+    let out = build(
+        &w,
+        r#"
+        export default function build() {
+            const path = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(10, 0, 5),
+                new THREE.Vector3(20, 8, 5),
+            ]);
+            const circle = [];
+            for (let i = 0; i < 24; i++) {
+                const a = (i / 24) * Math.PI * 2;
+                circle.push([Math.cos(a), Math.sin(a)]);
+            }
+            return odm.sweep(circle, path, { segments: 48 });
+        }
+        "#,
+    )
+    .unwrap();
+    assert!(output_node(&w, &out).mesh.is_some());
+    assert!(out.logs.is_empty(), "a smooth curve must not warn: {:?}", out.logs);
+}

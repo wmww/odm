@@ -37,7 +37,7 @@ viewer and the agent).
 
 - `crates/odm-ir` — IR types + content hashing (blake3, canonical encoding)
 - `crates/odm-store` — content-addressed store, generations, memo cache
-- `crates/odm-kernel` — Manifold wrapper (CSG, extrude/revolve, raycast, cancellation)
+- `crates/odm-kernel` — Manifold wrapper (CSG, extrude/revolve/sweep, raycast, cancellation)
 - `crates/odm-js` — deno_core runtime: isolate-per-doohickey from a snapshot,
   framework API bindings, determinism freezing
 - `crates/odm-build` — scheduler: generations, memoized demand-driven builds,

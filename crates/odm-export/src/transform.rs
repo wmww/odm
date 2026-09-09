@@ -663,6 +663,12 @@ impl<'a> Lexer<'a> {
                     let mut d = 1i32;
                     self.prev = Prev::Operand;
                     while self.pos < b.len() && d > 0 {
+                        // Trivia must not touch `prev`, or `a / b` inside an
+                        // interpolation reads as a regex literal.
+                        self.skip_trivia();
+                        if self.pos >= b.len() {
+                            break;
+                        }
                         match b[self.pos] {
                             b'\'' | b'"' => self.skip_string(),
                             b'`' => self.skip_template(&mut d),
@@ -938,6 +944,14 @@ import { real } from 'm';
         let t = tx("export const meta = { a: 1 }\nexport default function build() {}");
         assert!(t.body.contains("__exp.meta = meta;"), "{}", t.body);
         assert!(t.body.contains("__exp.default = build;"), "{}", t.body);
+    }
+
+    #[test]
+    fn division_inside_a_template_interpolation() {
+        // Whitespace before `/` must not make it look like a regex literal:
+        // a runaway regex scan swallows the braces after it.
+        let t = tx("const s = `${(a * 180) / Math.PI} deg`;\nexport function f() {}\n");
+        assert!(t.body.contains("__exp.f = f;"), "{}", t.body);
     }
 
     #[test]

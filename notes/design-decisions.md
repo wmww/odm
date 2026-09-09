@@ -65,6 +65,45 @@ adopts a tab's path+inputs (slow-moving, visible in the tab bar) and
 `status` reports selection (an explicit state-report command). Don't
 add more samplers.
 
+## odm.sweep semantics (2026-09-09)
+
+Built from plans/sweep.md; the decisions worth keeping:
+
+- **Extrude + warp, not a mesh in JS.** Manifold has no sweep, but it has
+  `warp`. Extruding the profile with one slice per path station and warping
+  each ring onto an affine frame reuses the extrude path's caps, holes,
+  even-odd fill and welding for free, and keeps vertex data off the JS
+  boundary. Building the tube in JS and welding it through
+  `fromThreeGeometry` would have needed its own cap triangulation. The
+  kernel therefore takes frames, never a path: sampling, frames and miters
+  are all JS.
+- **Frames are general affine** so the kernel stays dumb — the miter is a
+  non-uniform scale baked into the frame. They must be right-handed with
+  x cross y along travel, or the solid comes out inside-out (nothing
+  validates this; JS is the only caller).
+- **Polylines are not smoothed.** A point array sweeps through exactly
+  those points, like extrude's polygons. Smoothing is one wrapper
+  (`new THREE.CatmullRomCurve3(pts)`), and both reduce to one polyline
+  path internally. `segments` is meaningless (and so an error) for a point
+  array.
+- **Mitered corners, capped at 150°.** The profile sits in the bisector
+  plane stretched by `1/cos(θ/2)` into the bend, so walls keep thickness
+  and an a×a tube's volume is exactly a² × centreline length. Past 150°
+  the stretch runs away, so that is a RangeError telling the agent to add
+  points. Sampled curves never come near it.
+- **`up` steers profile +y**, defaulting to +Z (ODM is Z-up: a flat ribbon
+  on a horizontal path lies flat), falling back to +Y within ~1° of
+  vertical. From there the frame is parallel-transported, so no spin of
+  its own.
+- **Tight bends warn, not error.** A bend radius below the profile's reach
+  self-intersects: Manifold takes the mesh but volume/CSG go wrong. A
+  slightly overlapping cable usually still looks right, so it is a
+  console.warn naming the station.
+- **No `closed` option in v1.** The warp keeps cylinder topology; a ring
+  needs ring topology (two half-sweeps unioned, or a mesh through
+  solid_from_mesh). Rings are revolve/TorusGeometry for now. `twist` and
+  end `scale` would be a few lines in the frame loop if wanted.
+
 ## One renderer of record
 
 The original concept ("built on Three.js classes" + "Rust engine renders")

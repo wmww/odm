@@ -261,6 +261,18 @@ pub fn op_solid_revolve(polygons_json: &str, segments: f64, degrees: f64) -> Res
 }
 
 #[wasm_bindgen]
+pub fn op_solid_sweep(polygons_json: &str, frames_json: &str) -> Result<String, JsError> {
+    with_frame(|f| {
+        let polygons: Vec<Vec<[f64; 2]>> =
+            serde_json::from_str(polygons_json).map_err(|e| format!("bad polygons: {e}"))?;
+        let frames: Vec<[f64; 12]> =
+            serde_json::from_str(frames_json).map_err(|e| format!("bad frames: {e}"))?;
+        let h = f.kernel.sweep(&polygons, &frames).map_err(|e| e.to_string())?;
+        Ok(h.to_hex())
+    })
+}
+
+#[wasm_bindgen]
 pub fn op_solid_from_mesh(positions: &[f64], indices: &[u32]) -> Result<String, JsError> {
     with_frame(|f| {
         let h = f.kernel.solid_from_mesh(positions, indices).map_err(|e| e.to_string())?;

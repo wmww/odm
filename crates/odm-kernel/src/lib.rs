@@ -159,8 +159,9 @@ impl Kernel {
 
     // --- 2D → 3D ---
 
-    /// Extrude polygons (outer CCW, holes CW; even-odd handled by Manifold's
-    /// fill rule) along +Z. `twist_degrees`/`scale_top` as in Manifold.
+    /// Extrude polygons along +Z. Manifold's fill rule is Positive, so a hole
+    /// is a contour wound *against* the outer one (outer CCW, holes CW), not
+    /// merely a nested one — see issues/profile-holes-need-opposite-winding.md. `twist_degrees`/`scale_top` as in Manifold.
     pub fn extrude(
         &self,
         polygons: &[Vec<[f64; 2]>],
@@ -184,6 +185,39 @@ impl Kernel {
             ),
             None,
         )
+    }
+
+    /// Sweep polygons along a path described by affine `frames`, one per
+    /// station. `frames[i]` is a row-major 3x4 affine (3x3 linear part then
+    /// translation); profile point (x, y) lands at `linear * (x, y, 0) + t`.
+    /// Frames must be right-handed with the third basis along the direction of
+    /// travel (x cross y = tangent), or the result comes out inside-out.
+    ///
+    /// Implemented as an extrude of `frames.len() - 1` slices warped station
+    /// by station, so caps, holes, fill rule and welding all come from the
+    /// extrude path. The kernel knows nothing about paths: everything
+    /// curve-related (sampling, rotation-minimizing frames, miters) is the
+    /// caller's, baked into the frames.
+    pub fn sweep(&self, polygons: &[Vec<[f64; 2]>], frames: &[[f64; 12]]) -> Result<Hash> {
+        if frames.len() < 2 {
+            return Err(KernelError::Other(format!(
+                "sweep needs at least 2 frames (got {})",
+                frames.len()
+            )));
+        }
+        let last = frames.len() - 1;
+        let cs = cross_section(polygons)?;
+        // Slice z values are exactly 0..=last; round absorbs any ulp drift.
+        let m = Manifold::extrude_with_options(&cs, last as f64, last as i32, 0.0, 1.0, 1.0)
+            .warp(|x, y, z| {
+                let f = &frames[(z.round().max(0.0) as usize).min(last)];
+                [
+                    f[0] * x + f[1] * y + f[3],
+                    f[4] * x + f[5] * y + f[7],
+                    f[8] * x + f[9] * y + f[11],
+                ]
+            });
+        self.intern(m, None)
     }
 
     /// Revolve polygons around the Z axis: profile (x, y) maps to
