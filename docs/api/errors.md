@@ -10,6 +10,10 @@ zero area. The message includes a diagnosis (e.g. open-edge count).
 Check that profiles don't double back and that three.js geometry is one
 of the closed generators.
 
+```js error="must be Solids"
+return odm.box(10).union(odm.group(odm.box(4)));
+```
+
 **"… operands must be Solids … Groups/Instances cannot be used in
 CSG"** — CSG works on `Solid`s only. Assemble Groups/Instances with
 `odm.group`; if you need to cut with geometry from another doohickey,
@@ -19,6 +23,10 @@ pass the Solid through `ctx.invoke` args instead
 **"doohickey must have a default export"** — every `.js` file in the
 project is built; each needs `export default function build(ctx)`.
 There are no shared library files — share by `ctx.invoke` or args.
+
+```js error="scene values are"
+return new THREE.Shape().absarc(0, 0, 5, 0, Math.PI * 2); // extrude it first
+```
 
 **"cannot use a X — scene values are …"** — `build()` returned (or
 `group()` received) something that isn't a Solid/Group/Instance/array —
@@ -35,8 +43,11 @@ silently ignored. The message lists the valid keys.
 arrays only.
 
 **"ODM engine ops unavailable: this code only runs inside a build"** —
-`odm.*` constructors were called outside `build()` (e.g. at module top
-level). Create geometry inside the build function.
+`odm.*` constructors were called where no build is running. You will not
+see this on the desktop engine, where module scope has the ops too — but
+a **web export** installs them per build, so geometry built at module
+top level throws there and nowhere else. Build geometry inside
+`build()`; module scope is for constants and helper functions.
 
 **Dependency cycle** — `ctx.invoke` chains may not loop back
 (a → b → a); the build fails with a cycle error rather than hanging.

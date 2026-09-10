@@ -28,6 +28,18 @@ To make accidental impurity harmless:
   explicit seed parameter, since the sequence also restarts identically
   in every *other* doohickey, and call order changes results.
 
+```js
+// Frozen clock: two reads in one build are the same instant, so a
+// timestamp can never leak into geometry and defeat memoization.
+if (Date.now() !== Date.now()) throw new Error('the clock moved');
+// Math.random still returns numbers — just the same ones every build.
+const jitter = Math.random();
+if (typeof jitter !== 'number' || jitter < 0 || jitter >= 1) {
+  throw new Error(`Math.random gave ${jitter}`);
+}
+return odm.box(10).translate(jitter, 0, 0);
+```
+
 There is no way to reach the filesystem, network, or another
 doohickey's state from build code.
 

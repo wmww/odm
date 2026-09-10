@@ -38,6 +38,15 @@ Four ways in:
 4. **Math types**: `Vector2`s as profile points, `Vector3`s in
    `rotate`/`raycast`, `Matrix4` in `applyMatrix4()`.
 
+```js
+// A torus rings around z, so it lands flat; a lathe stands along three's
+// y and needs the Z-up fix.
+const ring = odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48));
+const profile = [[0, -5], [4, -5], [4, 5], [0, 5]].map((p) => new THREE.Vector2(...p));
+const post = odm.fromThreeGeometry(new THREE.LatheGeometry(profile, 32)).rotateX(odm.deg(90));
+return odm.group(ring, post);
+```
+
 ## Gotchas
 
 - **Three is Y-up; ODM is Z-up.** Nothing is swapped for you: a
