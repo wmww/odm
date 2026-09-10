@@ -24,8 +24,9 @@ equivalents.
 
 - Each operand's **pending transform is baked in** first (world-space
   CSG); the result has an identity pending transform.
-- The result keeps the **first operand's color and name**; the other
-  operands' colors are lost (there are no per-face colors).
+- The result keeps the **first operand's color, opacity and name**; the
+  other operands' colors are lost (there are no per-face colors). This
+  holds for `hull` too.
 - Operations run in the engine (Manifold) and are content-addressed:
   repeating the same op on the same inputs is a cache hit.
 - Results are always valid solids; a subtract that removes everything

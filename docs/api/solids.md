@@ -8,6 +8,12 @@ One rule throughout: **required dimensions are positional; the options
 object holds only optional knobs.** Every option has exactly one name,
 and an unknown option key is an error (a typo can't silently no-op).
 
+**Sizes must be positive.** A zero or negative side, radius or height is
+a `RangeError` naming the argument — there is no zero-volume primitive.
+(`cylinder`'s `r2` is the exception: `0` is the cone tip.) An empty solid
+is something you *derive*, by subtracting everything away; see
+[csg.md](csg.md).
+
 ## odm.box(size, opts?)
 
 ```js

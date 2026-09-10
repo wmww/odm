@@ -27,6 +27,17 @@ function num(v, what) {
   return v;
 }
 
+/**
+ * A dimension that must be strictly positive. Manifold answers a zero or
+ * negative size with a bare InvalidConstruction status, which says nothing
+ * about which argument was wrong.
+ */
+function pos(v, what) {
+  const n = num(v, what);
+  if (n <= 0) throw new RangeError(`${what} must be positive, got ${n}`);
+  return n;
+}
+
 /** Options objects reject unknown keys: a typo'd option must not silently no-op. */
 function checkOpts(opts, allowed, what) {
   if (opts === undefined) return {};
@@ -194,7 +205,7 @@ export class Solid extends transformable(SceneValue) {
       }
     }
     const geom = ops().op_boolean(kind, solids.map((s) => s._operand()));
-    return new Solid(geom, null, keep._color, keep._name);
+    return new Solid(geom, null, keep._color, keep._name, keep._opacity);
   }
 
   union(...others) {
@@ -217,7 +228,7 @@ export class Solid extends transformable(SceneValue) {
       }
     }
     const geom = ops().op_hull(all.map((s) => s._operand()));
-    return new Solid(geom, null, this._color, this._name);
+    return new Solid(geom, null, this._color, this._name, this._opacity);
   }
 
   _baked() {
@@ -389,7 +400,7 @@ export function box(size, opts) {
   if (!Array.isArray(s) || s.length !== 3) {
     throw new TypeError('box size must be a number or [x, y, z]');
   }
-  s = s.map((v) => num(v, 'box size'));
+  s = s.map((v) => pos(v, 'box size'));
   return new Solid(ops().op_solid_box(s, o.center ?? true));
 }
 
@@ -400,17 +411,19 @@ export function box(size, opts) {
  */
 export function cylinder(r, h, opts) {
   const o = checkOpts(opts, ['r2', 'segments', 'center'], 'cylinder');
-  const r1 = num(r, 'cylinder radius');
+  const r1 = pos(r, 'cylinder radius');
+  // r2 = 0 is the cone tip, so only negatives are out.
   const r2 = o.r2 === undefined ? r1 : num(o.r2, 'cylinder r2');
+  if (r2 < 0) throw new RangeError(`cylinder r2 must not be negative, got ${r2}`);
   const segments = o.segments === undefined ? 64 : num(o.segments, 'cylinder segments');
-  return new Solid(ops().op_solid_cylinder(num(h, 'cylinder height'), r1, r2, segments, o.center ?? true));
+  return new Solid(ops().op_solid_cylinder(pos(h, 'cylinder height'), r1, r2, segments, o.center ?? true));
 }
 
 /** Sphere at the origin. `odm.sphere(r, { segments })`. */
 export function sphere(r, opts) {
   const o = checkOpts(opts, ['segments'], 'sphere');
   const segments = o.segments === undefined ? 48 : num(o.segments, 'sphere segments');
-  return new Solid(ops().op_solid_sphere(num(r, 'sphere radius'), segments));
+  return new Solid(ops().op_solid_sphere(pos(r, 'sphere radius'), segments));
 }
 
 // ---------- 2D profiles → solids ----------
