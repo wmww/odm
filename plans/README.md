@@ -14,12 +14,14 @@ discussions that followed. Cross-references note where plans touch.
   inline links (era hypertext, not buttons): a file opens a tab, a node
   selects in that path's tab. Spans on the action transcript entries,
   resolved on click through `scene::locate`.
-- `testing.md` — improving the test suite (2026-09-09 survey): kill the
-  vacuous GPU/node skips, an end-to-end `odm` binary test file (hot-reload
-  invariant, socket lifecycle, CLI errors), conformance expansion to cover
-  every JS export and their interactions, cheap headless-egui dialog tests,
-  web-lane drift guards + an opt-in `cargo xtask test-web`. Says what we
-  deliberately do not test.
+- `testing.md` — improving the test suite (2026-09-09 survey, polished
+  2026-09-09): the criteria for a test worth having, delete the example
+  hash goldens, kill the vacuous GPU/node skips, an end-to-end `odm`
+  binary test file (hot-reload invariant, watcher via `poll --follow`,
+  stale-socket restart, CLI errors, docs smoke), conformance expansion
+  with new runner check kinds and a live-surface coverage guard, direct
+  tests of the pure refusal functions, web-lane drift guards + an opt-in
+  ignored browser test. Says what we deliberately do not test.
 Done and deleted: `sweep.md` (landed 2026-09-09 — `odm.sweep(profile,
 path, opts)` as Manifold extrude + `warp` over JS parallel-transport
 frames, mitered corners, `up` hint, 3D curve classes exported from the
