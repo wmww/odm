@@ -31,6 +31,9 @@ export const checks = [
   { set: { width: 3 }, volume: [36, 1e-6] },  // view-level inputs for this check
   { error: 'must be Solids' },           // build must fail, message contains
   { console: ['made 4 wheels'] },        // each substring appears in the logs
+  { node: 'seat', color: '#ff0000', opacity: null, volume: [8, 1e-9] },
+  { flat: [['#ff0000', 1], [null, 0.25]] },  // effective colors, any order
+  { meshes: 1 },                         // distinct mesh hashes in the scene
 ];
 ```
 
@@ -55,6 +58,28 @@ triangulation):
 - `set: { name: value }` — view-level inputs for this check; split into
   args/cascade against root.js's meta, like a CLI request's `inputs`.
 - `t: seconds` — shorthand for `set: { t: … }` (default 0).
+- `node: 'name' | '1/0/2'` — address one node (`scene::locate`, the way
+  `odm inspect` addresses them). `volume` and `bounds` in the same check
+  then measure **that node's subtree** (world-transformed, via
+  `Inspector`) instead of the whole scene, and `color`/`opacity` below
+  become available. `area` is scene-wide only and may not be combined
+  with it.
+- `color: '#rgb' | '#rrggbb' | '#rrggbbaa' | [r,g,b(,a)] | null` — the
+  color *authored* on the addressed node, not the inherited one; `null`
+  asserts that nothing was set there. Needs `node`.
+- `opacity: x | null` — likewise for the authored opacity (chained
+  `.opacity()` calls collapse into one value). Needs `node`.
+- `flat: [[color, alpha], …]` — the multiset of **effective** per-instance
+  colors after inheritance and opacity, straight out of
+  `odm_render::flatten_node` — what the renderer will actually draw.
+  Compared order-insensitively (rounded to 1e-6), so the list is one entry
+  per drawn instance in any order. `color` takes the same literals as
+  above, with `null` meaning "no color anywhere up the tree" (the
+  flattener's neutral default); `alpha` is the color's own alpha times the
+  product of the ancestors' opacities.
+- `meshes: n` — the number of distinct mesh hashes the scene reaches.
+  Pins "shared geometry is interned once": two placements of one solid are
+  `meshes: 1`.
 
 Values pinned by a check must be *derivable* (analytic, or exact CSG
 arithmetic), not pasted from whatever the engine printed — a suite seeded

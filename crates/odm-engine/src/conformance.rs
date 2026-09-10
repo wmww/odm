@@ -5,7 +5,7 @@
 use crate::scene;
 use odm_build::{BuildEngine, View};
 use odm_store::Object;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,31 @@ struct Check {
     raycast: Option<RaycastCheck>,
     error: Option<String>,
     console: Option<Vec<String>>,
+    /// Address one node (name or index path); `volume`/`bounds` then measure
+    /// that node's subtree instead of the whole scene, and `color`/`opacity`
+    /// assert what was *authored* on it.
+    node: Option<String>,
+    /// Authored color of the addressed node: `'#rrggbb'`, `[r,g,b,a]` (sRGB
+    /// 0..1), or `null` for "nothing set here". Needs `node`.
+    #[serde(default, deserialize_with = "present")]
+    color: Option<Value>,
+    /// Authored opacity of the addressed node, or `null`. Needs `node`.
+    #[serde(default, deserialize_with = "present")]
+    opacity: Option<Value>,
+    /// The multiset of *effective* per-instance colors the renderer will
+    /// draw: `[color, alpha]` per instance, order-insensitive. `color` is
+    /// `'#rrggbb'` or `null` (the uncolored default); `alpha` is the color's
+    /// own alpha times the ancestors' opacity product.
+    flat: Option<Vec<[Value; 2]>>,
+    /// Distinct mesh hashes reachable from the scene root: "shared geometry
+    /// is interned once".
+    meshes: Option<usize>,
+}
+
+/// Distinguishes an explicit `null` from an absent key: serde only calls a
+/// `deserialize_with` when the key is present, so absent stays `None`.
+fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(d).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -145,7 +170,10 @@ fn run_check(
     let geometric = check.volume.is_some()
         || check.area.is_some()
         || check.bounds.is_some()
-        || check.raycast.is_some();
+        || check.raycast.is_some()
+        || check.node.is_some()
+        || check.flat.is_some()
+        || check.meshes.is_some();
 
     // Split `set` like the command layer: declared plain inputs become view
     // args, everything else view-level cascade values.
@@ -193,28 +221,104 @@ fn run_check(
     let scene = odm_render::flatten_node(&engine.store, &root)
         .map_err(|e| format!("flatten: {e}"))?;
 
-    if let Some([want, eps]) = check.volume {
-        let mut got = 0.0;
-        for inst in &scene.instances {
-            let v = engine.kernel.volume(inst.mesh).map_err(|e| format!("volume: {e}"))?;
-            got += v * det3(&inst.world).abs();
+    if let Some(n) = check.meshes {
+        let got = scene.meshes.len();
+        if got != n {
+            return Err(format!("meshes: got {got} distinct mesh hashes, want {n}"));
         }
-        near(got, want, eps, "volume")?;
     }
-    if let Some([want, eps]) = check.area {
-        let mut got = 0.0;
-        for inst in &scene.instances {
-            got += engine.kernel.surface_area(inst.mesh).map_err(|e| format!("area: {e}"))?;
+    if let Some(want) = &check.flat {
+        check_flat(&scene, want)?;
+    }
+
+    // `node` rescopes the measurements to one addressed node's subtree and
+    // opens the authored-attribute checks.
+    let located = match &check.node {
+        Some(addr) => Some(
+            scene::locate(&engine.store, &root, addr).map_err(|e| format!("node: {e}"))?,
+        ),
+        None => {
+            if check.color.is_some() || check.opacity.is_some() {
+                return Err("`color`/`opacity` assert an authored attribute: add `node`".into());
+            }
+            None
         }
-        near(got, want, eps, "area")?;
-    }
-    if let Some(b) = &check.bounds {
-        let Some((min, max)) = scene.bounds else {
-            return Err("bounds: scene is empty".into());
-        };
-        for k in 0..3 {
-            near(min[k], b.min[k], b.eps, &format!("bounds.min[{k}]"))?;
-            near(max[k], b.max[k], b.eps, &format!("bounds.max[{k}]"))?;
+    };
+
+    if let Some((id, node, parent)) = &located {
+        if check.area.is_some() {
+            return Err("`area` is scene-wide and ignores transforms; drop `node`".into());
+        }
+        if let Some(want) = &check.color {
+            let got = node.color.map(|c| [c.r as f64, c.g as f64, c.b as f64, c.a as f64]);
+            match (want_color(want)?, got) {
+                (None, None) => {}
+                (Some(w), Some(g)) => {
+                    for k in 0..4 {
+                        near(g[k], w[k], 1e-6, &format!("color[{k}]"))?;
+                    }
+                }
+                (w, g) => return Err(format!("color: got {g:?}, want {w:?}")),
+            }
+        }
+        if let Some(want) = &check.opacity {
+            let got = node.opacity.map(|o| o as f64);
+            match (want.as_f64(), got) {
+                (None, None) if want.is_null() => {}
+                (Some(w), Some(g)) => near(g, w, 1e-6, "opacity")?,
+                (w, g) => return Err(format!("opacity: got {g:?}, want {w:?}")),
+            }
+        }
+        if check.volume.is_some() || check.bounds.is_some() {
+            let fields = scene::Fields {
+                volume: check.volume.is_some(),
+                bounds: check.bounds.is_some(),
+                ..scene::Fields::default()
+            };
+            let mut inspector = scene::Inspector::new(&engine.store, &engine.kernel, fields);
+            let entry = inspector
+                .inspect(node, id, parent, 0)
+                .ok_or_else(|| format!("node {id:?} is not fully in the store"))?;
+            if let Some([want, eps]) = check.volume {
+                let got = entry["volume"].as_f64().ok_or("node volume unavailable")?;
+                near(got, want, eps, "volume")?;
+            }
+            if let Some(b) = &check.bounds {
+                let got = &entry["bounds"];
+                if got.is_null() {
+                    return Err("bounds: the addressed subtree is empty".into());
+                }
+                for k in 0..3 {
+                    let (min, max) = (&got["min"][k], &got["max"][k]);
+                    near(min.as_f64().unwrap_or(f64::NAN), b.min[k], b.eps, &format!("bounds.min[{k}]"))?;
+                    near(max.as_f64().unwrap_or(f64::NAN), b.max[k], b.eps, &format!("bounds.max[{k}]"))?;
+                }
+            }
+        }
+    } else {
+        if let Some([want, eps]) = check.volume {
+            let mut got = 0.0;
+            for inst in &scene.instances {
+                let v = engine.kernel.volume(inst.mesh).map_err(|e| format!("volume: {e}"))?;
+                got += v * det3(&inst.world).abs();
+            }
+            near(got, want, eps, "volume")?;
+        }
+        if let Some([want, eps]) = check.area {
+            let mut got = 0.0;
+            for inst in &scene.instances {
+                got += engine.kernel.surface_area(inst.mesh).map_err(|e| format!("area: {e}"))?;
+            }
+            near(got, want, eps, "area")?;
+        }
+        if let Some(b) = &check.bounds {
+            let Some((min, max)) = scene.bounds else {
+                return Err("bounds: scene is empty".into());
+            };
+            for k in 0..3 {
+                near(min[k], b.min[k], b.eps, &format!("bounds.min[{k}]"))?;
+                near(max[k], b.max[k], b.eps, &format!("bounds.max[{k}]"))?;
+            }
         }
     }
     if let Some(r) = &check.raycast {
@@ -242,6 +346,73 @@ fn run_check(
             (None, true) => {}
             (Some(h), true) => return Err(format!("raycast: expected a miss, hit {h}")),
             (None, false) => return Err("raycast: expected a hit, missed".into()),
+        }
+    }
+    Ok(())
+}
+
+/// sRGB→linear, the copy of `odm_render`'s private crossing that lets a check
+/// author sRGB and compare against what the flattener produced.
+fn to_linear(c: [f64; 4]) -> [f64; 4] {
+    fn ch(c: f64) -> f64 {
+        if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    }
+    [ch(c[0]), ch(c[1]), ch(c[2]), c[3]]
+}
+
+/// A check's color literal: `'#rgb'`/`'#rrggbb'`/`'#rrggbbaa'`, `[r,g,b]` or
+/// `[r,g,b,a]` in sRGB 0..1 — the formats `.color()` itself takes — or `null`
+/// for "no color here".
+fn want_color(v: &Value) -> Result<Option<[f64; 4]>, String> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    if let Some(hex) = v.as_str() {
+        let h = hex.strip_prefix('#').ok_or_else(|| format!("bad color {hex:?}"))?;
+        let digits: Vec<f64> = match h.len() {
+            3 => h.chars().map(|c| c.to_digit(16).map(|d| (d * 17) as f64 / 255.0)).collect::<Option<_>>(),
+            6 | 8 => (0..h.len() / 2)
+                .map(|i| u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).ok().map(|b| b as f64 / 255.0))
+                .collect::<Option<_>>(),
+            _ => None,
+        }
+        .ok_or_else(|| format!("bad color {hex:?}"))?;
+        return Ok(Some([digits[0], digits[1], digits[2], *digits.get(3).unwrap_or(&1.0)]));
+    }
+    let a = v.as_array().ok_or_else(|| format!("bad color {v}"))?;
+    let nums: Vec<f64> = a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect();
+    match nums.len() {
+        3 => Ok(Some([nums[0], nums[1], nums[2], 1.0])),
+        4 => Ok(Some([nums[0], nums[1], nums[2], nums[3]])),
+        _ => Err(format!("bad color {v}")),
+    }
+}
+
+/// The `flat` check: the multiset of effective instance colors, compared
+/// order-insensitively against `[color, alpha]` pairs.
+fn check_flat(scene: &odm_render::RenderScene, want: &[[Value; 2]]) -> Result<(), String> {
+    let mut wanted = Vec::new();
+    for [color, alpha] in want {
+        let rgb = match want_color(color)? {
+            Some(c) => to_linear(c),
+            // No color anywhere up the tree: the flattener's own default,
+            // which is already linear.
+            None => odm_render::DEFAULT_COLOR.map(f64::from),
+        };
+        let a = alpha.as_f64().ok_or_else(|| format!("flat alpha must be a number, got {alpha}"))?;
+        wanted.push([rgb[0], rgb[1], rgb[2], a]);
+    }
+    let mut got: Vec<[f64; 4]> =
+        scene.instances.iter().map(|i| i.color.map(f64::from)).collect();
+    if got.len() != wanted.len() {
+        return Err(format!("flat: {} instances, want {}", got.len(), wanted.len()));
+    }
+    let key = |c: &[f64; 4]| c.map(|x| (x * 1e6).round() as i64);
+    got.sort_by_key(key);
+    wanted.sort_by_key(key);
+    for (g, w) in got.iter().zip(&wanted) {
+        if key(g) != key(w) {
+            return Err(format!("flat: got {got:?}, want {wanted:?}"));
         }
     }
     Ok(())
