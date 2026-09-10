@@ -60,6 +60,12 @@ Centered on the origin.
   flattened; `curveSegments` in the options (default 32) sets how
   finely.
 
+Profile coordinates round to float32 on the way into the kernel, so a
+profile-built part can land ~1e-8 relative off its nominal size (the
+box/cylinder/sphere path is exact). Don't chase the last digits of a
+profile dimension, and don't rely on an exact-zero `clearance` between
+two profile-built faces.
+
 ## odm.extrude(profile, height, opts?)
 
 ```js

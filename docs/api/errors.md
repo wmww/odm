@@ -41,8 +41,9 @@ level). Create geometry inside the build function.
 **Dependency cycle** — `ctx.invoke` chains may not loop back
 (a → b → a); the build fails with a cycle error rather than hanging.
 
-**Revolve profile with x < 0** — a revolve profile's x is a radius and
-must be ≥ 0.
+**"revolve profile x must be >= 0 (it is a radius)"** — a revolve
+profile's `(x, y)` is `(radius, z)`, so a negative x would fold the
+profile through the axis.
 
 **"sweep path turns …° at point n"** — a corner sharper than 150°, where
 the miter would run away. Add intermediate points to round it off, or
@@ -56,3 +57,9 @@ smooth it with a curve if you wanted sampling).
 are rejected at the constructor (`box size must be a number or
 [x, y, z]`, `cylinder radius must be a finite number`, …). Usually a
 sign of an undefined param or a typo'd option name.
+
+**"… must be positive"** — a zero or negative side, radius or height
+(`box size must be positive`, `sphere radius must be positive`, …).
+There is no zero-volume primitive; an empty solid comes from subtracting
+everything away ([csg.md](csg.md)). `cylinder`'s `r2` is the exception:
+`0` is the cone tip.

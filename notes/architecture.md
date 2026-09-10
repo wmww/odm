@@ -116,6 +116,10 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   takes Float64Array): the store boundary never quantizes, so rebuilds
   re-weld exactly and baked far-from-origin transforms keep detail. The
   ONE f32 conversion is per-mesh GPU vertex upload in odm-render/gpu.rs.
+  The ONE exception on the input side is the 2D cross-section stage
+  (`CrossSection::from_polygons`, so extrude/revolve/sweep profiles),
+  which is f32 inside manifold-csg: 0.1 comes back as f32(0.1) — see
+  issues/2d-profiles-quantize-to-f32.md.
   `precision` test files in odm-ir/odm-kernel/odm-render plus
   tests/conformance/unstable/three-f64.js are f32-regression tripwires
   (bit-exact 0.1 / near-1e7 probes) — an `as f32` sneaking into any seam

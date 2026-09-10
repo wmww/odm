@@ -470,7 +470,7 @@ function toPolygons(profile, curveSegments) {
  */
 export function extrude(profile, height, opts) {
   const o = checkOpts(opts, ['twist', 'scale', 'slices', 'curveSegments'], 'extrude');
-  const h = num(height, 'extrude height');
+  const h = pos(height, 'extrude height');
   const twist = o.twist === undefined ? 0 : num(o.twist, 'extrude twist');
   let scale = o.scale ?? 1;
   if (typeof scale === 'number') scale = [scale, scale];
@@ -498,6 +498,13 @@ export function revolve(profile, opts) {
   const angle = o.angle === undefined ? Math.PI * 2 : num(o.angle, 'revolve angle');
   const segments = o.segments === undefined ? 64 : num(o.segments, 'revolve segments');
   const polys = toPolygons(profile, o.curveSegments);
+  // x is a radius here. A negative one folds the profile through the axis
+  // and yields quietly wrong geometry, so it is an error (errors.md).
+  for (const poly of polys) {
+    for (const [x] of poly) {
+      if (x < 0) throw new RangeError(`revolve profile x must be >= 0 (it is a radius), got ${x}`);
+    }
+  }
   return new Solid(ops().op_solid_revolve(polys, segments, (angle * 180) / Math.PI));
 }
 

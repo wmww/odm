@@ -40,8 +40,12 @@ Four ways in:
 
 ## Gotchas
 
-- **Three is Y-up; ODM is Z-up.** Generator output lies on its side by
-  ODM conventions — fix with `.rotateX(odm.deg(90))` after conversion.
+- **Three is Y-up; ODM is Z-up.** Nothing is swapped for you: a
+  generator's axes arrive exactly as three built them, so anything
+  three stands up along **y** (`CylinderGeometry`, `LatheGeometry`,
+  `SphereGeometry`'s poles) lies on its side by ODM conventions — fix
+  with `.rotateX(odm.deg(90))` after conversion. Not everything needs
+  it: `TorusGeometry` already rings around z, so it lands flat.
 - `ShapeGeometry` and other flat/open geometries are not solids and
   will be rejected by `fromThreeGeometry`; use `odm.extrude` for 2D
   shapes.
