@@ -114,3 +114,103 @@ impl Picker {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Outcome, Picker};
+    use eframe::egui;
+
+    /// Drive the picker through a headless egui context, one frame per call.
+    struct Harness {
+        ctx: egui::Context,
+        picker: Picker,
+    }
+
+    impl Harness {
+        fn new(files: &[&str]) -> Harness {
+            let mut h = Harness {
+                ctx: egui::Context::default(),
+                picker: Picker::new(files.iter().map(|s| s.to_string()).collect()),
+            };
+            // Two settling frames: the box asks for focus on the first pass
+            // and egui grants it on the next, as it would long before a real
+            // user's first keystroke.
+            h.frame(Vec::new());
+            h.frame(Vec::new());
+            h
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) -> Outcome {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 500.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            self.ctx.begin_pass(input);
+            let outcome = self.picker.ui(&self.ctx);
+            self.ctx.end_pass();
+            outcome
+        }
+
+        fn key(&mut self, key: egui::Key) -> Outcome {
+            self.frame(vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }])
+        }
+
+        fn typed(&mut self, text: &str) -> Outcome {
+            self.frame(vec![egui::Event::Text(text.to_owned())])
+        }
+    }
+
+    const FILES: &[&str] = &["root.js", "parts/wheel.js", "parts/axle.js"];
+
+    /// Type a few letters, Enter: the whole gesture the picker exists for.
+    #[test]
+    fn filter_then_enter_picks_the_highlighted_row() {
+        let mut h = Harness::new(FILES);
+        h.typed("whe");
+        match h.key(egui::Key::Enter) {
+            Outcome::Pick(path) => assert_eq!(path, "parts/wheel.js"),
+            _ => panic!("Enter on a one-row list must pick it"),
+        }
+    }
+
+    /// Down moves the highlight within the filtered list, not the whole one.
+    #[test]
+    fn arrows_move_the_highlight() {
+        let mut h = Harness::new(FILES);
+        h.typed("parts");
+        h.key(egui::Key::ArrowDown);
+        match h.key(egui::Key::Enter) {
+            Outcome::Pick(path) => assert_eq!(path, "parts/axle.js", "second of the two matches"),
+            _ => panic!("Enter must pick"),
+        }
+        // Up from the top stays at the top rather than wrapping or panicking.
+        let mut h = Harness::new(FILES);
+        h.key(egui::Key::ArrowUp);
+        assert!(matches!(h.key(egui::Key::Enter), Outcome::Pick(p) if p == "root.js"));
+    }
+
+    #[test]
+    fn escape_cancels() {
+        let mut h = Harness::new(FILES);
+        assert!(matches!(h.key(egui::Key::Escape), Outcome::Cancelled));
+    }
+
+    /// A filter that matches nothing leaves nothing to confirm — Enter must
+    /// not pick a stale row or index out of bounds.
+    #[test]
+    fn enter_on_an_empty_list_does_nothing() {
+        let mut h = Harness::new(FILES);
+        h.typed("zzzz");
+        assert!(matches!(h.key(egui::Key::Enter), Outcome::Idle));
+    }
+}

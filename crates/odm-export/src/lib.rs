@@ -299,3 +299,75 @@ fn load_template(path: &Path, force: bool) -> Result<template::Template, String>
     }
     Ok(t)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::check_destination;
+    use std::path::Path;
+
+    fn project(dir: &Path) -> &Path {
+        std::fs::write(dir.join("odm.toml"), "name = \"t\"\nengine = 0\n").unwrap();
+        std::fs::write(dir.join("root.js"), "//! odm unstable\n").unwrap();
+        dir
+    }
+
+    /// Exporting over a project's root would mark the project itself as a
+    /// site, hiding every source file in it from the scanner.
+    #[test]
+    fn a_project_root_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = project(dir.path());
+        let err = check_destination(p, p).unwrap_err();
+        assert!(err.contains("project's root folder"), "{err}");
+    }
+
+    /// An unmarked folder inside the project holding sources is refused for
+    /// the same reason, one level down: the marker would hide those too.
+    #[test]
+    fn an_unmarked_source_folder_inside_the_project_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = project(dir.path());
+        let parts = p.join("parts");
+        std::fs::create_dir(&parts).unwrap();
+        std::fs::write(parts.join("wheel.js"), "//! odm unstable\n").unwrap();
+        let err = check_destination(p, &parts).unwrap_err();
+        assert!(err.contains("wheel.js"), "the error must name the file at risk: {err}");
+    }
+
+    /// ...but a previous export's folder carries the marker, so the scanner
+    /// already skips it: re-exporting there is the normal round trip.
+    #[test]
+    fn a_previous_export_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = project(dir.path());
+        let site = p.join("site");
+        std::fs::create_dir(&site).unwrap();
+        std::fs::write(site.join("app.js"), "// bundled").unwrap();
+        std::fs::write(site.join(odm_build::EXPORT_MARKER), "").unwrap();
+        check_destination(p, &site).expect("a marked export folder is reusable");
+    }
+
+    #[test]
+    fn a_fresh_folder_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = project(dir.path());
+        check_destination(p, &p.join("site")).expect("a folder that does not exist yet");
+        let empty = p.join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        check_destination(p, &empty).expect("an existing empty folder");
+    }
+
+    /// Outside any project, a .js file is just a file — nothing is scanning
+    /// it, so there is nothing to hide.
+    #[test]
+    fn a_js_folder_outside_any_project_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let proj = dir.path().join("proj");
+        std::fs::create_dir(&proj).unwrap();
+        let p = project(&proj);
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("script.js"), "// someone else's").unwrap();
+        check_destination(p, &elsewhere).expect("outside the project, .js is not source");
+    }
+}
