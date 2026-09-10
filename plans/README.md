@@ -18,6 +18,12 @@ discussions that followed. Cross-references note where plans touch.
   `warp` over JS-computed parallel-transport frames (mitered corners,
   `up` hint), 3D curve classes exported from the THREE subset. Resolves
   issues/no-sweep-along-3d-path.md.
+- `testing.md` — improving the test suite (2026-09-09 survey): kill the
+  vacuous GPU/node skips, an end-to-end `odm` binary test file (hot-reload
+  invariant, socket lifecycle, CLI errors), conformance expansion to cover
+  every JS export and their interactions, cheap headless-egui dialog tests,
+  web-lane drift guards + an opt-in `cargo xtask test-web`. Says what we
+  deliberately do not test.
 Done and deleted: `structured-inputs.md` (executed 2026-08-17 —
 arbitrary-depth input schemas, unions, maps, the recursive panel; see
 notes/architecture.md "Input panel" and docs/api/inputs.md);
