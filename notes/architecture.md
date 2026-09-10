@@ -1008,6 +1008,46 @@ notes/spike-findings.md "Snapshot count/concurrency".
 
 ## Testing
 
+`cargo test --workspace` before every commit is the gate; there is no CI,
+by decision. It must stay fast (a few seconds) and honest.
+
+### What earns a test here
+
+All three must hold:
+
+1. **A plausible change breaks it by accident** — a refactor, a dependency
+   bump, an unrelated fix. Not "someone deleted the feature".
+2. **The breakage is a real bug someone would hit.** If the honest
+   response to a failure is "update the expected value", the test is a
+   tax. Tests that pin where a UI element sits, the exact wording of a
+   message we expect to keep polishing, or a hash of current output are in
+   that class: delete, don't write. (`example_scene_hashes_are_stable` was
+   one, and is gone.)
+3. **It is cheap.** Anything needing a browser, a wasm toolchain or a
+   compositor is opt-in and out of the gate.
+
+**The JS API is the exception to "don't pin specifics."** Once a version
+is stamped, every observable behavior — including some bugs — must stay
+byte-compatible for existing projects, so conformance tests pin *exact*
+semantics: argument shapes, defaults, error conditions, which operand's
+color wins. Values must still be *derivable* (analytic, or exact CSG
+arithmetic), never copied from engine output.
+
+**Integration over unit** where the cost is similar: a test that drives
+the `odm` binary or the JS API tests what people observe; a unit test of a
+helper tests that the code does what it does.
+
+Deliberately not tested: CI itself, pixel and hash goldens (renders differ
+across drivers, Manifold upgrades change triangulation, and a golden's
+failure never points at a fix — the analytic render assertions are the
+right level), UI placement/layout, exact CLI or error wording beyond the
+drift-tested `docs/cli.md`, and memoization as seen from JS (memo hits
+replay logs by design, so it is not observable from a conformance check;
+`cascade_only_invalidates_readers` and
+`piston_animates_and_memoizes_static_parts` pin it from Rust instead).
+
+### The suites
+
 `cargo test` runs everything in ~1s after compile. Almost all tests are
 integration tests in `crates/*/tests/`; the unit tests in `src/` are
 `odm-render/src/grid.rs`, `odm-js/src/version.rs` (pragma parsing),
@@ -1025,7 +1065,9 @@ Two data-driven suites guard the JS API:
   `cargo test -p odm-engine conformance`. Declarative `export const
   checks` per test doohickey; format in `tests/conformance/README.md`.
   Add a test with every feature and every bug found — it seeds the frozen
-  v1 suite.
+  v1 suite. `every_api_name_is_exercised` reads the live API surface and
+  fails until each name appears in the suite, so a new function cannot
+  ship untested.
 - **Doctests**: every fenced ```js block under `docs/` must build
   (`cargo test -p odm-build --test suite doctests::`; ` ```js skip` opts out).
   Keep docs examples self-contained — free variables fail the build.
@@ -1042,6 +1084,9 @@ from a deno_core macro), `test = false` on the `odm` bin and on the libs
 with no `#[cfg(test)]` modules. **If you add unit tests to `src/` in
 odm-build/odm-cli/odm-ir/odm-kernel/odm-store, flip that crate's `[lib]
 test` back to true** — the manifest carries a comment saying so.
+
+The three `#[ignore]`d tests in `crates/odm-js/tests/multi_snapshot.rs`
+reproduce V8's aborts on purpose; run them alone to re-verify.
 
 `crates/odm/tests/e2e.rs` is the only suite that runs the *shipped binary*:
 it spawns `odm run --headless` into a temp project under `/tmp` (the socket

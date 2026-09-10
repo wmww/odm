@@ -2,7 +2,8 @@
 
 - `architecture.md` — the system as built: project format, crate map with
   per-crate gotchas, viewer fonts/icons/tree, user↔agent chat, invariants,
-  testing, seeing the viewer. Start here.
+  testing (what earns a test here, the suites, the opt-in lanes), seeing
+  the viewer. Start here.
 - `api-stability-and-docs.md` — JS API versioning: the rationale behind
   `docs/versioning.md` and the implementation map (pragma, one-snapshot
   version routing, conformance suite, `odm docs`, doctests — all built
