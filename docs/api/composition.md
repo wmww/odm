@@ -14,6 +14,12 @@ level of arrays is flattened and `null`/`undefined` children are
 dropped (handy for conditional parts). `g.children` returns a copy of
 the child list.
 
+An array that survives the flattening — one nested two or more deep —
+becomes a child node of its own, an unnamed group with no transform.
+So structure in your data shows up as structure in the tree, and
+`build()` returning a bare array is the same as returning
+`odm.group(...)` of it.
+
 A Group can be transformed, colored, and named, but **not used in
 CSG**. Its color is a default: it applies to descendants that don't
 have a color of their own.
