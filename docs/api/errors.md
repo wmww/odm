@@ -3,12 +3,15 @@
 Build errors come back through any CLI command, with the JS stack and
 console output; the viewer keeps the last good build meanwhile.
 
-**"open surface, not a solid"** (from `fromThreeGeometry`, `extrude`,
-`revolve`) — the input doesn't enclose a volume: a flat geometry, an
-unclosed lathe profile, a self-intersecting polygon, or a profile with
-zero area. The message includes a diagnosis (e.g. open-edge count).
-Check that profiles don't double back and that three.js geometry is one
-of the closed generators.
+**"open surface, not a solid"** (from `fromThreeGeometry`) — the
+geometry doesn't enclose a volume: a flat geometry or an unclosed lathe
+profile. The message includes a diagnosis (e.g. open-edge count). Use
+one of the closed generators.
+
+**"profile polygon 0 crosses itself"**, **"profile polygons 0 and 1
+meet"**, **"profile has no area"** (from `extrude`, `revolve`, `sweep`)
+— a loop doubles back over itself, two loops overlap or touch, or every
+loop is degenerate. The message names the two edges; fix the profile.
 
 ```js error="must be Solids"
 return odm.box(10).union(odm.group(odm.box(4)));

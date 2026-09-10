@@ -24,12 +24,11 @@ export default function build() {
     .name('ribbon')
     .translate(100, 0, 0);
 
-  // Holes ride along: the same elbow as a square tube with a 2x2 bore
-  // (wound the opposite way), both loops mitered by the same frame, so
-  // (4² - 2²)·(10 + 6).
+  // Holes ride along: the same elbow as a square tube with a 2x2 bore,
+  // both loops mitered by the same frame, so (4² - 2²)·(10 + 6).
   const ring = (w) => [[-w, -w], [w, -w], [w, w], [-w, w]];
   const tube = odm
-    .sweep([ring(2), ring(1).reverse()], [[0, 0, 0], [10, 0, 0], [10, 6, 0]])
+    .sweep([ring(2), ring(1)], [[0, 0, 0], [10, 0, 0], [10, 6, 0]])
     .name('tube')
     .translate(150, 0, 0);
 

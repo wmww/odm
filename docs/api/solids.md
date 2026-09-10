@@ -51,20 +51,17 @@ Centered on the origin.
 
 - one polygon: `[[x, y], ...]` or an array of `THREE.Vector2`s (any
   winding; no need to close — the last point connects to the first);
-- a list of polygons — first outer, rest holes, and **a hole must wind
-  the opposite way** to the outer loop (outer counterclockwise, holes
-  clockwise). A nested loop wound the same way adds nothing; the solid
-  comes out with no hole and no error. `THREE.Shape` holes are passed
-  through as drawn, so this applies to them too.
+- a list of polygons — nesting decides what is filled: a loop inside
+  another is a hole, a loop inside a hole is an island. Winding never
+  matters. Loops must not cross themselves or each other, or touch (a
+  hole on the outer edge) — that is an error naming the two edges.
 - a `THREE.Shape` (holes included) or `THREE.Path` — curves are
   flattened; `curveSegments` in the options (default 32) sets how
   finely.
 
-Profile coordinates round to float32 on the way into the kernel, so a
-profile-built part can land ~1e-8 relative off its nominal size (the
-box/cylinder/sphere path is exact). Don't chase the last digits of a
-profile dimension, and don't rely on an exact-zero `clearance` between
-two profile-built faces.
+Profile coordinates are exact (f64 end to end, like every other path
+into the kernel), so a profile-built face lands exactly where its
+coordinates say.
 
 ## odm.extrude(profile, height, opts?)
 

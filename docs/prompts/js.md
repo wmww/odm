@@ -30,7 +30,7 @@ odm.box([20, 10, 4]);                   // per-axis; odm.box(10) is a cube
 odm.cylinder(3, 10);                    // (r, h), along Z; { r2 } tapers the top
 odm.sphere(5, { segments: 64 });        // segment defaults: cylinder 64, sphere 48
 const outer = [[0, 0], [20, 0], [20, 10], [0, 10]];  // 2D profile: [x,y] loops
-const hole = [[8, 4], [8, 6], [12, 6], [12, 4]];  // holes wind OPPOSITE the outer loop
+const hole = [[8, 4], [12, 4], [12, 6], [8, 6]];  // a loop inside another is a hole
 odm.extrude([outer, hole], 4, { twist: odm.deg(45), scale: 0.5 });  // along +Z from z=0
 odm.revolve(outer, { angle: Math.PI, segments: 96 });  // around Z; (x,y) → (radius, z), x ≥ 0
 odm.sweep([[-2, -2], [2, -2], [2, 2], [-2, 2]], [[0, 0, 0], [0, 0, 20], [15, 0, 20]]);  // 3D path, mitered corners
@@ -39,8 +39,8 @@ odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48));  // closed geomet
 
 Primitives are centered on the origin unless `center: false`, which puts a
 box's corner (or a cylinder's base) there instead. 2D profiles are
-`[[x, y], ...]`, a list of those (first outer, rest holes — each wound
-the opposite way, or it silently fills), or a `THREE.Shape`
+`[[x, y], ...]`, a list of those (a loop inside another is a hole,
+any winding; loops must not cross), or a `THREE.Shape`
 (curves flatten; `curveSegments` sets how finely). A revolve profile's x
 is a radius, so it must be ≥ 0. A sweep path is a polyline used as given
 (wrap it in `new THREE.CatmullRomCurve3(pts)` to smooth it, or pass any

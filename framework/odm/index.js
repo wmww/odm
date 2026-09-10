@@ -437,8 +437,7 @@ function pt2(p, what) {
 /**
  * Profile → list of polygons. Accepts a THREE.Shape (with holes; curves are
  * flattened with `curveSegments`), one polygon `[[x,y], ...]`, or a list of
- * polygons (first outer, rest holes — each hole wound the opposite way, which
- * is what the kernel's Positive fill rule means by a hole).
+ * polygons (nesting decides holes; the kernel ignores winding).
  */
 function toPolygons(profile, curveSegments) {
   const cs = curveSegments === undefined ? 32 : num(curveSegments, 'curveSegments');

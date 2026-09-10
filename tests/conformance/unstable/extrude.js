@@ -49,22 +49,26 @@ export default function build(ctx) {
   // A THREE.Shape circle, flattened by curveSegments. Shape splits a full
   // absarc into two half-arcs, so `curveSegments: n` gives 2n edges — the
   // volume is then the inscribed 2n-gon's, exactly.
-  // (The eps is relative, not 1e-9: profile coordinates pass through an
-  // f32 cross-section stage — issues/2d-profiles-quantize-to-f32.md.)
   const r = 5;
   const h = 3;
   for (const n of [4, 8, 16]) {
     const disc = odm.extrude(new THREE.Shape().absarc(0, 0, r, 0, Math.PI * 2), h, { curveSegments: n });
     const edges = 2 * n;
     const want = (edges / 2) * r * r * Math.sin((2 * Math.PI) / edges) * h;
-    near(disc.volume(), want, want * 1e-6, `disc n=${n}`);
+    near(disc.volume(), want, 1e-9, `disc n=${n}`);
   }
 
-  // A hole: the outer loop counterclockwise, the hole clockwise (the fill
-  // rule is winding, not even-odd — see docs/api/solids.md "2D profiles").
+  // A hole: a loop inside another, whichever way it winds (nesting, not
+  // winding, decides — see docs/api/solids.md "2D profiles").
   const outer = [[0, 0], [10, 0], [10, 10], [0, 10]];
   const hole = [[3, 3], [3, 7], [7, 7], [7, 3]];
   const framed = odm.extrude([outer, hole], 2).translate(0, 30, 0).name('framed');
+  near(odm.extrude([outer, [...hole].reverse()], 2).volume(), framed.volume(), 1e-9, 'hole winding is ignored');
+  const island = [[4, 4], [6, 4], [6, 6], [4, 6]];
+  near(odm.extrude([outer, hole, island], 2).volume(), (100 - 16 + 4) * 2, 1e-9, 'island inside a hole');
+
+  // Profile coordinates are exact f64, not f32 (0.1 is not an f32 value).
+  if (odm.extrude([[0, 0], [0.1, 0], [0.1, 1], [0, 1]], 1).bounds().max.x !== 0.1) throw new Error('profile x rounded');
 
   // A THREE.Shape carries its holes through the same way.
   const shape = new THREE.Shape([[0, 0], [10, 0], [10, 10], [0, 10]].map((p) => new THREE.Vector2(...p)));

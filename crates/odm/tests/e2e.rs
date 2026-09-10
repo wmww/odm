@@ -45,12 +45,12 @@ fn copy_dir(from: &Path, to: &Path) {
     for entry in std::fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();
         let dst = to.join(entry.file_name());
-        match entry.file_type().unwrap().is_dir() {
-            true => copy_dir(&entry.path(), &dst),
-            false => {
-                std::fs::copy(entry.path(), &dst).unwrap();
-            }
-        }
+        let kind = entry.file_type().unwrap();
+        if kind.is_dir() {
+            copy_dir(&entry.path(), &dst);
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), &dst).unwrap();
+        } // else: a stale engine socket under .odm/ — not copyable, not wanted
     }
 }
 

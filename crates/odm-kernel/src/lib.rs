@@ -12,9 +12,10 @@
 
 mod diagnose;
 mod dist;
+mod profile;
 
 use dist::{Operand, TriBvh};
-use manifold_csg::{CrossSection, ExecutionContext, Manifold, MeshGL64, OpType};
+use manifold_csg::{ExecutionContext, Manifold, MeshGL64, OpType};
 use odm_ir::{Hash, Mesh, Transform};
 use odm_store::{Object, Store};
 use std::collections::HashMap;
@@ -158,10 +159,15 @@ impl Kernel {
     }
 
     // --- 2D → 3D ---
+    //
+    // Profiles never touch Manifold's CrossSection (f32 inside): profile.rs
+    // builds these solids in f64. Loops are oriented by nesting depth (a loop
+    // inside another is a hole), whatever winding the caller used; loops
+    // that cross themselves or each other are an error.
 
-    /// Extrude polygons along +Z. Manifold's fill rule is Positive, so a hole
-    /// is a contour wound *against* the outer one (outer CCW, holes CW), not
-    /// merely a nested one — see issues/profile-holes-need-opposite-winding.md. `twist_degrees`/`scale_top` as in Manifold.
+    /// Extrude polygons along +Z, `slices` segments up the height.
+    /// `twist_degrees`/`scale_top` as in Manifold (a zero scale closes to a
+    /// point).
     pub fn extrude(
         &self,
         polygons: &[Vec<[f64; 2]>],
@@ -170,21 +176,7 @@ impl Kernel {
         twist_degrees: f64,
         scale_top: [f64; 2],
     ) -> Result<Hash> {
-        if slices < 1 {
-            return Err(KernelError::Other(format!("slices must be >= 1 (got {slices})")));
-        }
-        let cs = cross_section(polygons)?;
-        self.intern(
-            Manifold::extrude_with_options(
-                &cs,
-                height,
-                slices,
-                twist_degrees,
-                scale_top[0],
-                scale_top[1],
-            ),
-            None,
-        )
+        self.intern(profile::extrude(polygons, height, slices, twist_degrees, scale_top)?, None)
     }
 
     /// Sweep polygons along a path described by affine `frames`, one per
@@ -194,10 +186,10 @@ impl Kernel {
     /// travel (x cross y = tangent), or the result comes out inside-out.
     ///
     /// Implemented as an extrude of `frames.len() - 1` slices warped station
-    /// by station, so caps, holes, fill rule and welding all come from the
-    /// extrude path. The kernel knows nothing about paths: everything
-    /// curve-related (sampling, rotation-minimizing frames, miters) is the
-    /// caller's, baked into the frames.
+    /// by station, so caps, holes and welding all come from the extrude
+    /// path. The kernel knows nothing about paths: everything curve-related
+    /// (sampling, rotation-minimizing frames, miters) is the caller's, baked
+    /// into the frames.
     pub fn sweep(&self, polygons: &[Vec<[f64; 2]>], frames: &[[f64; 12]]) -> Result<Hash> {
         if frames.len() < 2 {
             return Err(KernelError::Other(format!(
@@ -206,17 +198,15 @@ impl Kernel {
             )));
         }
         let last = frames.len() - 1;
-        let cs = cross_section(polygons)?;
         // Slice z values are exactly 0..=last; round absorbs any ulp drift.
-        let m = Manifold::extrude_with_options(&cs, last as f64, last as i32, 0.0, 1.0, 1.0)
-            .warp(|x, y, z| {
-                let f = &frames[(z.round().max(0.0) as usize).min(last)];
-                [
-                    f[0] * x + f[1] * y + f[3],
-                    f[4] * x + f[5] * y + f[7],
-                    f[8] * x + f[9] * y + f[11],
-                ]
-            });
+        let m = profile::extrude(polygons, last as f64, last as i32, 0.0, [1.0, 1.0])?.warp(|x, y, z| {
+            let f = &frames[(z.round().max(0.0) as usize).min(last)];
+            [
+                f[0] * x + f[1] * y + f[3],
+                f[4] * x + f[5] * y + f[7],
+                f[8] * x + f[9] * y + f[11],
+            ]
+        });
         self.intern(m, None)
     }
 
@@ -224,8 +214,7 @@ impl Kernel {
     /// (radius, height-z). x must be >= 0.
     pub fn revolve(&self, polygons: &[Vec<[f64; 2]>], segments: i32, degrees: f64) -> Result<Hash> {
         check_segments(segments)?;
-        let cs = cross_section(polygons)?;
-        self.intern(Manifold::revolve(&cs, segments, degrees), None)
+        self.intern(profile::revolve(polygons, segments, degrees)?, None)
     }
 
     // --- external meshes (e.g. three.js generator output) ---
@@ -532,19 +521,6 @@ fn check_segments(segments: i32) -> Result<()> {
         )));
     }
     Ok(())
-}
-
-fn cross_section(polygons: &[Vec<[f64; 2]>]) -> Result<CrossSection> {
-    if polygons.is_empty() {
-        return Err(KernelError::Other("cross-section needs at least one polygon".into()));
-    }
-    if let Some(i) = polygons.iter().position(|p| p.len() < 3) {
-        return Err(KernelError::Other(format!(
-            "cross-section polygon {i} has {} points; every polygon needs 3+",
-            polygons[i].len()
-        )));
-    }
-    Ok(CrossSection::from_polygons(polygons))
 }
 
 /// Column-major 4x4 → Manifold's column-major 3x4, rejecting non-affine.

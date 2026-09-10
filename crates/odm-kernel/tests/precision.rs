@@ -48,3 +48,23 @@ fn store_rebuild_survives_far_from_origin() {
 
 // Link the workspace stack dynamically (see odm-dylib).
 use odm_dylib as _;
+
+/// Profiles: extrude/revolve/sweep must not route through Manifold's
+/// CrossSection (Clipper2 rounds to f32; 0.1 came back as f32(0.1)).
+#[test]
+fn profiles_keep_f64_bits() {
+    let store = Store::new();
+    let k = Kernel::new(store.clone());
+    let strip = vec![vec![[0.0, 0.0], [0.1, 0.0], [0.1, 1.0], [0.0, 1.0]]];
+    let frames = [[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0]; 2];
+    let ring = vec![vec![[1.0, 0.0], [1.1, 0.0], [1.1, 1.0], [1.0, 1.0]]];
+    for (what, h) in [
+        ("extrude", k.extrude(&strip, 1.0, 1, 0.0, [1.0, 1.0]).unwrap()),
+        ("sweep", k.sweep(&strip, &frames).unwrap()),
+    ] {
+        let b = k.bounds(h).unwrap().unwrap();
+        assert_eq!(b.max[0], 0.1, "{what} max x");
+    }
+    let b = k.bounds(k.revolve(&ring, 4, 360.0).unwrap()).unwrap().unwrap();
+    assert_eq!(b.max[0], 1.1, "revolve radius");
+}

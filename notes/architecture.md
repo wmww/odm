@@ -100,9 +100,15 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   re-run invokes, `Dep::Cascade` a value hash — missing keys hash a
   sentinel, use `odm_js::cascade_value_hash`).
 - `odm-kernel` — manifold-csg wrapper: primitives (cylinder along Z),
-  extrude/revolve (around Z), sweep (= extrude with one slice per station,
-  then `Manifold::warp` onto JS-computed affine frames; the kernel never
-  sees a path, so caps/holes/fill/welding are the extrude path's),
+  extrude/revolve (around Z) built in `profile.rs`, not via Manifold's
+  `CrossSection` (Clipper2 inside, rounds to f32): loops are deduped,
+  wound by nesting depth (winding is ignored; crossing/touching loops
+  are an error), capped by Manifold's f64 triangulator and walled by a
+  port of Manifold's own Extrude/Revolve (a unit test pins parity with
+  them), then welded via `MeshGL64`. `slices` counts segments (Manifold's
+  own arg counts extra layers). sweep = extrude with one slice per
+  station, then `Manifold::warp` onto JS-computed affine frames; the
+  kernel never sees a path, so caps/holes/welding are the extrude path's;
   booleans/hull with per-operand transforms,
   weld with boundary-edge diagnosis (Manifold's own error is bare
   NotManifold), raycast (Manifold returns distance as a *fraction* of the
@@ -116,14 +122,14 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   takes Float64Array): the store boundary never quantizes, so rebuilds
   re-weld exactly and baked far-from-origin transforms keep detail. The
   ONE f32 conversion is per-mesh GPU vertex upload in odm-render/gpu.rs.
-  The ONE exception on the input side is the 2D cross-section stage
-  (`CrossSection::from_polygons`, so extrude/revolve/sweep profiles),
-  which is f32 inside manifold-csg: 0.1 comes back as f32(0.1) — see
-  issues/2d-profiles-quantize-to-f32.md.
+  Never route anything through manifold-csg's `CrossSection`: Clipper2
+  rounds its coordinates to f32 (0.1 came back as f32(0.1) until
+  2026-09-09, when profiles moved to odm-kernel/profile.rs).
   `precision` test files in odm-ir/odm-kernel/odm-render plus
-  tests/conformance/unstable/three-f64.js are f32-regression tripwires
-  (bit-exact 0.1 / near-1e7 probes) — an `as f32` sneaking into any seam
-  fails one of them; keep new position paths covered there.
+  tests/conformance/unstable/three-f64.js and extrude.js are
+  f32-regression tripwires (bit-exact 0.1 / near-1e7 probes) — an
+  `as f32` sneaking into any seam fails one of them; keep new position
+  paths covered there.
 - `odm-js` — the *native executor*: deno_core =0.408.0; per-build
   disposable isolates from ONE
   snapshot embedding `framework/` (odm API + three r185 subset, every
