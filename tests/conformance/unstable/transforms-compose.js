@@ -53,6 +53,18 @@ export default function build() {
   // A column-major array of 16 is the same argument.
   same(arm.applyMatrix4(M), arm.applyMatrix4(M.elements.slice()), 'applyMatrix4 array form');
 
+  // The three axis shorthands are the general form with a unit axis, and
+  // they turn the right way: a right-handed rotation about each axis.
+  same(arm.rotateX(r), arm.rotate([1, 0, 0], r), 'rotateX = rotate([1,0,0])');
+  same(arm.rotateY(r), arm.rotate([0, 1, 0], r), 'rotateY = rotate([0,1,0])');
+  same(arm.rotateZ(r), arm.rotate([0, 0, 1], r), 'rotateZ = rotate([0,0,1])');
+  // Right-handed: +x rotated 90° about z lands on +y, about y lands on -z.
+  const probe = odm.box(2).translate(10, 0, 0);
+  const q = odm.deg(90);
+  same(probe.rotateZ(q), odm.box(2).translate(0, 10, 0), 'rotateZ is right-handed');
+  same(probe.rotateY(q), odm.box(2).translate(0, 0, -10), 'rotateY is right-handed');
+  same(odm.box(2).translate(0, 10, 0).rotateX(q), odm.box(2).translate(0, 0, 10), 'rotateX is right-handed');
+
   // Rotate-then-scale is not scale-then-rotate: the scale is world-axis
   // aligned either way, so it stretches a different direction of the part.
   const bar = odm.box([20, 2, 2]);

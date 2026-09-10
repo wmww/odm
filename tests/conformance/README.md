@@ -81,6 +81,18 @@ triangulation):
   Pins "shared geometry is interned once": two placements of one solid are
   `meshes: 1`.
 
+## Coverage
+
+`every_api_name_is_exercised` (in the runner) reads the *live* API
+surface — `Object.keys(odm)` plus every non-underscore method up the
+prototype chains of `Solid`/`Group`/`Instance` — and asserts each name
+appears somewhere in this directory as `.name(`, `odm.name(` or
+`new odm.Name(`. Reading it off the surface rather than a list is the
+point: adding a function to `installGlobals` fails the gate until it has
+a test. `Solid`, `Group`, `Instance` and `children` are allowlisted —
+they are exercised by construction and `instanceof`, never called by
+name.
+
 Values pinned by a check must be *derivable* (analytic, or exact CSG
 arithmetic), not pasted from whatever the engine printed — a suite seeded
 with the current output would only ever prove the engine equals itself.

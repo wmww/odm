@@ -120,6 +120,80 @@ fn unstable_suite() {
     );
 }
 
+/// Every name the JS API exposes must appear in the suite. Read off the
+/// *live* surface rather than a hardcoded list, so a newly added function
+/// fails this test until it has a test of its own.
+#[test]
+fn every_api_name_is_exercised() {
+    // The transform/color/name methods live on a mixin base class, so the
+    // walk has to go up the prototype chain, not just read own properties.
+    const PROBE: &str = "//! odm unstable\n\
+        const proto = (c) => {\n\
+          const out = [];\n\
+          for (let p = c.prototype; p && p !== Object.prototype; p = Object.getPrototypeOf(p)) {\n\
+            out.push(...Object.getOwnPropertyNames(p));\n\
+          }\n\
+          return out.filter((n) => n !== 'constructor' && !n.startsWith('_'));\n\
+        };\n\
+        export const names = [...new Set([\n\
+          ...Object.keys(odm),\n\
+          ...proto(odm.Solid), ...proto(odm.Group), ...proto(odm.Instance),\n\
+        ])];\n\
+        export default () => odm.box(1);\n";
+
+    // Exercised by construction or `instanceof`, never called by name.
+    const ALLOWED: &[&str] = &["Solid", "Group", "Instance", "children"];
+
+    let env = crate::state::tests::env();
+    let store = odm_store::Store::new();
+    let kernel = odm_kernel::Kernel::new(store.clone());
+    let names = odm_js::extract_export(
+        &env,
+        "root.js",
+        PROBE,
+        odm_build::ApiVersion::Unstable,
+        "names",
+        kernel,
+        store,
+        odm_js::EXTRACT_TIMEOUT,
+    )
+    .expect("read the API surface")
+    .expect("the probe exports `names`");
+    let names: Vec<String> = serde_json::from_value(names).expect("names is a string list");
+    assert!(names.len() > 15, "only {} API names found: {names:?}", names.len());
+
+    let suite = concat_suite(&suite_dir("unstable"));
+    let missing: Vec<&String> = names
+        .iter()
+        .filter(|n| !ALLOWED.contains(&n.as_str()))
+        .filter(|n| {
+            let cap = format!("{}{}", n[..1].to_uppercase(), &n[1..]);
+            !suite.contains(&format!(".{n}("))
+                && !suite.contains(&format!("odm.{n}("))
+                && !suite.contains(&format!("new odm.{cap}("))
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "no conformance test calls {missing:?} — every API name needs one \
+         (add it to a file in tests/conformance/unstable/)"
+    );
+}
+
+/// Every `.js` under the suite directory, concatenated.
+fn concat_suite(dir: &Path) -> String {
+    let mut out = String::new();
+    for entry in std::fs::read_dir(dir).expect("suite dir").flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.push_str(&concat_suite(&path));
+        } else if path.extension().is_some_and(|e| e == "js") {
+            out.push_str(&std::fs::read_to_string(&path).expect("read test file"));
+        }
+    }
+    out
+}
+
 /// All check failures for one test project (Err), or all-good (Ok).
 fn run_test(project: &Path) -> Result<(), Vec<String>> {
     let env = crate::state::tests::env();
