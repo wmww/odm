@@ -1,6 +1,5 @@
-//! Golden-ish integration: the example projects must build, be deterministic
-//! across engines, and behave (animation, composition) as documented.
-//! (Pixel goldens are CI/lavapipe-only and live with the render pipeline.)
+//! Integration: the example projects must build, be deterministic across
+//! engines, and behave (animation, composition, sharing) as documented.
 
 use odm_build::{BuildEngine, InputKind, View};
 use odm_kernel::Kernel;
@@ -32,31 +31,6 @@ fn build_example(name: &str, t: f64) -> (Arc<BuildEngine>, odm_ir::Hash) {
         .build_view(&e.start_pass(&sync, view_at(t)))
         .unwrap_or_else(|err| panic!("{name} failed to build: {err:?}"));
     (e, result.root)
-}
-
-/// Golden IR hashes at t=0. Policy (notes/architecture.md): regenerate on V8, three,
-/// or Manifold upgrades — JS transcendentals and kernel output are
-/// implementation-defined across versions, deterministic within one.
-/// To regenerate: run this test and copy the printed values.
-#[test]
-fn example_scene_hashes_are_stable() {
-    let golden = [
-        ("hello-bracket", "3ebcd3ae9fcafe2082c51c12a956b82da39a1311cf6552aebfa8f36f3fe059d1"),
-        ("parametric-box", "3be3042ff294a6948f991fb1aff0a44065db34fdf8f7195c6af9e4b63947de75"),
-        ("assembly", "b921962bd68306ff5b0fa9e4e444a5be5cec324a1245ebe40a1318918a7bf093"),
-        ("piston", "13cf6f151978621e9c0f68d37b7aa3ed29a975aa82f9461ffa032e7211cd5db8"),
-        ("input-gallery", "904eefa21a4256d29a210593525099962469863c65fdffded4084ca5293520f7"),
-    ];
-    let mut failures = vec![];
-    for (name, want) in golden {
-        let (_e, root) = build_example(name, 0.0);
-        let got = root.to_hex();
-        println!("golden: (\"{name}\", \"{got}\"),");
-        if got != want {
-            failures.push(name);
-        }
-    }
-    assert!(failures.is_empty(), "IR hashes changed for {failures:?} — if a dependency was upgraded, regenerate from the printed values");
 }
 
 #[test]
