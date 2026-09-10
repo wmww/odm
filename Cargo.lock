@@ -2734,6 +2734,9 @@ dependencies = [
  "odm-dylib",
  "odm-engine",
  "odm-export",
+ "png",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

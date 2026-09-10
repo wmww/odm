@@ -1039,6 +1039,15 @@ with no `#[cfg(test)]` modules. **If you add unit tests to `src/` in
 odm-build/odm-cli/odm-ir/odm-kernel/odm-store, flip that crate's `[lib]
 test` back to true** — the manifest carries a comment saying so.
 
+`crates/odm/tests/e2e.rs` is the only suite that runs the *shipped binary*:
+it spawns `odm run --headless` into a temp project under `/tmp` (the socket
+path is length-limited, so not the scratchpad) and drives it with real `odm
+<cmd>` invocations — arg dispatch, socket lifecycle, sync-on-query, the
+inotify watcher (via `odm poll --follow`, which never syncs), stale-socket
+reclaim after a SIGKILL, and `odm docs`. ~13 engine spawns, under a second.
+Assert structure and exit codes only; wording is `cli_reference_is_current`'s
+job.
+
 **A test that cannot run must fail**, naming its escape hatch — never
 silently pass. Two hatches exist, both off by default: `ODM_TEST_NO_GPU=1`
 skips the render tests (`crates/odm-render/tests/common/mod.rs`; on success
