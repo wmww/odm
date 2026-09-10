@@ -66,6 +66,10 @@ struct Targets {
 pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// Adapter this renderer runs on, for test/diagnostic output. `new()`
+    /// fills it from `adapter.get_info()`; `with_device` inherits a host's
+    /// device and cannot know.
+    adapter: String,
     globals_layout: wgpu::BindGroupLayout,
     instance_layout: wgpu::BindGroupLayout,
     peel_layout: wgpu::BindGroupLayout,
@@ -114,7 +118,10 @@ impl Renderer {
         ))
         .map_err(|e| RenderError::Device(e.to_string()))?;
 
-        Ok(Self::with_device(device, queue))
+        let info = adapter.get_info();
+        let mut renderer = Self::with_device(device, queue);
+        renderer.adapter = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
+        Ok(renderer)
     }
 
     /// Create on an existing device (e.g. eframe's) — the viewer path.
@@ -220,6 +227,7 @@ impl Renderer {
         Renderer {
             device,
             queue,
+            adapter: "host-provided device".into(),
             globals_layout,
             instance_layout,
             peel_layout,
@@ -240,6 +248,12 @@ impl Renderer {
             mesh_cache: HashMap::new(),
             targets: None,
         }
+    }
+
+    /// Name/backend/type of the adapter, when this renderer opened its own
+    /// device. A software rasterizer standing in for a GPU shows up here.
+    pub fn adapter_description(&self) -> String {
+        self.adapter.clone()
     }
 
     /// Drop cached GPU buffers for meshes no longer alive.

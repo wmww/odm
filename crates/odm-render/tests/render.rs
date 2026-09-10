@@ -1,5 +1,7 @@
+mod common;
+
 use odm_ir::{Color, Node, Transform};
-use odm_render::{Camera, RenderOptions, Renderer, flatten_scene};
+use odm_render::{Camera, RenderOptions, flatten_scene};
 use odm_store::{Object, Store};
 
 /// Store with a colored cube + cylinder scene; returns (store, root hash).
@@ -26,16 +28,6 @@ fn demo_scene() -> (std::sync::Arc<Store>, odm_ir::Hash) {
     (store, root_hash)
 }
 
-fn renderer_or_skip() -> Option<Renderer> {
-    match Renderer::new() {
-        Ok(r) => Some(r),
-        Err(e) => {
-            eprintln!("skipping render test (no GPU adapter): {e}");
-            None
-        }
-    }
-}
-
 fn decode(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
     let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
     let mut reader = decoder.read_info().unwrap();
@@ -47,7 +39,7 @@ fn decode(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
 
 #[test]
 fn render_smoke_and_determinism() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     let (store, root) = demo_scene();
     let scene = flatten_scene(&store, root).unwrap();
     assert_eq!(scene.instances.len(), 2);
@@ -66,7 +58,7 @@ fn render_smoke_and_determinism() {
 
 #[test]
 fn option_variants_render() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     let (store, root) = demo_scene();
     let scene = flatten_scene(&store, root).unwrap();
 
@@ -169,7 +161,7 @@ fn assert_near(got: [u8; 4], want: [f64; 4], what: &str) {
 
 #[test]
 fn translucent_blend_math() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     // Opaque red below, 50% green above: center = 0.5 green + 0.5 red.
     let (store, root) = stacked_scene(&[
         (0.0, [1.0, 0.0, 0.0, 1.0]),
@@ -203,7 +195,7 @@ fn translucent_blend_math() {
 
 #[test]
 fn xray_opacity_option() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     // One opaque green slab; opts.opacity 0.5 turns it translucent over black.
     let (store, root) = stacked_scene(&[(0.0, [0.0, 1.0, 0.0, 1.0])]);
     let scene = flatten_scene(&store, root).unwrap();
@@ -215,7 +207,7 @@ fn xray_opacity_option() {
 
 #[test]
 fn translucent_determinism_and_depth_invariance() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     // Interpenetrating translucent boxes — the case draw-order sorting gets
     // wrong and peeling must not.
     let store = Store::new();
@@ -274,7 +266,7 @@ fn translucent_determinism_and_depth_invariance() {
 
 #[test]
 fn supersample_renders_and_validates() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     let (store, root) = stacked_scene(&[
         (0.0, [1.0, 0.0, 0.0, 1.0]),
         (3.0, [0.0, 1.0, 0.0, 0.5]),
@@ -298,7 +290,7 @@ fn supersample_renders_and_validates() {
 
 #[test]
 fn transparent_background_png_alpha() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     let (store, root) = stacked_scene(&[(0.0, [0.0, 1.0, 0.0, 0.5])]);
     let scene = flatten_scene(&store, root).unwrap();
     let mut opts = top_down_opts(160, 160);
@@ -313,7 +305,7 @@ fn transparent_background_png_alpha() {
 
 #[test]
 fn overlay_segments_draw_depth_tested() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     // Opaque red slab; a green overlay above it and a blue one below it,
     // both crossing the image center. Top-down: green wins, blue is hidden.
     let (store, root) = stacked_scene(&[(0.0, [1.0, 0.0, 0.0, 1.0])]);
@@ -333,7 +325,7 @@ fn overlay_segments_draw_depth_tested() {
 
 #[test]
 fn bad_size_rejected() {
-    let Some(mut renderer) = renderer_or_skip() else { return };
+    let Some(mut renderer) = common::renderer() else { return };
     let (store, root) = demo_scene();
     let scene = flatten_scene(&store, root).unwrap();
     let opts = RenderOptions::default_with(0, 100);

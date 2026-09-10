@@ -5,7 +5,8 @@
 //! transformer's output, the module registry, per-build fresh module scope,
 //! the determinism prelude swap, and the ops glue signatures.
 //!
-//! Skips (with a note) when `node` is not on PATH.
+//! node is a real dependency of the web-export lane, not an optional extra,
+//! so a missing one fails; `ODM_TEST_NO_NODE=1` opts out.
 
 use std::process::Command;
 
@@ -101,9 +102,15 @@ export function odm_web_start() { throw new Error('not in node'); }
 
 #[test]
 fn bundle_runs_in_node() {
-    if Command::new("node").arg("--version").output().is_err() {
-        eprintln!("node not found; skipping bundle-in-node test");
-        return;
+    if let Err(e) = Command::new("node").arg("--version").output() {
+        if std::env::var("ODM_TEST_NO_NODE").as_deref() == Ok("1") {
+            eprintln!("ODM_TEST_NO_NODE=1: skipping the bundle-in-node test ({e})");
+            return;
+        }
+        panic!(
+            "node not on PATH: {e}. node runs the JS half of a web export; set \
+             ODM_TEST_NO_NODE=1 to skip this test on a machine without it."
+        );
     }
     let dir = tempfile::tempdir().unwrap();
     let project = dir.path().join("project");

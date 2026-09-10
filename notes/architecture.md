@@ -1039,6 +1039,13 @@ with no `#[cfg(test)]` modules. **If you add unit tests to `src/` in
 odm-build/odm-cli/odm-ir/odm-kernel/odm-store, flip that crate's `[lib]
 test` back to true** — the manifest carries a comment saying so.
 
+**A test that cannot run must fail**, naming its escape hatch — never
+silently pass. Two hatches exist, both off by default: `ODM_TEST_NO_GPU=1`
+skips the render tests (`crates/odm-render/tests/common/mod.rs`; on success
+it prints the adapter once, so a silent fall back to a software rasterizer
+is visible under `--nocapture`) and `ODM_TEST_NO_NODE=1` skips
+`node_bundle.rs`. Without them a missing GPU or `node` is a panic.
+
 Useful invocations: `cargo test -p odm-build`, `cargo test --test render`,
 `cargo test <substring>`, `cargo test -q` (dots instead of one line per test).
 

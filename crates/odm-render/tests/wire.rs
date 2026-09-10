@@ -1,5 +1,7 @@
 //! Wireframe mode: edges only, and picking that hits the wires themselves.
 
+mod common;
+
 use odm_ir::{Node, Transform};
 use odm_render::{
     Camera, DEFAULT_COLOR, RenderOptions, Renderer, WIRE_WIDTH_PX, flatten_scene,
@@ -96,10 +98,7 @@ fn render_rgba(renderer: &mut Renderer, scene: &odm_render::RenderScene, opts: &
 
 #[test]
 fn wireframe_draws_no_fill() {
-    let Ok(mut renderer) = Renderer::new() else {
-        eprintln!("skipping (no GPU adapter)");
-        return;
-    };
+    let Some(mut renderer) = common::renderer() else { return };
     let (store, root) = stacked_scene();
     let scene = flatten_scene(&store, root).unwrap();
 
@@ -124,10 +123,7 @@ fn wireframe_draws_no_fill() {
 /// down across a scanline cutting the big cube's left silhouette edge.
 #[test]
 fn wires_are_wire_width_px_wide() {
-    let Ok(mut renderer) = Renderer::new() else {
-        eprintln!("skipping (no GPU adapter)");
-        return;
-    };
+    let Some(mut renderer) = common::renderer() else { return };
     let (store, root) = stacked_scene();
     let scene = flatten_scene(&store, root).unwrap();
     let mut opts = ortho_opts();
