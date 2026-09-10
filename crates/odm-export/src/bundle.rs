@@ -228,6 +228,69 @@ fn json(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The web executor mirrors odm-js's op list by hand (odm-web is
+    /// wasm32-only, so the gate cannot reach it — notes/web-export.md). An
+    /// op added on one side and not the other is a doohickey that builds
+    /// natively and dies in the browser, so compare the two source files.
+    #[test]
+    fn the_two_op_lists_agree() {
+        let names = |src: &str| -> std::collections::BTreeSet<String> {
+            src.split("fn op_")
+                .skip(1)
+                .filter_map(|rest| {
+                    let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '_')?;
+                    Some(format!("op_{}", &rest[..end]))
+                })
+                .collect()
+        };
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let native = std::fs::read_to_string(root.join("../odm-js/src/ops.rs")).unwrap();
+        let web = std::fs::read_to_string(root.join("../odm-web/src/executor.rs")).unwrap();
+        let (native, web) = (names(&native), names(&web));
+        assert!(native.len() >= 17, "found only {} ops in odm-js: {native:?}", native.len());
+        assert_eq!(
+            native, web,
+            "odm-js and odm-web disagree on the op list; only in odm-js: {:?}, only in odm-web: {:?}",
+            native.difference(&web).collect::<Vec<_>>(),
+            web.difference(&native).collect::<Vec<_>>(),
+        );
+    }
+
+    /// This file's version tables are a mirror of odm-js's, in relative-path
+    /// form. They must name the same files for every supported version, or
+    /// an export would bundle a different surface than the engine built.
+    #[test]
+    fn the_version_tables_agree() {
+        const PREFIX: &str = "file:///odm/framework/";
+        let mut checked = 0;
+        for &v in odm_build::SUPPORTED {
+            // The `test` channel is a fixture the workspace's dev-deps turn
+            // on; the web export declines it on purpose.
+            if v.name() == "test" {
+                continue;
+            }
+            checked += 1;
+            let native = odm_js::version_manifest(v);
+            let native = native.strip_prefix(PREFIX).unwrap_or_else(|| panic!("{native}"));
+            assert_eq!(
+                super::version_manifest(v).unwrap_or_else(|e| panic!("{v}: {e}")),
+                native,
+                "{v}: manifest"
+            );
+            for spec in ["three", "odm"] {
+                let native = odm_js::resolve_bare(v, spec)
+                    .unwrap_or_else(|| panic!("{v}: odm-js resolves no {spec:?}"));
+                let native = native.strip_prefix(PREFIX).unwrap_or_else(|| panic!("{native}"));
+                assert_eq!(
+                    super::resolve_bare(v, spec).unwrap_or_else(|e| panic!("{v}: {e}")),
+                    native,
+                    "{v}: bare {spec:?}"
+                );
+            }
+        }
+        assert!(checked > 0, "no real API version was compared");
+    }
     use odm_build::Source;
     use odm_ir::Hash;
     use std::collections::BTreeMap;

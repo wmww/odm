@@ -2816,6 +2816,7 @@ dependencies = [
  "odm-js",
  "odm-kernel",
  "odm-store",
+ "png",
  "serde_json",
  "tempfile",
 ]

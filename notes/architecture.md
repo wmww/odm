@@ -1052,6 +1052,14 @@ reclaim after a SIGKILL, and `odm docs`. ~13 engine spawns, under a second.
 Assert structure and exit codes only; wording is `cli_reference_is_current`'s
 job.
 
+The web export has two native drift guards in the gate (odm-export
+`bundle.rs` tests): the `op_*` name sets in `odm-js/src/ops.rs` and
+`odm-web/src/executor.rs` must match, and this crate's mirror of odm-js's
+per-version manifest/bare-specifier tables must agree with the originals
+(`odm_js::{version_manifest, resolve_bare}` are public for exactly that).
+The browser itself is the opt-in lane — `cargo xtask test-web`, see
+notes/web-export.md.
+
 **A test that cannot run must fail**, naming its escape hatch — never
 silently pass. Two hatches exist, both off by default: `ODM_TEST_NO_GPU=1`
 skips the render tests (`crates/odm-render/tests/common/mod.rs`; on success

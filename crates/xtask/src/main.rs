@@ -19,8 +19,9 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("build-web-template") => build_web_template(),
+        Some("test-web") => test_web(),
         _ => {
-            eprintln!("usage: cargo xtask build-web-template");
+            eprintln!("usage: cargo xtask build-web-template | test-web");
             std::process::exit(2);
         }
     };
@@ -28,6 +29,22 @@ fn main() {
         eprintln!("xtask: {e:#}");
         std::process::exit(1);
     }
+}
+
+/// `cargo xtask test-web` — the whole opt-in web lane: build the template,
+/// then run the `#[ignore]`d browser test against it. Never part of `cargo
+/// test --workspace`; the wasm build alone dwarfs the whole suite.
+fn test_web() -> anyhow::Result<()> {
+    build_web_template()?;
+    eprintln!("running the browser lane (odm-export --test web_lane)…");
+    let status = Command::new("cargo")
+        .current_dir(repo_root())
+        .args(["test", "-p", "odm-export", "--test", "web_lane", "--", "--ignored", "--nocapture"])
+        .status()?;
+    if !status.success() {
+        bail!("the web lane failed");
+    }
+    Ok(())
 }
 
 fn repo_root() -> PathBuf {

@@ -44,7 +44,7 @@ fn framework_file(specifier: &ModuleSpecifier) -> Option<&'static str> {
 
 /// The per-version surface manifest: the module that assembles what this
 /// version exposes and registers its installer in `__odmVersions`.
-fn version_manifest(version: ApiVersion) -> &'static str {
+pub fn version_manifest(version: ApiVersion) -> &'static str {
     match version {
         ApiVersion::Unstable => "file:///odm/framework/versions/unstable.js",
         #[cfg(feature = "test-api-version")]
@@ -55,7 +55,7 @@ fn version_manifest(version: ApiVersion) -> &'static str {
 /// Maps bare specifiers 'three' / 'odm' to this version's entry modules.
 /// This is where a stamped version pins its own surface (shims, its own
 /// three subset) once versions diverge.
-fn resolve_bare(version: ApiVersion, specifier: &str) -> Option<&'static str> {
+pub fn resolve_bare(version: ApiVersion, specifier: &str) -> Option<&'static str> {
     match (version, specifier) {
         (_, "three") => Some("file:///odm/framework/three/entry.js"),
         (ApiVersion::Unstable, "odm") => Some("file:///odm/framework/odm/index.js"),

@@ -27,3 +27,4 @@ blake3.workspace = true
 [dev-dependencies]
 odm-dylib = { path = "../odm-dylib" }  # thin test binaries: link the stack via one .so
 tempfile = "3"
+png = "0.18"  # the opt-in web lane decodes chromium's screenshots

@@ -191,6 +191,19 @@ an unexpected Manifold-internal throw would be a wasm trap, not an error.
 
 ## Testing an export (BOTH lanes)
 
+**Automated: `cargo xtask test-web`** — builds the template, then runs the
+`#[ignore]`d `crates/odm-export/tests/web_lane.rs` against it. It exports
+the piston example, serves it on a free port, and loads it in headless
+chromium on both lanes (GL by injecting the `navigator.gpu` override into
+a copied `index.html`), asserting: the `ODM viewer: <lane>` line names the
+lane expected, no console errors, the screenshot is not one flat colour
+(a GL failure is silently black), and — the one property that is really
+the web lane's own — that the `ODM root: <hex>` line the host publishes
+equals the root hash `odm_build` produces natively for the same view.
+Never in `cargo test --workspace`: the wasm build alone dwarfs the suite.
+
+The manual recipe, for looking at it:
+
 ```sh
 cargo xtask build-web-template
 cargo run -p odm -- export --web /tmp/site examples/piston

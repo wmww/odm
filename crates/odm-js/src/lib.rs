@@ -11,6 +11,9 @@ mod snapshot;
 
 pub use session::SessionState;
 pub use snapshot::JsEnv;
+/// The per-version surface tables. Public so the web export's mirror of
+/// them (odm-export `bundle.rs`) can be drift-tested against the originals.
+pub use snapshot::{resolve_bare, version_manifest};
 
 // The executor seam's types live in odm-build; re-export the ones this
 // crate's callers use alongside the V8 implementation.

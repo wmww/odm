@@ -157,6 +157,15 @@ impl WebEngine {
         entry.view = view;
         match result {
             Ok(res) => {
+                // The one property of the web lane that is genuinely its
+                // own: the build ran through the JS-glue executor and the
+                // wasm kernel, so its root hash must equal what odm-build
+                // produces natively for the same view. Printed for
+                // `crates/odm-export/tests/web_lane.rs` to compare.
+                web_sys::console::debug_1(&wasm_bindgen::JsValue::from_str(&format!(
+                    "ODM root: {}",
+                    res.root.to_hex()
+                )));
                 drop(state);
                 let report = self.build.input_report(&pass);
                 let obj = self.store.get(res.root);

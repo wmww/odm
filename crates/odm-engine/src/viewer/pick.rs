@@ -151,7 +151,7 @@ mod tests {
             };
             self.ctx.begin_pass(input);
             let outcome = self.picker.ui(&self.ctx);
-            self.ctx.end_pass();
+            let _ = self.ctx.end_pass();
             outcome
         }
 
