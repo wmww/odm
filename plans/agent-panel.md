@@ -96,11 +96,17 @@ mid-turn, hung prompt → watchdog. Real adapters are an opt-in lane.
   then); resume via `session/load` when supported, else fresh session;
   File ▸ Open kills the old project's agent; viewer exit kills + reaps.
   Agent crash → a red transcript line, next message respawns.
-- Headless: no agent is ever spawned. The CLI is unchanged for agents run
-  by hand.
-- Build diagnostics used to ride poll's `events`; now the agent sees them
-  in `status` and command responses only. Pushing a failure into an idle
-  session is a possible later feature, not this plan.
+- Headless: no agent is ever spawned. Agents run by hand outside ODM are
+  no longer a supported use case — the CLI is the managed agent's tool
+  surface and may change freely with it.
+- Build diagnostics are pushed, replacing poll's `events`: keep
+  `diagnostic_map` + a per-session baseline (state-compare, not an event
+  queue). Idle session: a change sends an engine-authored prompt (failing
+  slots/files + errors; shown as an `engine:` transcript line). Turn
+  running: push nothing — the agent's own half-done edits make transient
+  failures and its CLI responses already carry `builds`; at turn end, if
+  the map is non-empty and differs from the baseline, send one follow-up
+  prompt. Engine host warnings (`Who::Engine`) ride the same path.
 
 ## Phase 4 — panel UI
 
@@ -126,9 +132,8 @@ mid-turn, hung prompt → watchdog. Real adapters are an opt-in lane.
 
 - Delete `odm poll` (incl. `--follow`, `events`), `ack`, Delivery.
   Removed-command redirects in `requests.rs` say why.
-- `odm say`: reduce to a one-way "post a line to the panel" for agents run
-  outside ODM (no task/done). Open question whether even that earns its
-  keep — see below.
+- Delete `odm say` too: a plain ACP message is how the agent talks to the
+  user, and turn state replaces task/done.
 - `docs/prompts/`: cut the chat loop; regenerate `docs/cli.md`.
 - Notes: rewrite architecture.md "Talking to the agent", agent-surface.md,
   design-decisions ("No MCP: CLI + prompts" rationale changes shape, not
@@ -140,7 +145,6 @@ mid-turn, hung prompt → watchdog. Real adapters are an opt-in lane.
   managed agent shows up as both. Lean: keep the ODM action line (it feeds
   the activity view and is semantic), hide the ACP tool-call line when its
   command is `odm …`.
-- Keep `odm say` at all once ACP lands?
 - Auth without a terminal (phase 0.4). Fallback: the header tells the user
   the login command to run themselves.
 - Transcript persistence for agents without `session/load`: none (fresh

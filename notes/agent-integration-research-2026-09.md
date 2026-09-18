@@ -26,9 +26,9 @@ plans/agent-panel.md; nothing built.
   exactly that: run the CLI in a terminal.
 - Decision (user, same day): accept the risk. No terminal fallback tier —
   the embedded-terminal plan (PTY tab via alacritty_terminal +
-  portable-pty) was deleted unbuilt. If the billing change lands, the
-  fallback is the user running their CLI agent in their own terminal
-  against the unchanged `odm` CLI.
+  portable-pty) was deleted unbuilt, and externally-run agents stop being
+  a supported use case (poll/say go; the CLI serves the managed agent).
+  If the billing change lands, that is a problem for then.
 
 Sources: agentclientprotocol.com/get-started/agents,
 zed.dev/blog/anthropic-subscription-changes,
