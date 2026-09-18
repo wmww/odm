@@ -15,7 +15,8 @@ design driver.
   world space, so the file is one valid manifold: overlaps fuse,
   disjoint parts stay separate bodies. Off = every solid written as-is
   (exact, but overlapping siblings self-intersect).
-- **`units` in `odm.toml`, default metres**; export converts to mm
+- **`units` in `odm.toml`: `mm | m | in | ft`, default mm**, chosen
+  with a selector in the New Project popup; export converts to mm
   (what slicers assume). The dialog's Units option starts at the
   project's unit and can be overridden per export. No free scale field.
 - **Current inputs as shown** — panel values and current `t`. No preset
@@ -38,18 +39,19 @@ design driver.
 
 ## Units
 
-- `ProjectMarker` gains `units: Units` (`#[serde(default)]` = `m`);
-  enum `mm | cm | m | in`, each with a `to_mm()` factor. Unknown value
+- `ProjectMarker` gains `units: Units` (`#[serde(default)]` = `mm`);
+  enum `mm | m | in | ft`, each with a `to_mm()` factor. Unknown value
   = the usual BadMarker error listing the four.
-- Existing projects have no key and read as **metres**; the engine does
-  not write it in (its only odm.toml write stays `engine`). The bundled
-  examples are all modelled in mm — give each `units = "mm"` (and check
-  any project templates/tests that assume mm-scale numbers).
-- File ▸ New Project writes `units` explicitly; add a units dropdown to
-  the dialog (default m).
+- Existing projects have no key and read as mm (the bundled examples
+  are all modelled in mm, so nothing changes for them); the engine does
+  not write it in (its only odm.toml write stays `engine`).
+- File ▸ New Project (`viewer/new.rs`) gets a **Units selector** — mm
+  (default), m, in, ft — and always writes `units` explicitly. The
+  starter `root.js`/agent file it authors should be sized sensibly for
+  the chosen unit (or at least state it in a comment).
 - Agents must know the unit to model in it: `status` reports `units`,
   `docs/api/determinism.md`'s "Units are yours" becomes "the project
-  declares its unit in odm.toml (default m); export relies on it", and
+  declares its unit in odm.toml (default mm); export relies on it", and
   the prompt gets one clause pointing at it. This is a deliberate
   prompt addition (wrong units = wrong prints, and the agent can't
   discover a convention it doesn't know exists) — record it in
@@ -117,8 +119,8 @@ addition.
   - Header line: `Exporting <view path>` + the tab's current inputs in
     the caption form `frames` uses (`t=0.75`), so it's clear which
     instant is captured.
-  - **Options** block under the browser: `Units: [m ▾]` (the four
-    units; starts at the project's, labelled e.g. "m (project)") and
+  - **Options** block under the browser: `Units: [mm ▾]` (the four
+    units; starts at the project's, labelled e.g. "mm (project)") and
     `[x] Union overlapping solids`. Under them a live size line,
     `0.08 × 0.06 × 0.0042 m → 80 × 60 × 4.2 mm`, from the scene bounds
     × the chosen unit (no kernel work), turning warning-colored when
@@ -144,7 +146,7 @@ addition.
 
 - Writer unit tests: byte-exact golden for a cube (header, count,
   normals outward, 50 bytes/tri), determinism (two exports identical),
-  unit scaling (cube of 0.02 in `m` → 20 mm; same cube as `mm` → 0.02 mm + size warning).
+  unit scaling (cube of 0.02 in `m` → 20 mm; same cube as `mm` → 0.02 mm + size warning; `ft` → 6.096 mm).
 - Union: two overlapping cubes → one body, volume = union volume;
   two disjoint → `bodies: 2` + warning; mirrored instance → positive
   volume when re-read.
@@ -153,8 +155,8 @@ addition.
 - Options: `units` override beats the project's; union off → two
   overlapping cubes keep both shells (tri count = sum), report echoes
   the resolved options.
-- Marker: `units` absent = m, bad value error text, `status` echo;
-  examples still export at mm scale.
+- Marker: `units` absent = mm, bad value error text, `status` echo.
+- New Project: selector default mm; chosen unit lands in odm.toml.
 - Command: spec-table entry, unknown extension error, `export --web`
   still routes to odm-export.
 - Dialog: headless-egui test in the style of the existing dialog tests
