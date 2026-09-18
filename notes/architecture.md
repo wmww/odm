@@ -43,7 +43,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - The `//!` comment block doubles as prose description (summary line +
   body), parsed at sync time without evaluating the module.
 - `.odm/` is engine-owned (socket `.odm/engine.sock`, `renders/`,
-  `viewer.json` tab persistence, `feedback/` pending reports — see
+  `viewer.json` tab persistence, `config.toml` + `agent.json` — see
+  "Talking to the agent" —, `feedback/` pending reports — see
   "Feedback" below). Excluded from generation hashing.
 - **Project resolution** (`odm-cli`, reused by `run`): an explicitly named
   dir — `odm run <dir>`, `--project <dir>` — is taken exactly as given and
@@ -274,7 +275,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   Headless runs the same background threads as a viewer session (build
   loop + watcher + health sweep, `session::spawn_background`) minus the
   UI — the engine keeps its slots' published values current, a viewer is
-  just eyes on them; `status`/poll are truthful headless and the memo
+  just eyes on them; `status` is truthful headless and the memo
   cache stays warm. Default: + eframe
   viewer (menu bar, tab strip — a `viewer::Item` per tab: a view, or the
   one Feedback page (below) —, persisted in
@@ -298,8 +299,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   its own — absent when the build said nothing, gray for logs, amber for a
   warning/logged error, red for a thrown one, so a failed build says
   so from the Agent tab; the Agent label carries a status lamp —
-  `StripTab::lamp` — dark red when nothing is listening, green when an
-  `odm poll` is waiting, blinking while the agent has a task)
+  `StripTab::lamp` — see "Talking to the agent")
   with last-good scene (`Published.logs` is latest-attempt: success or
   failure, colored by `LogLevel`; a failed build's error is the final
   red entry — presentation-only merge, `Published.error` stays its own
@@ -346,8 +346,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   it (session-local; off = drain-and-drop, no column). Burst coalescing (N
   rays → one card) deliberately out of scope, the caps bound bursts.
   Commands: status/inspect/render/raycast/clearance/export (STL — see
-  "STL export"), poll/say/ack (see
-  "Talking to the agent") and `feedback` (see "Feedback"); every command except those three syncs first
+  "STL export"), and `feedback` (see "Feedback"); every command except `feedback` syncs first
   (no standalone `sync` — folded into `status` 2026-08). Commands run
   concurrently (one thread per connection, no global command lock since
   2026-08-17): the one global lock is `EngineState::build_gate`, an RwLock
@@ -377,8 +376,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   view-targeting success. View-scoped queries take optional
   `path` + `inputs`/`preset`, or adopt a viewer tab: `"view": true` =
   the user's active tab, `"view": "<slot>"` = that tab (untagged
-  `ViewSel`); poll answers carry a snapshot of the user's active view
-  (path, inputs, selection), and `status` reports per-slot inputs,
+  `ViewSel`); `status` reports per-slot inputs,
   build state (ok/error/building/pending, last-published — status never
   builds) and the active tab's selection. Agent-visible responses print
   no content hashes and no `generation` (status keeps it) — see
@@ -393,6 +391,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   `watcher.rs`, `server.rs`, `session.rs`, `scene.rs`, `stl.rs`, and `viewer/` — the
   desktop chrome around odm-viewer-core (`mod.rs` shell: layout, tab strip,
   chat, dialogs, and the `impl odm_viewer_core::Engine for EngineState`;
+  `panel.rs` the Agent panel, `settings.rs` the Agent Settings page,
   `idle.rs` event loop, `menu.rs` menu bar + its accelerators, `browse.rs`
   folder list with `open.rs`/`new.rs`/`export.rs`/`export_stl.rs` on top of it, `pick.rs` doohickey
   picker, `tabs.rs` tab persistence, `agent.rs` agent-file question,
@@ -423,15 +422,17 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   (`cargo xtask build-web-template`). Whole story in
   notes/web-export.md; odm-web is wasm-only (native = empty stub) so
   ordinary builds never need its toolchain.
+- `odm-config`, `odm-agent` — user config and the ACP client; see
+  "Talking to the agent".
 - `odm-prompt` — std-only, no odm deps (odm-cli must stay V8-free): the
   `docs/prompts/*.md` `include_str!`s behind `text()`, plus the marked-block
   machinery both the `prompt` docs topic and the engine's on-open sync use.
 - `odm-cli` — transport only: project resolution — `find_project` (the
   cwd walk-up), `project_dir`, `is_project`, all reused by `run` — the
-  socket, one JSON positional forwarded as the request body (plus
-  poll's two flags and say's free text; the engine owns all other
-  validation), client-side `out` resolution, pretty-printing, the poll
-  ack handshake, exit code from `ok`. Plus the engine-less `docs.rs`
+  socket, one JSON positional forwarded as the request body (the engine
+  owns all validation; `poll`/`say` are redirected CLI-side, since they
+  took flags), client-side `out` resolution, pretty-printing, exit code
+  from `ok`. Plus the engine-less `docs.rs`
   (`odm docs` `include_dir!`s the whole `docs/` tree: topic dump —
   including the `prompt` topic over `odm_prompt::text` — section-grepping
   `search`, `changes <from> <to>` migration concatenation, `--api N`
@@ -602,9 +603,9 @@ labels, real focus, asserting on the painted galley text).
 drop-down listing `MenuEntry`s, and one `apply` that turns an action into an
 effect. File has New Project… / Open Project… | Open Doohickey… (Ctrl+O) /
 Close Doohickey (Ctrl+W) | Export Web… / Export STL… (grayed via
-`MenuEntry::enabled` while the tab has no built result) | Quit (Ctrl+Q); Edit has one item,
-Message Agent (Ctrl+Enter) — put the dock on the Agent tab and the caret in
-its box (`ViewerApp::focus_chat`, taken by the box when it next draws); View
+`MenuEntry::enabled` while the tab has no built result) | Quit (Ctrl+Q); Edit has Message
+Agent (Ctrl+Enter) — put the dock on the Agent tab and the caret in its box
+(`AgentPanel::focus`, taken by the box when it next draws) — and Agent Settings…; View
 has Frame Scene (F) and checkmarked Wireframe/X-Ray/Grid/Agent Activity.
 Opening a *project* has no chord on purpose: swapping the whole engine is not
 something to trip over next to Ctrl+O. `menu::shortcuts` reads those chords
@@ -768,140 +769,180 @@ the machine until a human presses Send.**
 
 ### Talking to the agent
 
-The user types in the viewer's chat panel; the agent collects messages with
-`odm poll` and answers with `odm say`. No MCP: CLI + `docs/prompts/` is
-agent-agnostic and enough.
+The dock's Agent tab is a front end onto an agent process ODM spawns and
+talks to over **ACP** (Agent Client Protocol: ndjson JSON-RPC on the
+child's stdio). Built 2026-09-18 (was plans/agent-panel.md), replacing the
+`odm poll`/`odm say` chat. Why ACP, which agents, the billing risk we
+accepted, wire facts: notes/agent-integration-research-2026-09.md.
 
-- **The message box takes newlines** (2026-08-17, was
-  issues/chat-box-no-multiline.md): `theme::text_area` — a multiline
+ACP carries only the conversation. The agent still drives ODM through the
+CLI from its own shell tool, cwd = project. No MCP server, no ACP client
+fs/terminal capabilities. Agents run by hand outside ODM still get the
+CLI, but have no chat — not a supported use case; the CLI may change
+freely with the managed agent.
+
+- **`odm-config`** — two TOML files, layered. System
+  (`$XDG_CONFIG_HOME/odm/config.toml`): `[agent] default`, `quiet_odm`,
+  `[agent.mode] <id> = "<mode>"`, `[agent.custom.<id>] command/env`;
+  unknown keys *warn* (the file outlives any one ODM; an older ODM must
+  start against a newer file), a file that won't parse is one warning and
+  is never overwritten; writes go through `toml_edit` (comments and
+  trailing-comment decor survive), temp + rename. Project
+  (`.odm/config.toml`): `[agent] use` **and nothing else** — `.odm/`
+  travels with a copied project, so a command there would be a project
+  file choosing what the engine runs; anything else in it warns and is
+  ignored. Picking an agent writes both. `.odm/agent.json` (`AgentState`)
+  remembers per agent id: session id, title, version, model — the header
+  and placeholder before anything is spawned, and what to resume.
+- **`odm-agent`** — the ACP client; no egui, no engine deps, no async
+  runtime (the `agent-client-protocol` crate is a smol stack; the wire is
+  one JSON object per line). `Agent::spawn(Launch, SessionOptions, wake)`
+  → commands in from any thread, `Event`s out of a channel. One thread
+  reads stdout and runs the whole state machine (initialize →
+  `session/load` if resumable, falling back to `session/new` → apply the
+  persisted mode → flush queued prompts), one drains stderr (tail kept
+  for crash reports). **No schema crate either** (plan said
+  `agent-client-protocol-schema`; dropped): `wire.rs` picks fields out of
+  `serde_json::Value`, so an off-schema value costs that value, never the
+  update — adapters ship non-schema fields freely. Field names were
+  checked against the schema crate's v1 source. Rules:
+  - Never write to the child with the state lock held (a full pipe
+    blocks, and the reader needs the lock to make the agent drain it).
+  - Process: own process group (`process_group(0)`), `PR_SET_PDEATHSIG`
+    — which fires when the spawning *thread* dies, so the child is
+    spawned on the reader thread, which lives as long as its stdout.
+    PATH gets `current_exe()`'s dir prepended (the agent's `odm` is this
+    one). Shutdown: close stdin (both adapters exit 0 on it), 2 s, then
+    SIGKILL the group; the group is swept after every exit.
+  - A turn ends with the `session/prompt` response, full stop — no timer
+    watchdog (it would fake "done" during long thinking). Stop =
+    `session/cancel` (+ open permission requests answered `cancelled`,
+    as ACP requires); not resolved 5 s later → kill the group, reported
+    as `Hung`.
+  - Mid-turn messages: `_session/steering` when
+    `initialize._meta.steering.supported`, sent with `_meta.steering.
+    idleBehavior = "promptRequired"` so an idle agent hands the text back
+    instead of starting a detached turn whose end we'd never see.
+    `injected`/`startedNewTurn` = delivered (re-sending would say it
+    twice; the plan's "startedNewTurn → send as a prompt" was wrong —
+    read from the adapters' source); anything else = queued and sent as
+    one ordinary prompt at turn end. No steering support = queue.
+  - `resource` blocks are downgraded to `<context ref="…">` text for an
+    agent without `promptCapabilities.embeddedContext`. Older `modes`
+    objects become one more config option (set via `session/set_mode`).
+  - Tests: `tests/client.rs` against `odm-fake-agent` (a bin in the
+    crate): scenario mode plays an ndjson script (`reply`/`expect`/
+    `notify`/`request`+`expect_reply`/`stderr`/`exit`/`hang`);
+    `--chat` is a canned conversationalist for driving the viewer
+    (words pick extras: `plan`, `permission`, `slow`, `crash`;
+    `ODM_FAKE_AGENT_FAST=1` for tests). Real adapters are untested
+    since the spike — an opt-in lane nobody has built.
+- **Engine** (`odm-engine/src/agent/`): `AgentHost` in `EngineState` owns
+  the process, the config, and the **transcript** (`Item`: header, user,
+  agent, thought, tool call, plan, permission question, action line,
+  engine line, notice, error). `fold` builds it from session updates:
+  chunks join their message by `messageId` (looked for within the last
+  64 items), or the last item when ids are absent; live
+  `user_message_chunk` echoes are dropped (we put the user's line there).
+  - Lifecycle: spawned lazily by the first message, never headless;
+    `session/load` replays history into a side list spliced in *above*
+    what the user just typed; load failure → fresh session + a notice;
+    crash → red line with the stderr tail, next message respawns; File ▸
+    Open (`stop`) and viewer exit (`lib.rs`, blocking) shut it down.
+    New Session = kill + forget the session id.
+  - A user message = text + an embedded resource `odm://user-state` (the
+    view snapshot: "sent, not sampled" holds). On replay, chunks that are
+    an `odm://` uri or a `<context ref="odm://…">` wrapper are dropped,
+    and a prompt starting `[odm engine]` replays as an `engine:` line.
+    Action lines are not in the agent's record and do not come back.
+  - Working status is derived, never agent-set (`working()`): the plan
+    entry in progress, else the running tool call's title, else
+    "Working"; "Waiting for you" while a permission question is open.
+    Lamp: dark = not running, green = idle session, blinking = turn,
+    steady amber = waiting on the user.
+  - An `execute` tool call titled `odm …` is hidden — the engine's own
+    action line stands in (it feeds the activity view and is what
+    plans/chat-links.md hangs links off) — unless it failed with no
+    action line logged while it ran (a sandbox-denied connect), or it is
+    replayed history.
+  - **Diagnostics are pushed** (`run_pusher`, a thread per viewer
+    session; replaces poll's `events`): `EngineState::diagnostic_map`
+    (failing `slot:`/`file:` → error) is state-compared against what the
+    agent was last told — never an event queue. Each push is a paid turn
+    nobody typed, so: only into a live, ready session (never spawns);
+    never mid-turn (what stands at turn end goes as one follow-up); only
+    after 2 s quiet with nothing building; a heal sends nothing; 3 in a
+    row without a user message, then one `engine:` line and silence.
+    Host warnings (`engine_warning`) ride the same prompts. The pusher
+    never takes engine locks under the host's lock; `pokes` closes the
+    lost-wakeup gap between looking and sleeping.
+  - Permissions: `odm` commands and in-project edits run unasked,
+    everything else asks. ODM never parses a shell string and never
+    answers a request itself — `agent/table.rs` hands the *agent* allow
+    rules (`quiet_meta`). Claude: `session/new` `_meta.claudeCode.options.
+    allowedTools = ["Bash(odm:*)", "Edit(./**)"]` (verified in the
+    spike). Codex: none, and worse — see
+    issues/codex-sandbox-blocks-engine-socket.md. `[agent] quiet_odm =
+    false` turns it off.
+  - `table.rs`: built-in agents with pinned versions (bump per release;
+    no registry fetch, no auto-update). claude-acp/codex-acp are npm
+    adapters ODM installs — `npm install --prefix
+    ~/.local/share/odm/agents/<id>/`, only after a yes in a question box
+    naming package@version and size, node ≥ 22 checked first; launched
+    from the installed bin, never `npx`. opencode/gemini run the user's
+    own binary from PATH. Custom = system-config command, run as given.
+  - Tests (`agent/tests.rs`) drive the host against `odm-fake-agent
+    --chat`, found next to the test binary — which only exists under
+    `cargo test --workspace`. Test engines use `AgentHost::detached` so
+    they never read (or spawn) the user's configured agent.
+- **Viewer**: `viewer/panel.rs` is a pure render of the transcript plus
+  the message box. The session header is the first transcript *item*
+  (scrolls away; a new session is a new header, but one that never got a
+  session is replaced in place). Placeholder "Message <model>" → agent
+  title when the model is `default`/unknown → blank unconfigured. Text
+  is plain (agent markdown drawn raw; a markdown pass is a later job).
+  Thoughts and tool calls are collapsed `+` rows (tool: status lamp,
+  opens onto output/diffs); permission questions are theme buttons,
+  answered once then a log line. Stop button / Esc in the box; right-click
+  menu (`theme::context_menu`): Agent Settings, New Session, Stop — its
+  hit area is registered *before* the transcript draws, or it eats the
+  buttons' clicks. `theme::text_area` must not be put in a
+  `ui.horizontal` (its child inherits the layout and collapses).
+  `viewer/settings.rs` is the **Agent Settings** strip page (`kind:
+  "agent-settings"` in viewer.json; also Edit ▸ Agent Settings): agent
+  picker with on-disk status, install/update through `InstallDialog`,
+  custom command, the quiet-ODM check box, and one radio group per ACP
+  config option the running agent lists (mode persists via
+  `[agent.mode]`, the rest are the agent's to remember), login hint,
+  context usage.
+- **The message box takes newlines** (`theme::text_area`): a multiline
   `TextEdit` whose `return_key` is *shift+Enter*, so plain Enter falls
-  through for the caller to act on (`TextArea::submitted`). ctrl+J, what
-  terminals bind, is rewritten into a shift+Enter event before the widget
-  runs, so egui's own handler does the insert (caret, selection, undo). Two
-  traps: the submit check must read the *event's* modifiers, not
-  `InputState::modifiers` (a rewritten ctrl+J is an Enter press with ctrl
-  physically down), and egui multiline no longer surrenders focus on Enter,
-  so `lost_focus()` is not the signal it was. The box grows with its text —
-  `theme::text_area_height` lays the galley out ahead of the widget, since
-  the transcript above has to be sized before it is drawn — capped at 8 rows
-  or half the chat, whichever is less; past that it scrolls (egui keeps the
-  caret in view on the next keystroke). Transcript indents a message's later
-  lines under the `>`.
-
-- **The working status** (2026-08-17): `odm say --task <text>` sets the one
-  live "working on" line; `--done [<text>]` clears it, posting any text as a
-  normal message. A user message sets it to `state::PROCESSING`
-  ("Processing") on the spot, so the viewer reacts on Enter instead of
-  waiting for the agent's first `--task`; the agent's own task replaces it
-  and `--done` clears it. The prompt tells the agent to always clear it
-  before it stops. Stored as a last-write-wins `Option<String>` in `Chat`
-  (state.rs `set_task`/`clear_task`/`task`) — a status value, no Delivery
-  machinery, works headless. The viewer draws it as a dim-blue tail line in
-  the chat transcript with era busy-dots cycling at 0.4s (repaint timer only
-  while set — the one exception to theme's "no animation anywhere").
-  Deliberately **no expiry**: a timeout would fake "done" during long
-  thinking. Instead every say/poll/status response echoes a standing `task`,
-  so the agent (or a successor) sees a stale one in-band and clears it; the
-  prompt tells it to. Exclusivity (`task` vs `text`/`done`) and empty-text
-  are `cmd_say`'s to enforce, not serde's.
-
-- **The agent's actions are log lines** (2026-08-17, `Who::Action`,
-  `EngineState::log_action`): one compact transcript line per command it ran
-  (`dispatch` logs the verb + the response's resolved `view` path, or
-  `verb failed: <first line, clipped>`; poll/say/ack are the chat, not
-  actions) and per file that changed (`note_generation` diffs the last sync's
-  `generation_sources` against the new one — `new`/`edit`/`deleted`, or one
-  "N files changed" line past `FILE_LOG_CAP`, and never for a session's first
-  sync). `Delivery::Done` from birth, so no poll ever takes one, and gated on
-  `viewer_attached()` like activity events — headless keeps no log. `status`
-  now calls `note_generation` too (it syncs without building; a generation it
-  was first to scan must not be swallowed — slots go stale, edits get logged).
-
-- **Poll's contract is set by agent harnesses.** The baseline one can't read a
-  running background command's output — it is woken when the command *exits*.
-  So poll blocks until ≥1 message is queued, prints them all, and exits;
-  process exit is the delivery mechanism. `--timeout` bounds the wait (empty
-  `messages`), and a retired session (File ▸ Open) answers `{"ok": false,
-  "error": {"kind": "stopped"}}` so a poll never outlives its engine.
-- **`--follow` is the same thing for harnesses that watch lines** (Claude
-  Code's Monitor, say): park one command at session start and every batch
-  arrives as a push — no relaunch per message, and no gap where nobody is
-  listening. The loop stays CLI-side (`follow_poll`): send poll, print the
-  response as one compact JSON line, flush, ack, poll again — so the
-  protocol's one-response-per-request rule is untouched, and delivery is
-  the same two-phase handshake per batch. `--follow` additionally sets the
-  request's `events` flag (2026-08-17, the one revision of "`--follow`
-  never reaches the engine"): the engine must know to answer on diagnostic
-  value changes too, not just messages. A `--timeout` alongside it is an
-  error (nothing to bound). `docs/prompts/cli.md` tells the agent to park a
-  follow if its harness can watch lines, and to loop `--timeout` otherwise.
-- **Build diagnostics ride poll** (2026-08-17, plans/js-diagnostics.md):
-  every poll response carries `builds` (per active slot: `build` =
-  ok/error/pending + `error` + `stale`) and `health` (failures-only list
-  from the background sweep), read from `published`/`health` at answer
-  time — never the build gate. With `events`, a blocked poll also returns
-  (possibly empty `messages`) whenever the *diagnostic value* — the map of
-  failing slots/files → error, `EngineState::diagnostic_map` — differs
-  from what the connection last reported (`Conn::events_baseline`).
-  State-compare on every wake (publishes, sweep stores, `remove_view` and
-  new generations call `wake_pollers`), not an event queue: missed/spurious
-  wakes and reconnects can neither lose nor duplicate; ok→ok rebuilds and
-  stale flips don't emit. Logs never ride poll — query the view for
-  error + logs (memoized replay is byte-identical to a re-run).
+  through for the caller (`TextArea::submitted`). ctrl+J is rewritten
+  into a shift+Enter event before the widget runs. Two traps: the submit
+  check must read the *event's* modifiers, not `InputState::modifiers`,
+  and egui multiline no longer surrenders focus on Enter. The box grows
+  with its text (`text_area_height` lays the galley out first, since the
+  transcript above is sized before it is drawn), capped at 8 rows or half
+  the panel. The transcript takes the panel's height less the input,
+  exactly — get that wrong and the panel grows every frame.
+- **Action lines** (`EngineState::log_action`): one per CLI command
+  (`dispatch`: verb + resolved view path, or `verb failed: …`) and per
+  changed file (`note_generation` diffs source hashes; one "N files
+  changed" line past `FILE_LOG_CAP`; never for a session's first sync).
+  Viewer-only (`viewer_attached()`).
 - **The health sweep** (state.rs `SweepState`/`sweep_one`): per generation
   the build loop, when no slot is queued, meta-checks every file and
-  builds the default view of every standalone-buildable one (all
-  non-cascade inputs have defaults; others get the meta tier only). Slot
-  builds preempt an in-flight sweep pass (cancelled item requeues; a new
-  generation supersedes the queue wholesale). Results land in a per-file
-  `health` map (value + generation; older generation ⇔ reported with
+  builds the default view of every standalone-buildable one. Slot builds
+  preempt an in-flight sweep pass; a new generation supersedes the queue.
+  Results land in a per-file `health` map (value + generation; older ⇔
   `stale: true`). Failures-only in every surface; a file's absence claims
-  nothing, and per the per-view axiom an ok default view never precludes a
-  slot failing at other inputs. Broken files replay from the failure memo,
-  so repeated sweeps of them are cheap.
-- **Engine host warnings are transcript entries** (`Who::Engine`): watcher
-  creation/watch failures, open-time odm.toml/prompt-sync warnings (queued
-  right after `EngineState` construction — `session::OpenScan`), server
-  death. Same Pending→InFlight→Done handshake as user messages; on the
-  wire they're `"from": "engine"` (absence = user); the viewer renders
-  them `engine: …` in `theme::WARN`. stderr prints stay for daemon logs.
-  Session events, not build output — deliberately not in the console pane.
-- **Delivery is committed, not assumed** (the fix for a 2026-07-27 bug where
-  Ctrl+C on a poll made the next message disappear). Each entry carries a
-  `Delivery`: `Pending` → `InFlight` (a poll took it) → `Done`, and *only* an
-  `ack` from the client moves it to `Done`. The CLI sends that ack after it has
-  printed and flushed the messages, so the engine's copy is never the only one
-  in flight. Every other ending — Ctrl+C, broken pipe, crashed harness, a
-  connection that just closes — drops the `Conn`, whose `Drop` returns anything
-  unacked to `Pending`. Failure therefore duplicates rather than loses, which
-  is the direction to fail in; `docs/prompts/cli.md` warns the agent about repeats.
-  The viewer dims anything not `Done`, so an undelivered message still looks
-  like one.
-- **A blocked poll must notice its client dying.** Reading is on its own
-  thread per connection (`read_requests`), so EOF is seen while the handler
-  blocks; it sets `Peer::gone` and wakes the pollers, which return
-  `Disconnected`. Without this the connection thread parks on the condvar
-  forever: `listeners` stays wrong ("agent is listening" with nobody there) and
-  the zombie wins the next batch. `server::tests` reproduces exactly that over
-  a real socket.
-- `state.rs` holds the queue: a `Chat` of one transcript `Vec` under a mutex —
-  the pending entries *are* the queue, so there is no second list to fall out
-  of step with it — plus a condvar and a `listeners` count (blocked polls). In
-  memory only; the agent's own conversation is the durable record.
-- **`poll`/`say` never sync or build** (and never touch the build gate): a
-  poll blocks for minutes, and must hold up nothing.
-  `state::tests::chat_commands_skip_the_build_gate` guards it.
-- Viewer: the dock's Agent tab —
-  `theme::tail_box` transcript (user lines `> …` in `theme::USER_TEXT` blue,
-  dimmed while undelivered, but white as they are typed in the input box;
-  agent lines white; action lines gray in `theme::ACTION_TEXT`; the live task
-  line green in `theme::TASK_TEXT`) plus one `theme::text_edit`
-  where Enter sends and keeps focus. The transcript takes the panel's height
-  less the input line, exactly (item spacing included) — get that arithmetic
-  wrong and the panel grows a few px every frame until it eats the window.
-  The lamp on the tab says whether the agent is listening, which is the user's
-  cue to go prod it in its own terminal. All of it repaints through the
-  existing `EngineState::wake`.
+  nothing. Broken files replay from the failure memo, so sweeps are cheap.
+
+Open: logged-out auth flows per adapter, `session/cancel` mid-tool-call
+(child processes left behind?), and gemini `--acp` have never been run
+for real; context meter beyond the settings line; transcript persistence
+for agents without `session/load` (none); Windows/macOS (dirs, job
+objects, `.cmd` shims).
 
 ### Owning the event loop
 
@@ -983,8 +1024,8 @@ children. Consequences:
   selection recenters on everything.
 - Selection is a list, in pick order. Shift-clicking a row — or a solid in the
   viewport — adds it, or removes it if it was already selected; a plain click
-  replaces the whole selection. `status` (active slot) and poll
-  snapshots report the list.
+  replaces the whole selection. `status` (active slot) and each user
+  message's `odm://user-state` report the list.
 - odm-viewer-core's `tree::tests` drives rows through a headless `egui::Context` (real hit
   testing, real modifiers — note egui reads `modifiers` off `RawInput`, not
   off the events). That is how modifier-clicks are *tested*; injecting one into
@@ -1155,8 +1196,8 @@ integration tests in `crates/*/tests/`; the unit tests in `src/` are
 `odm-prompt/src/` (marker splicing + the agent-file scan); in
 odm-viewer-core, `icons.rs`, `tree.rs`, `inputs.rs` (the input panel,
 headless egui) and `theme/scroll.rs`; and in odm-engine, `commands.rs`,
-`state.rs` (the chat queue), `server.rs` (delivery over a real socket) and
-`conformance.rs` (the suite runner, below). Every
+`state.rs` (build loop, sweep, the watcher), `requests.rs`, `agent/` (the host
+against the fake agent) and `conformance.rs` (the suite runner, below). Every
 test binary shares one `JsEnv` in a `OnceLock` (`state::tests::env()` in
 odm-engine) — building a snapshot while another test thread runs JS aborts
 the process (see spike-findings "Snapshot count/concurrency").
@@ -1192,8 +1233,7 @@ reproduce V8's aborts on purpose; run them alone to re-verify.
 `crates/odm/tests/e2e.rs` is the only suite that runs the *shipped binary*:
 it spawns `odm run --headless` into a temp project under `/tmp` (the socket
 path is length-limited, so not the scratchpad) and drives it with real `odm
-<cmd>` invocations — arg dispatch, socket lifecycle, sync-on-query, the
-inotify watcher (via `odm poll --follow`, which never syncs), stale-socket
+<cmd>` invocations — arg dispatch, socket lifecycle, sync-on-query, stale-socket
 reclaim after a SIGKILL, and `odm docs`. ~13 engine spawns, under a second.
 Assert structure and exit codes only; wording is `cli_reference_is_current`'s
 job.

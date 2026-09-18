@@ -2,7 +2,8 @@
 
 Question: replace `odm poll`/`odm say` with an agent panel that fronts a
 running agent ODM manages, staying agent-agnostic. Evidence base for
-plans/agent-panel.md; nothing built.
+the managed agent panel (built the same day — architecture.md "Talking
+to the agent"). Corrections found while building are marked **(built)**.
 
 - **ACP (Agent Client Protocol)**, agentclientprotocol.com — the one
   off-the-shelf abstraction. JSON-RPC 2.0 over the stdio of an agent
@@ -43,6 +44,10 @@ thenewstack.io/anthropic-pauses-claude-agent-sdk-subscription-change/
   `_session/steering {sessionId, prompt}`, advertised at
   `InitializeResponse._meta.steering.supported` (claude-agent-acp ≥0.66,
   codex-acp ≥1.2); outcomes injected/startedNewTurn/failed/promptRequired.
+  **(built)** From the adapters' source: `startedNewTurn` means the
+  agent was idle and *started a detached turn with the text* — delivered,
+  never re-send. Claude's adapter takes `_meta.steering.idleBehavior =
+  "promptRequired"` to hand the text back instead; ODM always sends it.
   Claude reacts in ~2s, Codex at its next step boundary. Open bug
   claude-agent-acp#1114: a steered turn's `session/prompt` may never
   resolve — client needs its own turn-end watchdog. Agents without the
@@ -131,6 +136,9 @@ flows, gemini, cancel.
 
 ## Design direction
 
-Moved to plans/agent-panel.md (agent always user-picked, no unasked npm
-downloads, TOML config in `~/.config/odm/config.toml` + `.odm/config.toml`,
-header-as-first-transcript-item, settings tab), revised after the spike.
+Built; see architecture.md "Talking to the agent" and design-decisions
+"The agent is managed, over ACP". Still never run for real: logged-out
+auth flows, `session/cancel` mid-tool-call, gemini `--acp`, and the
+shipped client against either real adapter (tests use the fake agent).
+`_auth/status_update` params are `{authStatus: {kind, label, email?}}`,
+`kind: "none"` = logged out (adapter source).

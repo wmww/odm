@@ -415,8 +415,7 @@ impl AgentHost {
             inner.memo.agents.entry(id).or_default().session_id = None;
             inner.memo.save(&self.project);
         }
-        let header = inner.cached_header(&self.project);
-        inner.items.push(Item::Header(header));
+        inner.fresh_header(&self.project);
         drop(inner);
         self.wake();
     }
@@ -432,8 +431,7 @@ impl AgentHost {
         }
         inner.config.agent.selected = Some(id.to_owned());
         inner.retire();
-        let header = inner.cached_header(&self.project);
-        inner.items.push(Item::Header(header));
+        inner.fresh_header(&self.project);
         drop(inner);
         self.wake();
     }
@@ -788,6 +786,17 @@ impl Inner {
         }
     }
 
+    /// Start a new header — or, when the current one never got a session,
+    /// take its place: a header is a session's first line, not a log of
+    /// what was picked.
+    fn fresh_header(&mut self, project: &Path) {
+        let header = self.cached_header(project);
+        match self.header_mut() {
+            Some(old) if old.session.is_none() => *old = header,
+            _ => self.items.push(Item::Header(header)),
+        }
+    }
+
     fn pending_permission(&self) -> bool {
         self.items.iter().any(|i| matches!(i, Item::Permission { answer: None, .. }))
     }
@@ -867,6 +876,10 @@ impl Inner {
         }
         for warning in &warnings {
             text.push_str(&format!("\nEngine warning: {warning}"));
+        }
+        // A turn nobody typed must say where it came from.
+        if !news {
+            self.items.push(Item::Engine { id: None, text: "told the agent about the warnings above".into() });
         }
         let failing: serde_json::Map<String, Value> =
             failing.iter().map(|(l, e)| (l.clone(), json!(e))).collect();

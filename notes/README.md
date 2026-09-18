@@ -1,7 +1,8 @@
 # Notes index
 
 - `architecture.md` — the system as built: project format, crate map with
-  per-crate gotchas, viewer fonts/icons/tree, user↔agent chat, feedback, STL export,
+  per-crate gotchas, viewer fonts/icons/tree, the managed agent panel (ACP
+  client, config, transcript, diagnostics push), feedback, STL export,
   invariants, testing (what earns a test here, the suites, the opt-in lanes), seeing
   the viewer. Start here.
 - `api-stability-and-docs.md` — versioning (JS API + the integer engine
@@ -37,4 +38,5 @@
   and the (paused) Anthropic Agent SDK billing change that makes the
   risk we accepted, plus live spike results against claude-agent-acp and
   codex-acp (steering, permissions, replay, embedded context). Evidence
-  base for plans/agent-panel.md; nothing built.
+  base for the managed agent panel (architecture.md "Talking to the
+  agent").

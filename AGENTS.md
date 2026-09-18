@@ -37,4 +37,4 @@ The engine is a long-lived process. One engine runs per active project. It opens
 The CLI is designed primarily to be used by agents working on an ODM project. It connects to a running engine over a socket. It can be used to create renders with various options, query built doohickeys, etc.
 
 ### Agent
-An LLM coding agent (such as Claude Code, Codex, etc) works on an ODM project by editing doohickey code and using the CLI. The agent is run by the user independently, and there are not hard requirements on exactly what agent is used or how it works.
+An LLM coding agent (such as Claude Code, Codex, etc) works on an ODM project by editing doohickey code and using the CLI. The viewer runs the agent the user picked as a child process and talks to it over ACP (Agent Client Protocol) — the Agent panel is the conversation; the CLI stays the agent's only tool surface into ODM. Headless never spawns one.

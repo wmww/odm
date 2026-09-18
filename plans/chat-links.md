@@ -7,7 +7,7 @@ to select it — so the log is a way *into* the model, not just a receipt.
 
 Reviewed against the code 2026-09-18.
 
-## Relation to plans/agent-panel.md
+## Relation to the agent panel (built 2026-09-18)
 
 Independent; either order works. Action lines survive the ACP rewrite
 (that plan's lean: keep the ODM action line, hide the duplicate ACP

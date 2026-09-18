@@ -55,11 +55,11 @@ state at an arbitrary tool-call moment — users move fast and
 unexpectedly (especially the 3D camera), so state sampled when a tool
 call happens to fire carries little signal and can silently be about
 the wrong thing. Prefer, in order: attach state to a user action (the
-poll snapshot — what the user saw *when they sent the message*, stamped
-at send time, replayable manually from plain numbers), or don't use
+`odm://user-state` attachment — what the user saw *when they sent the
+message*, stamped at send time, replayable manually from plain numbers), or don't use
 view state at all. Applied 2026-08-17: render adopting the viewer
 tab's camera was designed then dropped for this reason; instead each
-poll message carries a send-time `view` snapshot including the camera
+user message carries a send-time snapshot including the camera
 (see notes/agent-surface.md, render camera section). Accepted
 survivors, deliberately: `view: true`
 adopts a tab's path+inputs (slow-moving, visible in the tab bar) and
@@ -160,3 +160,21 @@ Copy/paste/undo/selection in TextEdit: solid. CJK: displays if we bundle
 fonts; IME infrastructure exists but has had Linux regressions (egui#5544).
 RTL/Arabic/complex shaping: NOT supported (egui#1016 open since 2021) —
 explicitly accepted.
+
+## The agent is managed, over ACP (user decision, 2026-09-18)
+
+ODM spawns the agent and fronts it in the Agent panel; `odm poll`/`odm
+say` and externally-run agents as a supported use case are gone.
+"No MCP: CLI + prompts" changed shape, not conclusion: ACP carries only
+the conversation, the agent still works through the CLI from its own
+shell, and ODM advertises no ACP fs/terminal capabilities — the tool
+surface stays one thing, agent-agnostic. Standing rules: the user always
+picks the agent (never inferred from what is installed); nothing is
+downloaded without a yes naming package@version and size; the engine
+never runs a command a project file chose (custom agents live in the
+system config only); ODM never answers a permission request or parses a
+shell string itself — it hands the agent allow rules. Accepted risk:
+Anthropic's paused Agent-SDK billing change would hit Claude-over-ACP;
+no terminal fallback was built. Evidence:
+notes/agent-integration-research-2026-09.md; as built:
+architecture.md "Talking to the agent".

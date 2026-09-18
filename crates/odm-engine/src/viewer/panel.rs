@@ -79,6 +79,9 @@ impl AgentPanel {
             ui.cursor().min,
             size,
         ));
+        // Registered before the transcript draws, so the buttons in it sit
+        // on top and keep their clicks; this only ever sees the right ones.
+        let hit = ui.interact(well, ui.id().with("agent-menu"), egui::Sense::click());
         let mut answer: Option<(u64, PermissionOption)> = None;
         host.with_transcript(|items| {
             theme::tail_box(ui, "chat", size, |ui| {
@@ -117,7 +120,6 @@ impl AgentPanel {
             theme::MenuEntry::separator(),
             theme::MenuEntry::item(Menu::Stop, "Stop").shortcut("Esc").enabled(working.is_some()),
         ];
-        let hit = ui.interact(well, ui.id().with("agent-menu"), egui::Sense::click());
         match theme::context_menu(ui, &hit, &entries) {
             Some(Menu::Settings) => request = Some(Request::OpenSettings),
             Some(Menu::NewSession) => host.new_session(),
@@ -125,31 +127,33 @@ impl AgentPanel {
             None => {}
         }
 
-        ui.horizontal(|ui| {
-            let hint = host.placeholder();
-            let input =
-                theme::text_area(ui, "chat-input", &mut self.input, input_width, input_max, &hint);
-            if std::mem::take(&mut self.focus) {
-                input.response.request_focus();
-            }
-            // Esc in the box is Stop — while there is something to stop.
-            let escape = working.is_some()
-                && input.response.has_focus()
-                && ui.input(|i| i.key_pressed(egui::Key::Escape));
-            if working.is_some() && (theme::button(ui, "Stop").clicked() || escape) {
+        let hint = host.placeholder();
+        let input = theme::text_area(ui, "chat-input", &mut self.input, input_width, input_max, &hint);
+        if std::mem::take(&mut self.focus) {
+            input.response.request_focus();
+        }
+        if working.is_some() {
+            // Beside the box, not in a row with it: the box lays its own
+            // child out and wants the panel's vertical layout to do it in.
+            let at = egui::pos2(input.response.rect.left() + input_width + 4.0, input.response.rect.top());
+            let rect = egui::Rect::from_min_size(at, egui::vec2(stop_width - 4.0, one_row));
+            let mut side = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            // Esc in the box is Stop too — while there is something to stop.
+            let escape = input.response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if theme::button(&mut side, "Stop").clicked() || escape {
                 host.stop();
                 input.response.request_focus();
             }
-            if input.submitted {
-                let text = self.input.trim().to_owned();
-                if !text.is_empty() {
-                    host.send(text, snapshot());
-                }
-                self.input.clear();
-                // Enter sends *and* keeps the caret, so a reply can follow.
-                input.response.request_focus();
+        }
+        if input.submitted {
+            let text = self.input.trim().to_owned();
+            if !text.is_empty() {
+                host.send(text, snapshot());
             }
-        });
+            self.input.clear();
+            // Enter sends *and* keeps the caret, so a reply can follow.
+            input.response.request_focus();
+        }
         request
     }
 

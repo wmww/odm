@@ -8,11 +8,12 @@ command count.
 
 ## The policy
 
-- **The prompt teaches only the core loop**: edit → `inspect` → `render` →
-  `poll`/`say`, plus "view commands take one JSON request", `inputs`/
+- **The prompt teaches only the core loop**: edit → `inspect` → `render`,
+  plus "the conversation is the channel" (ODM runs the agent; user state
+  and engine-authored prompts arrive as attachments), plus "view commands take one JSON request", `inputs`/
   `preset`, and "parts have names". After basic work the concept load
   should be: files are doohickeys; queries target a view; `inputs` sets
-  inputs; parts have names; poll/say to talk.
+  inputs; parts have names; just answer.
 - **Everything else lives in `odm docs`**, paid for only when consulted.
   `docs/cli.md` (topic `cli`) is the full CLI reference: every request
   field of every command (a generated section printed from the engine's
@@ -30,20 +31,14 @@ command count.
 
 `odm [--project <dir>] <cmd> ['{…json}']` — the argument *is* the socket
 request body, minus `cmd`. No per-command flags, no other positionals;
-bare = defaults. Exceptions, deliberately: `poll --timeout/--follow`
-(configures the CLI's own waiting; the follow *loop* stays CLI-side, but
-since 2026-08-17 `--follow` also sets the request's `events` flag so the
-engine answers on build/health value changes), `say <free text>`, `docs`
-(engineless), `--project` prefix (transport).
+bare = defaults. Exceptions, deliberately: `docs` (engineless),
+`--project` prefix (transport). (`poll`/`say`, the old flag-taking
+exceptions, went with the chat loop 2026-09-18 — both redirect.)
 The engine's spec table validates field names (typos list siblings,
 removed commands get redirect errors) — one error path, no CLI grammar
 errors beyond "that wasn't a JSON object". Wire word is `inputs`
 (renamed from `set` 2026-08: it's the word meta and the interface report
-use; "set" read imperative). `say` grew one optional *leading* flag
-(2026-08-17): `--task <text>` / `--done [<text>]` for the working
-status; the rest stays free text. Responses of say/poll/status echo a
-standing `task` (only when set — absent claims nothing); that echo is
-the whole staleness story, deliberately no expiry.
+use; "set" read imperative).
 
 ## Geometry queries: flat toplevel, JS parity
 
@@ -159,10 +154,10 @@ aspect)`; the viewer's orbit camera is just a fully-given one.
   own spelling, f32-shortest-rounded (fitted values come out of
   normalization/trig with 17-digit decimals). Paste-back re-renders
   byte-identically (verified).
-- Poll messages each carry `view` (was one top-level `view` per poll):
-  tab path + inputs + selection + `camera` in the same spelling,
-  **stamped by the viewer at send time** (per design-decisions "sent,
-  not sampled") — a poll can collect long after the send.
+- Each user message carries `odm://user-state` (an embedded resource on
+  the ACP prompt): tab path + inputs + selection + `camera` in the same
+  spelling, **stamped by the viewer at send time** (per design-decisions
+  "sent, not sampled").
 - Prompt teaches the `look` keywords only (it replaced the
   `direction`+`ortho` pair); `focus`/`zoom`/`eye`/`target`/`up`/`fov`/
   `ortho_height` are docs-only.
@@ -224,42 +219,23 @@ writing the values costs tokens ~nothing vs reading tiles.
   rides next to it) plus `stale: true` when a newer answer is queued or
   building. This *revised* `status`'s old `ok|error|building|pending`,
   where "building" masked the value. One helper
-  (`commands.rs::build_fields`) feeds both `status.views` and poll
-  `builds`.
-- **Every poll response carries `builds` + `health`** (failures-only
-  file list from the background sweep; `status` gets the same `health`).
-  Logs never ride poll — querying the view returns error + logs, and
-  memoization makes that byte-identical to the original run. Reporting
-  per-file ok/skipped rows would re-run the 191 KB `tree` mistake;
-  failures only, absence claims nothing.
+  (`commands.rs::build_fields`) feeds `status.views`.
+- **`status` carries `health`** (failures-only file list from the
+  background sweep). Logs never ride it — querying the view returns
+  error + logs, and memoization makes that byte-identical to the
+  original run. Reporting per-file ok/skipped rows would re-run the
+  191 KB `tree` mistake; failures only, absence claims nothing.
 - **Errors are per-view, not per-doohickey**: an error can genuinely
   depend on inputs, so no surface may say "this file is broken/fine" —
   slots report the exact views on screen, `health` a default-inputs
   canary per file, and the two may disagree (that's information).
-- Engine host warnings are poll messages with `"from": "engine"`;
-  absence = user (the shape the prompt teaches).
-- `events: true` on poll (what `--follow` sets): answer on diagnostic
-  value changes, compared per connection against what it last reported.
-- `--follow` reconnects (2026-08-17, from field report): engine death
-  prints `{"engine":"down"}`, then the CLI retries the socket (300ms)
-  forever and prints `{"engine":"back"}` — the standing listener must
-  survive engine restarts or the viewer says nobody is listening.
-  Launched with no engine it parks in the same state (agent may start
-  before the engine); bad project path still errors at launch.
-  Shutdown's `stopped` error is swallowed (the down notice is its
-  line); other refusals still print + exit 1, as does a dead stdout.
-  Prompt leads with `--follow` and names the harness mechanism —
-  agents were reaching for `--timeout` relaunch loops and shell `&`.
-- **The watcher must notify per line, not per exit** (2026-08-18, field
-  report): the prompt used to name Claude Code `run_in_background`/
-  BashOutput, but that harness only notifies on task *completion* —
-  and `--follow` never exits, so lines sat unread while the viewer
-  showed an active poll. Prompt now names Claude Code's `Monitor` tool
-  (`persistent: true`), calls out exit-notify mechanisms as broken for
-  `--follow`, and gives the exit-notify fallback: background a one-shot
-  `odm poll` (exits at first batch → the completion notification wakes
-  the agent), relaunched per batch. No grep filter recommended:
-  `--follow` already emits only actionable lines.
+- **Diagnostics and host warnings are pushed** to the managed agent as
+  engine-authored prompts (`[odm engine]` + `odm://diagnostics`), bounded
+  so nobody pays for a loop — architecture.md "Talking to the agent".
+  This replaced poll's `events`/`--follow` stream (2026-09-18), and with
+  it the whole "stay reachable" section of the prompt: the harness
+  mechanics agents kept getting wrong (exit-notify vs per-line watchers)
+  no longer exist.
 
 ## `feedback` is in the prompt (2026-09-17)
 
@@ -297,7 +273,7 @@ exists. The `export` command itself is docs-only (spec table + docs/cli.md
   declared interface attached when meta evaluated). Input lints ride the
   `warnings` channel of every view-targeting success.
 - **No `selection` command** (2026-08): `status` reports the active
-  slot's selection; every poll carries it (`view.selection`).
+  slot's selection; every user message carries it (`odm://user-state`).
 - **No `prompt` command** (2026-08): it's a docs topic (`odm docs
   prompt`) — the prompt's standing home is the AGENTS.md marker block,
   so the command's only remaining use was inspection, which is docs.
@@ -305,7 +281,7 @@ exists. The `export` command itself is docs-only (spec table + docs/cli.md
   tab, `"view": "<slot>"` = a named slot. There is no `--viewer-state`.
   Adoption covers path+inputs only, never the camera — per
   design-decisions.md "User state: sent, not sampled" (the camera the
-  user saw travels with their message in the poll snapshot instead).
+  user saw travels with their message, in `odm://user-state`, instead).
 - `generation` appears only in `status` (internal consistency counter).
 - Nothing agent-visible prints content hashes.
 - Removed-command redirects live engine-side (`requests.rs::removed`),
