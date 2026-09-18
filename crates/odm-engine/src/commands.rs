@@ -1243,7 +1243,7 @@ fn name_frame(i: usize, f: &RenderFrame, mut e: CmdError) -> CmdError {
 
 /// A frame's caption: its overrides as `k=v` pairs, `inputs` entries bare
 /// (`t=0.75`, not `inputs={..}`), strings unquoted. Empty for the `{}` tile.
-fn caption_for(overrides: &Map<String, Value>) -> String {
+pub(crate) fn caption_for(overrides: &Map<String, Value>) -> String {
     let compact = |v: &Value| match v {
         Value::String(s) => s.clone(),
         other => other.to_string(),

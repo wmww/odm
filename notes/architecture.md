@@ -5,8 +5,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 
 ## Project format
 
-- A project is a directory marked by `odm.toml` (`name` + `engine`, unknown
-  keys rejected; NOT part of generation identity). Every `*.js` under it
+- A project is a directory marked by `odm.toml` (`name` + `engine` +
+  optional `units` — `mm | m | in | ft`, absent = mm, what one model unit is;
+  builds never read it, STL export converts by it, `status` reports it, New
+  Project always writes it. Unknown keys rejected; NOT part of generation
+  identity). Every `*.js` under it
   (recursive, skipping dot-dirs like `.odm`/`.git` and `node_modules`) is a
   doohickey, identified by project-relative path. Any file is viewable;
   `root.js` is pure convention — the default target when a query names no
@@ -342,7 +345,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   prune keeps activity-card scenes alive too. View ▸ Agent Activity toggles
   it (session-local; off = drain-and-drop, no column). Burst coalescing (N
   rays → one card) deliberately out of scope, the caps bound bursts.
-  Commands: status/inspect/render/raycast/clearance, poll/say/ack (see
+  Commands: status/inspect/render/raycast/clearance/export (STL — see
+  "STL export"), poll/say/ack (see
   "Talking to the agent") and `feedback` (see "Feedback"); every command except those three syncs first
   (no standalone `sync` — folded into `status` 2026-08). Commands run
   concurrently (one thread per connection, no global command lock since
@@ -386,11 +390,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   `commands.rs` (the whole JSON
   layer: a serde-tagged `Request` enum with `deny_unknown_fields`, so a
   typo'd command *or* option is an error, plus `CmdError`→JSON),
-  `watcher.rs`, `server.rs`, `session.rs`, `scene.rs`, and `viewer/` — the
+  `watcher.rs`, `server.rs`, `session.rs`, `scene.rs`, `stl.rs`, and `viewer/` — the
   desktop chrome around odm-viewer-core (`mod.rs` shell: layout, tab strip,
   chat, dialogs, and the `impl odm_viewer_core::Engine for EngineState`;
   `idle.rs` event loop, `menu.rs` menu bar + its accelerators, `browse.rs`
-  folder list with `open.rs`/`new.rs` on top of it, `pick.rs` doohickey
+  folder list with `open.rs`/`new.rs`/`export.rs`/`export_stl.rs` on top of it, `pick.rs` doohickey
   picker, `tabs.rs` tab persistence, `agent.rs` agent-file question,
   `feedback.rs` the Feedback page + its notice dialog, `activity.rs` — see
   "Agent activity view" above).
@@ -435,7 +439,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - `odm` — the only binary. `odm run [<dir>] [--headless]` → the engine
   (`odm_cli::project_dir`, per Project format above: the dir named or cwd,
   never an ancestor); `odm export --web <out>` → odm-export (standalone,
-  no engine); everything else → `odm_cli::run`. Top-level `--help` splices in
+  no engine) — `export` followed by a flag or nothing; `export '{…}'` is the
+  engine's STL command, like everything else → `odm_cli::run`. Top-level `--help` splices in
   `odm_cli::USAGE`. Splitting the two halves into libs behind one bin keeps
   the client's dependency-light layering and leaves room for a
   client-only build later, while shipping one binary: no CLI/engine version
@@ -596,7 +601,8 @@ labels, real focus, asserting on the painted galley text).
 `viewer/menu.rs` is the whole bar: an `Action` enum, a `theme::menu` per
 drop-down listing `MenuEntry`s, and one `apply` that turns an action into an
 effect. File has New Project… / Open Project… | Open Doohickey… (Ctrl+O) /
-Close Doohickey (Ctrl+W) | Export Web… | Quit (Ctrl+Q); Edit has one item,
+Close Doohickey (Ctrl+W) | Export Web… / Export STL… (grayed via
+`MenuEntry::enabled` while the tab has no built result) | Quit (Ctrl+Q); Edit has one item,
 Message Agent (Ctrl+Enter) — put the dock on the Agent tab and the caret in
 its box (`ViewerApp::focus_chat`, taken by the box when it next draws); View
 has Frame Scene (F) and checkmarked Wireframe/X-Ray/Grid/Agent Activity.
@@ -683,6 +689,42 @@ up with the reason when the engine turns a pick down. `Dialog` also holds the
 export dialog, the agent-file question and the feedback notice; the last
 queues behind whatever is up (`next_feedback_notice`, tried every frame),
 and agent-file questions go first.
+
+### STL export
+
+For 3D printing (2026-09-18, was plans/stl-export.md); driven by the human
+from File ▸ Export STL…, with `odm export '{"out": "x.stl"}'` as the
+agent/test twin. Decisions: always the **whole view** (print one part = open
+its doohickey; no `node` field yet — `scene::scene_solids` makes it a small
+addition); options are `units` (default the project's) and `union` (default
+on), in one `StlOptions` shared by request and dialog; color/opacity ignored
+(ghost parts export too); Z-up as modeled, no recentering (multi-file exports
+stay registered); binary only, no timestamp → deterministic bytes.
+
+- `Kernel::export_solids` folds the union (or not) on Manifolds and *returns
+  meshes* — nothing enters the store, so no gc gate, no garbage. `intern`'d
+  results would be unrooted and sweepable mid-read; that is why it doesn't go
+  through `boolean`. The caller keeps the inputs alive: CLI holds
+  `query_view`'s `RootPin`; the dialog pins at open on the UI thread.
+- `stl.rs`: unit scale premultiplied into the world transforms (volume and
+  positions come back in mm); normals from f64 before narrowing; a triangle is
+  dropped only when two vertices narrow to the *same f32 point* (takes both
+  triangles of the collapsed edge → still closed; collinear slivers stay or a
+  hole opens); temp file + rename (a slicer may be watching the target).
+  Warnings: loose bodies, solids-as-is, longest side <1 mm or >2000 mm
+  (`size_warning`, shared with the dialog's live size line — the wrong-unit
+  catch), dropped triangles.
+- The dialog (`viewer/export_stl.rs`) exports a **snapshot taken at open**
+  (tab's `Published` view + root + pin + flattened bounds), so header, size
+  line and file agree even if the tab keeps playing. No JS, no build gate.
+  Units are a radio row (`new::units_ui`, shared with New Project — the theme
+  has no drop-down); choices + last folder are `ViewerApp::stl_prefs`, reset
+  on project open. Dismissing mid-export cancels the kernel token.
+- The bitmap UI font has `×` and `·` but no `→` (renders tofu) — the size
+  line says `=`.
+- Later: 3MF (units/colors/objects) through the same command by extension;
+  per-node export; an option to skip ghost parts; showing the unit in the
+  viewer.
 
 ### Feedback
 

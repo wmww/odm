@@ -7,6 +7,7 @@ mod activity;
 mod agent;
 mod browse;
 mod export;
+mod export_stl;
 mod feedback;
 mod idle;
 mod menu;
@@ -109,6 +110,7 @@ enum Dialog {
     Open(open::OpenDialog),
     New(new::NewDialog),
     Export(export::ExportDialog),
+    ExportStl(export_stl::StlDialog),
     AgentFiles(agent::AgentDialog),
     Feedback(FeedbackDialog),
 }
@@ -173,6 +175,8 @@ pub struct ViewerApp {
     /// File ▸ Open / File ▸ New Project / the agent-file question, when one
     /// of them is up.
     dialog: Option<Dialog>,
+    /// File ▸ Export STL's choices, for the session.
+    stl_prefs: export_stl::Prefs,
     /// Agent-file questions from the last open, asked one at a time.
     agent_questions: Vec<AgentQuestion>,
     /// Feedback the user has yet to be told about, shown one dialog at a
@@ -205,6 +209,7 @@ impl ViewerApp {
             focus_chat: false,
             dock: Dock::Chat,
             dialog: None,
+            stl_prefs: export_stl::Prefs::default(),
             agent_questions: Vec::new(),
             feedback_notices: Vec::new(),
             pick: None,
@@ -303,6 +308,7 @@ impl ViewerApp {
         // The new session has its own (empty) transcript; the half-typed line
         // was meant for the old one.
         self.chat_input.clear();
+        self.stl_prefs = export_stl::Prefs::default();
         self.state().set_selection(Vec::new());
         // Nothing of the old project should still be resident, or on screen.
         self.activity.clear();
@@ -875,6 +881,14 @@ impl ViewerApp {
                 export::Outcome::Idle => self.dialog = Some(Dialog::Export(dialog)),
                 export::Outcome::Closed => {}
             },
+            Some(Dialog::ExportStl(mut dialog)) => {
+                let outcome = dialog.ui(ctx);
+                dialog.remember(&mut self.stl_prefs);
+                match outcome {
+                    export_stl::Outcome::Idle => self.dialog = Some(Dialog::ExportStl(dialog)),
+                    export_stl::Outcome::Closed => {}
+                }
+            }
             Some(Dialog::Feedback(mut dialog)) => match dialog.ui(ctx) {
                 feedback::Outcome::Idle => self.dialog = Some(Dialog::Feedback(dialog)),
                 // Dismiss is not "no" to anything: the reports keep waiting.

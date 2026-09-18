@@ -764,19 +764,19 @@ const MENU_SHORTCUT_GAP: f32 = 24.0;
 /// One line of a drop-down. `T` is whatever the caller wants handed back when
 /// the line is picked — usually a command enum.
 pub enum MenuEntry<'a, T> {
-    Item { id: T, text: &'a str, shortcut: Option<&'a str>, check: Option<bool> },
+    Item { id: T, text: &'a str, shortcut: Option<&'a str>, check: Option<bool>, enabled: bool },
     Separator,
 }
 
 impl<'a, T> MenuEntry<'a, T> {
     /// A plain command.
     pub fn item(id: T, text: &'a str) -> MenuEntry<'a, T> {
-        MenuEntry::Item { id, text, shortcut: None, check: None }
+        MenuEntry::Item { id, text, shortcut: None, check: None, enabled: true }
     }
 
     /// A command that shows a checkmark while `on`.
     pub fn check(id: T, text: &'a str, on: bool) -> MenuEntry<'a, T> {
-        MenuEntry::Item { id, text, shortcut: None, check: Some(on) }
+        MenuEntry::Item { id, text, shortcut: None, check: Some(on), enabled: true }
     }
 
     /// Right-aligned accelerator text. Purely a label: the key itself is the
@@ -784,6 +784,15 @@ impl<'a, T> MenuEntry<'a, T> {
     pub fn shortcut(mut self, keys: &'a str) -> MenuEntry<'a, T> {
         if let MenuEntry::Item { shortcut, .. } = &mut self {
             *shortcut = Some(keys);
+        }
+        self
+    }
+
+    /// Grayed out and unpickable while `on` is false: the command exists,
+    /// there is just nothing for it to act on right now.
+    pub fn enabled(mut self, on: bool) -> MenuEntry<'a, T> {
+        if let MenuEntry::Item { enabled, .. } = &mut self {
+            *enabled = on;
         }
         self
     }
@@ -882,35 +891,41 @@ fn drop_down<T: Copy>(ui: &mut Ui, entries: &[MenuEntry<'_, T>]) -> Option<T> {
 
     let mut picked = None;
     for entry in entries {
-        let (id, text, shortcut, check) = match entry {
+        let (id, text, shortcut, check, enabled) = match entry {
             MenuEntry::Separator => {
                 menu_separator(ui, width);
                 continue;
             }
-            MenuEntry::Item { id, text, shortcut, check } => (id, text, shortcut, check),
+            MenuEntry::Item { id, text, shortcut, check, enabled } => {
+                (id, text, shortcut, check, *enabled)
+            }
         };
         let (rect, response) =
             ui.allocate_exact_size(vec2(width, MENU_ROW), egui::Sense::click());
         let p = ui.painter();
-        if response.hovered() {
+        let lit = enabled && response.hovered();
+        if lit {
             p.rect_filled(rect, CornerRadius::ZERO, ACCENT);
         }
         if *check == Some(true) {
             pixels(p, &CHECK, snap(ui, pos2(rect.left() + 4.0, rect.center().y - 3.0)), TEXT);
         }
-        let galley = label(ui, text);
+        // Laid out in its color: `galley`'s color argument is only a fallback.
+        let color = if enabled { TEXT } else { WEAK_TEXT };
+        let galley =
+            ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(UI_SIZE), color);
         let baseline =
             snap(ui, pos2(rect.left() + MENU_GUTTER, rect.center().y - galley.size().y / 2.0));
-        ui.painter().galley(baseline, galley, TEXT);
+        ui.painter().galley(baseline, galley, color);
         if let Some(keys) = shortcut {
             let galley = label(ui, keys);
             let pos = snap(
                 ui,
                 pos2(rect.right() - MENU_PAD_X - galley.size().x, baseline.y),
             );
-            ui.painter().galley(pos, galley, if response.hovered() { TEXT } else { WEAK_TEXT });
+            ui.painter().galley(pos, galley, if lit { TEXT } else { WEAK_TEXT });
         }
-        if response.clicked() {
+        if enabled && response.clicked() {
             picked = Some(*id);
         }
     }

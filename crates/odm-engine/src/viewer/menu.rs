@@ -1,6 +1,7 @@
 //! The menu bar: what is on it, and what picking an item does.
 
 use super::export::ExportDialog;
+use super::export_stl::{Snapshot, StlDialog};
 use super::new::NewDialog;
 use super::open::OpenDialog;
 use super::{Dialog, ViewerApp};
@@ -16,6 +17,7 @@ pub enum Action {
     OpenDoohickey,
     CloseDoohickey,
     ExportWeb,
+    ExportStl,
     FocusAgent,
     Feedback,
     Quit,
@@ -47,6 +49,9 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
             file.push(MenuEntry::item(Action::CloseDoohickey, closing).shortcut("Ctrl+W"));
             file.push(MenuEntry::separator());
             file.push(MenuEntry::item(Action::ExportWeb, "Export Web…"));
+            // Exports what the tab shows, so there has to be something shown.
+            let built = app.tab().is_some_and(|tab| tab.published.root.is_some());
+            file.push(MenuEntry::item(Action::ExportStl, "Export STL…").enabled(built));
         }
         file.push(MenuEntry::separator());
         file.push(MenuEntry::item(Action::Quit, "Quit").shortcut("Ctrl+Q"));
@@ -116,6 +121,35 @@ pub fn shortcuts(app: &mut ViewerApp, ctx: &egui::Context) {
     }
 }
 
+/// The active tab's published result, snapshotted and pinned — on the UI
+/// thread, while the tab's `Published` still holds the root.
+fn stl_dialog(app: &ViewerApp) -> Option<StlDialog> {
+    let state = app.session.as_ref()?;
+    let tab = app.tab()?;
+    let (hash, object) = tab.published.root.as_ref()?;
+    let odm_store::Object::Node(root) = &**object else { return None };
+    let engine = state.build_engine();
+    let snapshot = Snapshot {
+        view: tab.published.view.clone(),
+        root: root.clone(),
+        pin: std::sync::Arc::new(engine.store.pin_root(*hash)),
+        bounds: tab.scene.as_ref().and_then(|s| s.scene.bounds),
+        stale: tab.published.building,
+    };
+    // Read fresh, like the window title: an edited unit is live right away.
+    let marker = odm_build::read_marker(state.project()).ok().flatten();
+    let label = crate::commands::stl_label(state.project(), marker.as_ref(), &snapshot.view.path);
+    Some(StlDialog::new(
+        state.project(),
+        label,
+        marker.map(|m| m.units).unwrap_or_default(),
+        snapshot,
+        engine.store.clone(),
+        engine.kernel.clone(),
+        &app.stl_prefs,
+    ))
+}
+
 fn apply(app: &mut ViewerApp, action: Action) {
     match action {
         // Both browse from the open project, or from wherever we were
@@ -154,6 +188,11 @@ fn apply(app: &mut ViewerApp, action: Action) {
                     view,
                     app.sessions.env(),
                 )));
+            }
+        }
+        Action::ExportStl => {
+            if let Some(dialog) = stl_dialog(app) {
+                app.dialog = Some(Dialog::ExportStl(dialog));
             }
         }
         // Down to the caret: the point is to be able to type at the agent
