@@ -22,20 +22,33 @@ design driver.
 - **Current inputs as shown** — panel values and current `t`. No preset
   picker.
 
+Derived (not asked; cheap to revisit): color and opacity are ignored —
+every solid in the scene exports, translucent "ghost" parts included
+(see Open).
+
 ## Facts this rests on
 
 - Every mesh in a scene is already a closed Manifold solid (open
   surfaces are rejected at `fromThreeGeometry`), so the only validity
   risk is overlapping siblings → union fixes it.
-- `Kernel::boolean(Union, &[(Hash, Transform)])` is n-ary and
-  world-space; `scene.rs::collect_meshes` already gathers a subtree's
-  (mesh, world transform) pairs for `clearance`. Mirrored transforms go
-  through `transformed_manifold`, so winding is handled.
+- `scene.rs::collect_meshes` already gathers a subtree's (mesh, world
+  transform, label) triples for `clearance`. `Kernel::boolean` shows the
+  n-ary world-space fold to copy; mirrored transforms go through
+  `transformed_manifold` (Manifold flips winding on negative
+  determinants).
+- Kernel ops are **not** memoized (memo lives in the build layer) and
+  `intern` puts an unrooted mesh in the store, which a concurrent gc may
+  sweep before it is read back. So export does not go through
+  `boolean`/store at all — see Core.
+- manifold-csg 0.3.3 exposes `Manifold::decompose()` (body count).
 - Scenes are Z-up right-handed like slicers: no reorientation. No
   recentering either (slicers place the part; 1:1 coordinates keep
   multi-file exports registered).
 - `odm.toml` is `deny_unknown_fields` and not part of generation
-  identity — right for `units`, which never affects a build.
+  identity — right for `units`, which never affects a build. It is
+  re-parsed by every `scan_project` (`sync.snapshot.marker`), so an
+  edited unit is live at the next sync; the viewer dialog reads it fresh
+  with `read_marker` at open (as `mod.rs` does for the name).
 
 ## Units
 
@@ -43,12 +56,15 @@ design driver.
   enum `mm | m | in | ft`, each with a `to_mm()` factor. Unknown value
   = the usual BadMarker error listing the four.
 - Existing projects have no key and read as mm (the bundled examples
-  are all modelled in mm, so nothing changes for them); the engine does
+  are mm-scale — hello-bracket says so — so nothing changes for them); the engine does
   not write it in (its only odm.toml write stays `engine`).
 - File ▸ New Project (`viewer/new.rs`) gets a **Units selector** — mm
-  (default), m, in, ft — and always writes `units` explicitly. The
-  starter `root.js`/agent file it authors should be sized sensibly for
-  the chosen unit (or at least state it in a comment).
+  (default), m, in, ft — and always writes `units` explicitly:
+  `create_project(dir, name, units)` (callers: `viewer/mod.rs`, the
+  `new_project` test suite). The starter block stays 40 × 30 × 20 mm in
+  every unit: `starter()` takes the unit and emits `[40, 30, 20]`,
+  `[0.04, 0.03, 0.02]`, `[1.5, 1.25, 0.75]` or `[0.15, 0.1, 0.06]`, with
+  a `// units: <u> (odm.toml)` comment.
 - Agents must know the unit to model in it: `status` reports `units`,
   `docs/api/determinism.md`'s "Units are yours" becomes "the project
   declares its unit in odm.toml (default mm); export relies on it", and
@@ -56,38 +72,54 @@ design driver.
   prompt addition (wrong units = wrong prints, and the agent can't
   discover a convention it doesn't know exists) — record it in
   notes/agent-surface.md beside the `feedback` exception.
-- Unit changes are picked up like any marker change (at sync); confirm
-  the marker is re-read on sync, not only at open.
+- No marker at all (a bare directory of .js) = mm.
 
 ## Core: `odm-kernel` + a small writer
 
 - `StlOptions { units: Units, union: bool }` — one struct shared by the
-  request and the dialog, so a new option is added in one place.
-- `odm-engine/src/stl.rs` (or `scene.rs` neighbour): `export_stl(store,
-  kernel, root: &Node, opts: &StlOptions, cancel) -> Result<StlReport>`:
-  1. `collect_meshes` from the root → operands; none → error "nothing
-     to export (the scene has no solids)".
-  2. Fold `opts.units.to_mm()` into each operand's transform. Union on:
-     `kernel.boolean(Union, …)` (content-addressed, so a re-export is a
-     cache hit). Union off: `transform_solid` per operand, triangles
-     concatenated in tree order.
-  3. Write the resulting mesh(es) as **binary STL**: 80-byte header
-     (`ODM <project> <view path>`, never starting with `solid`, no
-     timestamp → deterministic bytes), u32 count, per-triangle f32
-     normal + 3 f32 vertices + 0 attribute. Normals computed from the
-     f64 positions before narrowing. No ASCII variant.
-  4. Skip triangles that become degenerate after f32 narrowing (count
-     them; warn if any).
-- New kernel query `bodies(h) -> usize` (Manifold `decompose` count, or
-  a union-find over the indexed mesh — whichever is cheaper to wire).
+  request and the dialog, so a new option is added in one place. `Units`
+  lives in odm-build (with the marker); the kernel takes a plain scale.
+- Kernel: `export_solids(operands: &[(Hash, Transform)], union: bool,
+  cancel) -> Result<Vec<ExportSolid>>`, `ExportSolid { mesh: Mesh (f64),
+  volume, bodies }`. Works on Manifolds directly and returns the meshes
+  — **nothing is put in the store**, so no gc gate and no garbage.
+  Union on: fold like `boolean`, one result. Off: one per operand, in
+  order. Each goes through `evaluated(m, cancel)` (status check +
+  cancellation) like `intern`; `bodies` = `decompose().len()`. The
+  caller folds the unit scale into the transforms, so volume and
+  positions come back in mm.
+- Inputs must stay alive while this runs: the CLI path holds
+  `query_view`'s `RootPin`; the viewer takes `store.pin_root` on the UI
+  thread at dialog open (the tab's `Published` still holds the root
+  then) and moves the pin into the worker.
+- `odm-engine/src/stl.rs`: `export_stl(store, kernel, root: &Node,
+  header: &str, out: &Path, opts: &StlOptions, cancel) ->
+  Result<StlReport, String>`:
+  1. `collect_meshes` from the root → operands (labels unused); none →
+     error "nothing to export (the scene has no solids)".
+  2. Scale by `opts.units.to_mm()` (world transform premultiplied),
+     `kernel.export_solids`.
+  3. Write **binary STL**: 80-byte header (`ODM <project> <view path>`,
+     non-ASCII → `?`, truncated/zero-padded, never starting with
+     `solid`, no timestamp → deterministic bytes), u32 count,
+     per-triangle f32 normal + 3 f32 vertices + 0 attribute. Normals
+     computed from the f64 positions before narrowing (zero-area → 0 0
+     0; slicers recompute). No ASCII variant. More than u32::MAX
+     triangles → error.
+  4. Drop only triangles where two vertices narrow to the **same f32
+     point** (a collapsed edge takes both its triangles, so the surface
+     stays closed); keep collinear slivers — dropping those would open a
+     hole. Count the drops; warn if any.
 - `StlReport { path, units, union, size_mm: [f64;3], volume_mm3, tris,
   bodies, warnings }` (options echoed as resolved; with union off,
-  `volume_mm3` is the per-solid sum and `bodies` counts per solid).
-  Warnings: `bodies > 1` ("N separate bodies — they will
-  print as loose parts"), longest side < 1 mm or > 2000 mm ("check
-  `units` in odm.toml"), dropped degenerate triangles.
-- Write atomically (temp file + rename) — the target may be open in a
-  slicer that watches it.
+  `volume_mm3` and `bodies` are sums over the solids). Warnings:
+  `bodies > 1` ("N separate bodies — they will print as loose parts";
+  union on only — with union off and more than one solid, "N solids
+  written as-is; overlaps are not fused" instead), longest side < 1 mm or > 2000 mm ("check
+  `units` in odm.toml"), dropped triangles. The size thresholds are one
+  shared fn, used by the dialog's live line too.
+- Write atomically (temp file beside the target + rename) — the target
+  may be open in a slicer that watches it.
 
 ## Engine command
 
@@ -98,12 +130,15 @@ default true).
 Format comes from the `out` extension; only `.stl` today, anything else
 errors listing supported formats (leaves room for 3MF, which carries
 units/colors/multiple objects and is the likely follow-up). Response =
-`StlReport`. `out` resolves client-side against the CLI's cwd like
-`render`'s.
+`StlReport`. `out` resolves client-side against the CLI's cwd (the CLI
+already does this for any command's `out`) and passes `check_out_path`
+like render's. Flow: `query_view` (sync + build, keep the `RootPin`) →
+`export_stl` gate-free, like the other post-build reads.
 
 `odm export --web …` stays the standalone path: `crates/odm/src/main.rs`
-routes `export` to odm-export only when the first arg is a `--flag`,
-else to `odm_cli::run`. `odm --help` gets one line; `docs/cli.md` a
+today sends every `export` to `export_site`; route there only when the
+first arg after `export` starts with `--` (or is absent → its existing
+usage error, now mentioning both forms), else to `odm_cli::run`. `odm --help` gets one line; `docs/cli.md` a
 short "Exporting for printing" section. Docs-only otherwise.
 
 No `node` field in the first cut (the UI has no per-node scope and the
@@ -116,9 +151,14 @@ addition.
   there is no active tab or its last build has no result.
 - `viewer/export_stl.rs`, modelled on `export.rs` (same `Browser`,
   fixed-width `theme::dialog`, Pick → Running → Done stages):
-  - Header line: `Exporting <view path>` + the tab's current inputs in
-    the caption form `frames` uses (`t=0.75`), so it's clear which
-    instant is captured.
+  - **Snapshot at open**: the dialog captures the tab's
+    `Published { view, root }` (+ pin, + `tab.scene` bounds) when it
+    opens and exports exactly that, even if the tab keeps playing or
+    rebuilding behind it — header, size line and file always agree.
+  - Header line: `Exporting <view path>` + the snapshot view's set
+    inputs in the caption form `frames` uses (`t=0.75`), so it's clear
+    which instant is captured. If `published.building` was set at open,
+    add a weak "a newer build is pending — exporting what is shown".
   - **Options** block under the browser: `Units: [mm ▾]` (the four
     units; starts at the project's, labelled e.g. "mm (project)") and
     `[x] Union overlapping solids`. Under them a live size line,
@@ -130,12 +170,12 @@ addition.
   - Browser starts where the last STL went this session, else the
     project dir. "File:" defaults to `<doohickey stem>.stl`;
     overwrite asks once inline.
-  - Runs off the UI thread. It needs the kernel but no JS: export the
-    tab's **last published result** (the node hash the viewport is
-    showing), not a fresh build — that is exactly "what you see", never
-    blocks on a build in flight, and avoids touching `JsEnv`. If the
-    tab is stale (newer build pending), say so in the dialog and let
-    the user export anyway.
+  - Runs on a worker thread like `export.rs` (channel +
+    `request_repaint`). It needs the kernel and store
+    (`build_engine()`), no JS and no build gate: the snapshot root, not
+    a fresh build — exactly "what you see", never blocks on a build in
+    flight, never touches `JsEnv`. Dismissing mid-export cancels the
+    token; the temp file is removed.
   - Done stage shows the report: `80 × 60 × 4.2 mm · 1 body · 2,312
     triangles`, warnings in the warning color, and the path (click to
     copy, like the web export's).
@@ -149,7 +189,9 @@ addition.
   unit scaling (cube of 0.02 in `m` → 20 mm; same cube as `mm` → 0.02 mm + size warning; `ft` → 6.096 mm).
 - Union: two overlapping cubes → one body, volume = union volume;
   two disjoint → `bodies: 2` + warning; mirrored instance → positive
-  volume when re-read.
+  volume when re-read. Store object count unchanged by an export.
+- Narrowing: a mesh with an edge shorter than f32 resolution at its
+  offset → both triangles dropped, round-trip still watertight.
 - Round-trip: parse the written STL back, weld, `solid_from_mesh`
   accepts it (proves watertight after f32 narrowing).
 - Options: `units` override beats the project's; union off → two
@@ -157,15 +199,15 @@ addition.
   the resolved options.
 - Marker: `units` absent = mm, bad value error text, `status` echo.
 - New Project: selector default mm; chosen unit lands in odm.toml.
-- Command: spec-table entry, unknown extension error, `export --web`
-  still routes to odm-export.
+- Command: spec-table entry, unknown extension error, `out` onto a
+  project `.js` refused, `export --web` still routes to odm-export.
 - Dialog: headless-egui test in the style of the existing dialog tests
   (default filename, stale notice, report line).
 
 ## Order
 
 1. `units` in the marker + status/docs/prompt/New Project.
-2. Kernel `bodies`, `stl.rs` writer + report, tests.
+2. Kernel `export_solids`, `stl.rs` writer + report, tests.
 3. `export` engine command + CLI routing + docs.
 4. Viewer dialog + menu item.
 5. Notes: architecture.md (crate map, menu list, project format),
@@ -178,5 +220,7 @@ addition.
   format choice in the dialog.
 - Per-node export (`node` field; tree context menu) if whole-tab proves
   too coarse for assemblies.
+- Ghost parts: if translucent reference geometry fusing into prints
+  bites, add an option (or skip solids below some effective alpha).
 - Showing the unit in the viewer (grid label, inspect sizes) now that
   the project declares one.
