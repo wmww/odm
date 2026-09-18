@@ -1,10 +1,11 @@
-//! STL export, for 3D printing: every solid of a built scene, in world space,
-//! converted to millimetres (what slicers assume) and written as binary STL.
+//! STL export: every solid of a built scene, in world space, converted to
+//! millimetres (STL carries no unit, and mm is what readers assume) and
+//! written as binary STL.
 //!
-//! No reorientation (scenes are Z-up right-handed, like slicers) and no
-//! recentering (1:1 coordinates keep multi-file exports registered). Color
-//! and opacity are ignored. The bytes are a pure function of the scene and
-//! the options — no timestamp.
+//! No reorientation (scenes are Z-up right-handed, as STL consumers expect)
+//! and no recentering (1:1 coordinates keep multi-file exports registered).
+//! Color and opacity are ignored. The bytes are a pure function of the scene
+//! and the options — no timestamp.
 
 use crate::scene;
 use odm_build::Units;
@@ -53,7 +54,7 @@ impl StlReport {
     }
 }
 
-/// A print smaller than this, or larger than `MAX_SIDE_MM`, on its longest
+/// A model smaller than this, or larger than `MAX_SIDE_MM`, on its longest
 /// side is almost always the wrong unit.
 const MIN_SIDE_MM: f64 = 1.0;
 const MAX_SIDE_MM: f64 = 2000.0;
@@ -148,9 +149,6 @@ pub fn export_stl(
     let bodies = solids.iter().map(|s| s.bodies).sum();
     let size_mm = [0, 1, 2].map(|k| tris.max[k] - tris.min[k]);
     let mut warnings = Vec::new();
-    if opts.union && bodies > 1 {
-        warnings.push(format!("{bodies} separate bodies — they will print as loose parts"));
-    }
     if !opts.union && solids.len() > 1 {
         warnings.push(format!("{} solids written as-is; overlaps are not fused", solids.len()));
     }
@@ -246,7 +244,7 @@ impl Tris {
 }
 
 /// Unit normal from the f64 positions (before narrowing); zero for a
-/// zero-area triangle — slicers recompute normals anyway.
+/// zero-area triangle — readers recompute normals anyway.
 fn normal(v: &[[f64; 3]; 3]) -> [f32; 3] {
     let a = [0, 1, 2].map(|k| v[1][k] - v[0][k]);
     let b = [0, 1, 2].map(|k| v[2][k] - v[0][k]);
@@ -265,7 +263,7 @@ fn normal(v: &[[f64; 3]; 3]) -> [f32; 3] {
 }
 
 /// Temp file beside the target, then rename: the target may be open in a
-/// slicer that watches it, and must never be seen half-written.
+/// program that watches it, and must never be seen half-written.
 fn write_atomic(out: &Path, bytes: &[u8]) -> Result<(), String> {
     let name = out.file_name().ok_or_else(|| format!("{} is not a file path", out.display()))?;
     let tmp = out.with_file_name(format!(".{}.tmp{}", name.to_string_lossy(), std::process::id()));
@@ -442,7 +440,7 @@ mod tests {
         let apart = f.scene(&[(cube, Transform::IDENTITY), (cube, moved(50.0))]);
         let (apart, _) = f.export(&apart, Units::Mm, true);
         assert_eq!(apart.bodies, 2);
-        assert!(apart.warnings.iter().any(|w| w.contains("2 separate bodies")));
+        assert!(apart.warnings.is_empty(), "{:?}", apart.warnings);
         assert_eq!(apart.size_mm, [60.0, 10.0, 10.0]);
     }
 

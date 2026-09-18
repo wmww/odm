@@ -935,8 +935,8 @@ impl EngineState {
         Ok(view_response(&view, &result, &report, stats, o))
     }
 
-    /// Write the view's solids to `out` for printing. The format is the
-    /// extension's; STL is the only one so far.
+    /// Write the view's solids to `out`. The format is the extension's;
+    /// STL is the only one so far.
     fn cmd_export(&self, r: ExportReq) -> Result<Value, CmdError> {
         let out = PathBuf::from(&r.out);
         self.check_out_path(&out)?;

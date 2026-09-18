@@ -125,7 +125,7 @@ JS twin: `a.clearance(b)` on Solids — same query; the numeric fields only (in 
 
 ### export
 
-write the view's solids to a file for 3D printing — binary STL, in millimetres, world coordinates as modeled (Z-up, no recentering). Answers the file's `size_mm`, `volume_mm3`, `tris`, `bodies`, and `warnings` worth reading (loose bodies, a size that suggests the wrong unit).
+write the view's solids to a file — binary STL, in millimetres, world coordinates as modeled (Z-up, no recentering). Answers the file's `size_mm`, `volume_mm3`, `tris`, `bodies`, and any `warnings` worth reading (a size that suggests the wrong unit).
 
 - `out` (string) — required: the file to write, replaced atomically; the extension picks the format — `.stl` is the only one today
 - `units` (string) — what one model unit is — `mm`, `m`, `in` or `ft`; default the project's (`units` in odm.toml, itself default `mm`; `status` reports it). The file is always millimetres
@@ -403,7 +403,7 @@ apart just to make the sign stable.
 One command checks a whole assembly's contact pairs after an edit, and
 `inputs` lets you check at animation extremes.
 
-## Exporting for printing
+## Exporting geometry
 
 ```
 odm export '{"out": "bracket.stl"}'
@@ -411,11 +411,11 @@ odm export '{"out": "arm.stl", "path": "parts/arm.js", "inputs": {"t": 0.5}}'
 ```
 
 `export` writes every solid of the view — the whole scene, translucent
-parts included; color is ignored — as one binary STL. To print one part
+parts included; color is ignored — as one binary STL. To export one part
 of an assembly, export that part's doohickey (`path`). The extension of
 `out` picks the format; `.stl` is the only one today.
 
-- **Millimetres.** STL carries no unit and slicers assume mm, so the
+- **Millimetres.** STL carries no unit and readers assume mm, so the
   file is converted from the project's unit (`units` in `odm.toml`: `mm`
   — the default —, `m`, `in` or `ft`). `"units"` in the request overrides
   it for one export. Coordinates are otherwise exactly as modeled: Z-up,
@@ -423,14 +423,13 @@ of an assembly, export that part's doohickey (`path`). The extension of
 - **`union`** (default `true`) fuses all solids into one valid manifold:
   overlapping parts merge, disjoint ones stay separate bodies. `false`
   writes each solid as-is — exact, but overlapping parts self-intersect,
-  which some slicers mishandle.
+  which some readers mishandle.
 
 The response reports what was written: `path`, the resolved `units` and
 `union`, `size_mm`, `volume_mm3`, `tris`, `bodies`. Read the `warnings`:
-more than one body means loose parts on the print bed, and a longest
-side under 1 mm or over 2000 mm almost always means the wrong unit.
-The file is replaced atomically, and the same view and options always
-produce the same bytes.
+a longest side under 1 mm or over 2000 mm almost always means the wrong
+unit. The file is replaced atomically, and the same view and options
+always produce the same bytes.
 
 ## Talking with the user
 

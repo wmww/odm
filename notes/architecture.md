@@ -692,10 +692,11 @@ and agent-file questions go first.
 
 ### STL export
 
-For 3D printing (2026-09-18, was plans/stl-export.md); driven by the human
-from File ▸ Export STL…, with `odm export '{"out": "x.stl"}'` as the
-agent/test twin. Decisions: always the **whole view** (print one part = open
-its doohickey; no `node` field yet — `scene::scene_solids` makes it a small
+2026-09-18, was plans/stl-export.md; driven by the human from File ▸ Export
+STL…, with `odm export '{"out": "x.stl"}'` as the agent/test twin. 3D
+printing is the common case, not the only one — nothing in the feature
+assumes it. Decisions: always the **whole view** (export one part = open its
+doohickey; no `node` field yet — `scene::scene_solids` makes it a small
 addition); options are `units` (default the project's) and `union` (default
 on), in one `StlOptions` shared by request and dialog; color/opacity ignored
 (ghost parts export too); Z-up as modeled, no recentering (multi-file exports
@@ -710,8 +711,8 @@ stay registered); binary only, no timestamp → deterministic bytes.
   positions come back in mm); normals from f64 before narrowing; a triangle is
   dropped only when two vertices narrow to the *same f32 point* (takes both
   triangles of the collapsed edge → still closed; collinear slivers stay or a
-  hole opens); temp file + rename (a slicer may be watching the target).
-  Warnings: loose bodies, solids-as-is, longest side <1 mm or >2000 mm
+  hole opens); temp file + rename (a program may be watching the target).
+  Warnings: solids-as-is, longest side <1 mm or >2000 mm
   (`size_warning`, shared with the dialog's live size line — the wrong-unit
   catch), dropped triangles.
 - The dialog (`viewer/export_stl.rs`) exports a **snapshot taken at open**

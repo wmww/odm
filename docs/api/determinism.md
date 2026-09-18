@@ -6,8 +6,8 @@
 - **Radians everywhere** (like three.js); `odm.deg(90)` converts.
 - **The project declares its unit**: `units` in `odm.toml` — `mm`
   (the default when absent), `m`, `in` or `ft`; `odm status` reports
-  it. Model every length in it. Builds never read it, but exports for
-  printing rely on it (`odm docs cli`, "Exporting for printing").
+  it. Model every length in it. Builds never read it, but exports rely
+  on it (`odm docs cli`, "Exporting geometry").
 - **Everything is immutable**: transforms, `color`, `name`, and CSG all
   return new values.
 - Geometry lives engine-side, content-addressed; JS holds opaque

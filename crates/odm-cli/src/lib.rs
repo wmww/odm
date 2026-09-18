@@ -25,7 +25,7 @@ pub const USAGE: &str = "  status                     project, files, view slots
   render  ['{…}']            render a PNG; prints its path
   raycast '{…}'              geometry query: nearest surface hit along rays
   clearance '{…}'            geometry query: signed distance per node pair (gap/penetration)
-  export  '{…}'              write the view's solids as an STL for 3D printing
+  export  '{…}'              write the view's solids to a file (STL)
   poll    [--timeout <sec>] [--follow]
                              wait for messages the user typed in the viewer
                              (--follow: never exit, one JSON line per batch,

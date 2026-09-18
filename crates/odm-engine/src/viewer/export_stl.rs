@@ -1,4 +1,4 @@
-//! File ▸ Export STL…: the active tab, as a file a slicer can print.
+//! File ▸ Export STL…: the active tab's solids, as an STL file.
 //!
 //! The dialog exports a **snapshot**: the tab's published result at the
 //! moment it opened, pinned in the store. The tab may keep playing or

@@ -449,10 +449,10 @@ const SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "export",
-        summary: "write the view's solids to a file for 3D printing — binary STL, in \
-                  millimetres, world coordinates as modeled (Z-up, no recentering). Answers \
-                  the file's `size_mm`, `volume_mm3`, `tris`, `bodies`, and `warnings` worth \
-                  reading (loose bodies, a size that suggests the wrong unit)",
+        summary: "write the view's solids to a file — binary STL, in millimetres, world \
+                  coordinates as modeled (Z-up, no recentering). Answers the file's \
+                  `size_mm`, `volume_mm3`, `tris`, `bodies`, and any `warnings` worth \
+                  reading (a size that suggests the wrong unit)",
         view: true,
         fields: &[
             f(

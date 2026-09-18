@@ -281,11 +281,10 @@ project, and the human is the only reader that matters.
 The second deliberate prompt addition, beside `feedback`: one Conventions
 bullet in `docs/prompts/js.md` saying lengths are in the project's unit
 (`units` in odm.toml, mm when absent, `status` reports it). Wrong units =
-wrong prints, and an agent can't discover a convention it doesn't know
+wrong exports, and an agent can't discover a convention it doesn't know
 exists. The `export` command itself is docs-only (spec table + docs/cli.md
-"Exporting for printing" + one `--help` line); its response echoes the
-resolved `units`/`union` and puts size/body warnings on the `warnings`
-channel.
+"Exporting geometry" + one `--help` line); its response echoes the resolved
+`units`/`union` and puts size warnings on the `warnings` channel.
 
 ## Standing cuts (don't reintroduce)
 
