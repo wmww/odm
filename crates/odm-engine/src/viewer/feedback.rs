@@ -39,6 +39,9 @@ pub struct FeedbackPage {
     /// Re-read the directory before the next draw. A headless engine or a
     /// second CLI can file a report while this page is open.
     stale: bool,
+    /// A report just made by **New**, whose title field takes the caret when
+    /// it next draws.
+    focus: Option<String>,
 }
 
 /// What a card's buttons asked for, acted on after the list is drawn (acting
@@ -128,6 +131,12 @@ impl FeedbackPage {
 
             let title = theme::text_edit(ui, ("fb-title", &id), &mut item.title, width, "Title");
             edited |= title.changed();
+            // A report made by New opens with the caret in its title: there
+            // is nothing else to do with an empty card.
+            if self.focus.as_deref() == Some(&*id) {
+                title.request_focus();
+                self.focus = None;
+            }
             ui.add_space(3.0);
             let row = ui.text_style_height(&egui::TextStyle::Body);
             let max = row * BODY_MAX_ROWS as f32 + theme::TEXT_PAD * 2.0;
@@ -175,14 +184,9 @@ impl FeedbackPage {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if sending {
-                    ui.add_enabled(false, |ui: &mut egui::Ui| theme::button(ui, "Sending…"));
-                } else {
-                    let send = ui.add_enabled(sendable, |ui: &mut egui::Ui| {
-                        theme::button(ui, "Send")
-                    });
-                    if send.clicked() {
-                        action = Some(Action::Send(id.clone()));
-                    }
+                    button(ui, "Sending…", false);
+                } else if button(ui, "Send", sendable).clicked() {
+                    action = Some(Action::Send(id.clone()));
                 }
                 if theme::button(ui, "Delete").clicked() {
                     action = Some(Action::Delete(id.clone()));
@@ -212,12 +216,14 @@ impl FeedbackPage {
         self.errors.retain(|id, _| self.items.iter().any(|i| &i.id == id));
     }
 
-    /// **New**: a blank report of the user's own, at the top of the page.
+    /// **New**: a blank report of the user's own, at the top of the page,
+    /// with the caret in its title.
     fn add_blank(&mut self, project: &Path) {
         let item = Item::blank();
         if let Err(e) = item.save(project) {
             self.errors.insert(item.id.clone(), e);
         }
+        self.focus = Some(item.id.clone());
         self.items.insert(0, item);
     }
 
@@ -267,6 +273,17 @@ impl FeedbackPage {
             }
         }
     }
+}
+
+/// A card button. Disabled is drawn rather than left to egui, which only
+/// stops the click: a button that can't be pressed has to say so, and grayed
+/// text is how the era said it.
+fn button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    let label = match enabled {
+        true => egui::RichText::new(text),
+        false => egui::RichText::new(text).color(theme::WEAK_TEXT),
+    };
+    ui.add_enabled(enabled, |ui: &mut egui::Ui| theme::button(ui, label))
 }
 
 /// Why the viewer is putting the feedback dialog up.
