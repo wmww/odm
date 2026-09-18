@@ -79,21 +79,21 @@ impl FeedbackPage {
             ui.add_space(PAD);
             ui.horizontal(|ui| {
                 ui.add_space(PAD);
-                new_item = theme::button(ui, "New").clicked();
-                ui.label(
-                    egui::RichText::new(
-                        "Reports wait here. Nothing is sent until you press Send.",
-                    )
-                    .color(theme::WEAK_TEXT),
-                );
+                // What the page is: the reports that have not gone
+                // anywhere yet — and, when there are some, the heading of
+                // the list under it.
+                ui.label(match self.items.is_empty() {
+                    true => "No unsent feedback",
+                    false => "Unsent:",
+                });
+                // The button that makes one sits at the right end of the
+                // row, where the cards' own buttons are not.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(PAD);
+                    new_item = theme::button(ui, "Submit New").clicked();
+                });
             });
             ui.add_space(GAP);
-            if self.items.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.add_space(PAD);
-                    ui.label("No pending feedback.");
-                });
-            }
             // Index rather than a borrow: the card writes back into the item
             // it draws, and the buttons queue work against its id.
             for i in 0..self.items.len() {
@@ -216,7 +216,8 @@ impl FeedbackPage {
         self.errors.retain(|id, _| self.items.iter().any(|i| &i.id == id));
     }
 
-    /// **New**: a blank report of the user's own, at the top of the page,
+    /// **Submit New**: a blank report of the user's own, at the top of the
+    /// page,
     /// with the caret in its title.
     fn add_blank(&mut self, project: &Path) {
         let item = Item::blank();

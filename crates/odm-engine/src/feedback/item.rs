@@ -46,7 +46,7 @@ impl Item {
         Item { title, body, harness, model, platform: platform(), build: build_string(), id: mint_id() }
     }
 
-    /// A blank report for the user to fill in (the page's **New** button).
+    /// A blank report for the user to fill in (the page's **Submit New** button).
     pub fn blank() -> Item {
         Item::new(String::new(), String::new(), NO_HARNESS.to_owned(), HUMAN.to_owned())
     }
