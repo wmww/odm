@@ -65,6 +65,7 @@ pub enum RenderError {
 pub struct Instance {
     /// Node id: child-index path from the root ("", "0", "0/2", ...).
     pub id: String,
+    /// The mesh node's own name, else its nearest named ancestor's.
     pub name: Option<String>,
     pub mesh: Hash,
     /// Column-major world matrix (f64; converted to f32 at GPU upload).

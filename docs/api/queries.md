@@ -83,3 +83,6 @@ const hit = part.raycast([0, 0, 50], [0, 0, -1]);
   an error.
 - `point` is the hit position, `normal` the surface normal there —
   named like three.js Raycaster intersections.
+- The CLI twin (`odm raycast`) adds `id` and `name` per hit: the index
+  path of the node owning the mesh, and that node's own name, else its
+  nearest named ancestor's, else `null`.

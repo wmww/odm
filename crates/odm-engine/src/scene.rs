@@ -595,7 +595,10 @@ fn decompose(m: &Mat4) -> ([f64; 3], [f64; 3], [f64; 3]) {
 /// Mesh instances (hash + world transform) of a whole subtree, each with an
 /// agent-facing label: the leaf's own name, else the nearest named ancestor
 /// within the queried subtree, else the leaf's full id from the scene root.
-/// None if a child hash is missing from the store.
+/// The same naming rule a raycast hit uses (odm-render's flattener), except
+/// scoped to the queried subtree — an ancestor above it does not count, so
+/// this cannot just read the flattened scene. None if a child hash is missing
+/// from the store.
 fn collect_meshes(
     store: &Store,
     node: &Node,

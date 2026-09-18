@@ -17,10 +17,15 @@ export default function build() {
   // one: the cutter's name goes with its geometry.
   const cut = odm.box(4).name('body').subtract(odm.box(2).translate(1, 1, 1).name('cutter')).translate(30, 0, 0);
 
-  // A group's name is its own; it does not reach the solids inside.
+  // A group's name labels the unnamed solids inside it: a raycast hit takes
+  // the nearest name at or above it.
   const boxed = odm.group(odm.box(2).translate(40, 0, 0)).name('crate');
 
-  return odm.group(moved, numbered, renamed, cut, boxed);
+  // ...but a name nearer the hit wins, so a sub-part inside a named
+  // assembly is still hittable by its own name.
+  const labelled = odm.group(odm.box(2).translate(50, 0, 0).name('lid')).name('outer');
+
+  return odm.group(moved, numbered, renamed, cut, boxed, labelled);
 }
 
 export const checks = [
@@ -40,10 +45,13 @@ export const checks = [
   { node: 'body', volume: [56, 1e-9] },
 
   { node: 'crate', volume: [8, 1e-9] },
+  { node: 'outer', volume: [8, 1e-9] },
 
   // The name reaches raycast, which is how a CLI hit is attributed.
   { raycast: { origin: [10, 0, 50], dir: [0, 0, -1], distance: [49, 1e-9], name: '123' } },
   { raycast: { origin: [30, 0, 50], dir: [0, 0, -1], distance: [48, 1e-9], name: 'body' } },
-  // A group name does not reach the solid inside it: the hit is unnamed.
-  { raycast: { origin: [40, 0, 50], dir: [0, 0, -1], distance: [49, 1e-9], name: '' } },
+  // The group's name reaches the unnamed solid inside it...
+  { raycast: { origin: [40, 0, 50], dir: [0, 0, -1], distance: [49, 1e-9], name: 'crate' } },
+  // ...and the solid's own name beats the group's.
+  { raycast: { origin: [50, 0, 50], dir: [0, 0, -1], distance: [49, 1e-9], name: 'lid' } },
 ];

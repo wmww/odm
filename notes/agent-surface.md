@@ -93,7 +93,13 @@ grammar. Standing decisions:
     first collider) and, when negative, `overlapping` (every colliding
     leaf pair, deduped by label). Labels = leaf's own name, else
     nearest named ancestor within the queried subtree, else index
-    path. JS parity carve-out as with raycast: JS gets the numeric
+    path. A raycast hit's `name` uses the same rule (2026-09-17,
+    plans/raycast-name-inherits.md), resolved in odm-render's
+    flattener so viewer picks and web-export picks inherit it too —
+    its ancestors are whole-scene, clearance's stop at the queried
+    node, which is why the two walks stay separate. Naming a group or
+    an `Instance` is thus how copies of one invoked part are told
+    apart. JS parity carve-out as with raycast: JS gets the numeric
     fields only (`closest`/`separate` hydrate to Vector3s).
   - manifold-csg's `min_gap` exists but is only a test cross-check:
     it goes quadratic when `search_length` is loose (measured: >60 s

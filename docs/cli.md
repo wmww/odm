@@ -111,7 +111,7 @@ render a PNG; prints its path and echoes the resolved camera (`eye`/`target`/`up
 
 nearest surface hit along each ray.
 
-- `rays` (array) — rays to fire, each `{"origin": [x,y,z], "dir": [x,y,z]}` (optional `"max_dist"`); all against the request's one view, answered in order — `hits` holds `{id, name, distance, point, normal}` or `null` per ray
+- `rays` (array) — rays to fire, each `{"origin": [x,y,z], "dir": [x,y,z]}` (optional `"max_dist"`); all against the request's one view, answered in order — `hits` holds `{id, name, distance, point, normal}` or `null` per ray. `id` is the mesh node's index path; `name` is that node's own name, else its nearest named ancestor's (so naming an invoked part labels hits inside it), else null
 
 JS twin: `s.raycast(origin, dir, maxDist?)` — same query, same result shape; the CLI adds `id`/`name` per hit and maps over `rays`.
 
@@ -313,7 +313,8 @@ grammar — no `query` namespace. Each kind is defined once — name,
 parameters, result shape — and exists in both surfaces: in JS as a
 method on the object, on the CLI as the command of the same name with
 the same result shape plus what JS gets free from object references
-(the view spec, node addressing by name: hits carry `id`/`name`).
+(the view spec, node addressing by name: hits carry `id` and the
+nearest name at or above them).
 Where mapping is natural the request takes arrays — all against the
 request's one view spec, answered in order, one build. `inspect` is
 not in this set: it has no JS twin (in JS you hold the object graph).
@@ -327,7 +328,10 @@ not in this set: it has no JS twin (in JS you hold the object graph).
 
 Fires each of `rays` and reports the nearest surface hit per ray:
 `{id, name, distance, point, normal}` (world-space), or `null` for a
-miss, in `hits`, in request order. Precise probing — "what is directly
+miss, in `hits`, in request order. `id` is the index path of the node
+owning the mesh; `name` is that node's own name, else its nearest named
+ancestor's, else `null` — so naming a group or an invoked part labels
+every hit inside it, while a name deeper down still wins. Precise probing — "what is directly
 under this point", clearance along a line. For "how big / where is a
 part", `inspect` is the better tool.
 

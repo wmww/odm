@@ -65,6 +65,42 @@ fn flatten_accumulates_transforms_and_colors() {
 }
 
 #[test]
+fn names_inherit_from_the_nearest_named_ancestor() {
+    let store = Store::new();
+    let mesh = store.put(Object::Mesh(tri_mesh(0.0).into()));
+    let child = |n: Node| store.put(Object::Node(n));
+    let named = |n: &str, mesh| Node {
+        name: Some(n.to_string()),
+        mesh: Some(mesh),
+        ..Default::default()
+    };
+    let root = Node {
+        children: vec![
+            // Named group over an unnamed mesh: the group's name.
+            child(Node {
+                name: Some("group".into()),
+                children: vec![child(Node { mesh: Some(mesh), ..Default::default() })],
+                ..Default::default()
+            }),
+            // Named mesh inside a named group: its own name wins.
+            child(Node {
+                name: Some("outer".into()),
+                children: vec![child(named("inner", mesh))],
+                ..Default::default()
+            }),
+            // Unnamed everywhere.
+            child(Node { mesh: Some(mesh), ..Default::default() }),
+        ],
+        ..Default::default()
+    };
+    let root = store.put(Object::Node(root));
+
+    let scene = flatten_scene(&store, root).unwrap();
+    let names: Vec<_> = scene.instances.iter().map(|i| i.name.as_deref()).collect();
+    assert_eq!(names, [Some("group"), Some("inner"), None]);
+}
+
+#[test]
 fn colorless_gets_default() {
     let store = Store::new();
     let mesh = store.put(Object::Mesh(tri_mesh(0.0).into()));

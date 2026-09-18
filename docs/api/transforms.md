@@ -20,8 +20,12 @@ s.rotate(axis, rad)       // arbitrary axis: [x,y,z] or Vector3
 s.scale(x, y, z)          // all three; uniform is scale(k, k, k)
 s.applyMatrix4(m)         // THREE.Matrix4 or column-major array of 16
 s.color(c)                // see colors.md
-s.name(n)                 // label shown in the viewer; `odm inspect <name>`
+s.name(n)                 // label: viewer, `odm inspect <name>`, raycast hits
 ```
+
+A name also labels raycast hits anywhere below the node, unless
+something nearer the hit is named — so naming a group or an invoked
+part is how you tell copies of it apart.
 
 Rotations and `scale` take an optional `{ about }` pivot — see below.
 All angles are radians; `odm.deg(90)` converts.

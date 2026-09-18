@@ -64,7 +64,10 @@ its `meta.inputs` schemas, with declared defaults merged in
 The output of `ctx.invoke`: an opaque handle to the built subtree. It
 can be transformed, colored (a default for descendants without one,
 like a Group), and named — each copy independently — but it can be
-neither queried nor used in CSG.
+neither queried nor used in CSG. Naming it is how copies of one part
+are told apart: a raycast hit inside an unnamed subtree is attributed
+to the nearest named ancestor, and the Instance (like a Group) is the
+only place a per-copy name can live.
 
 Structure around that limit: a doohickey that needs to *cut or measure*
 a shape from elsewhere should receive it as a Solid through a

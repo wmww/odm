@@ -15,8 +15,10 @@ export const checks = [
   { bounds: { min: [-5, -5, -1], max: [25, 5, 1], eps: 1e-9 } },
   // Down the hole axis: nothing there.
   { raycast: { origin: [0, 0, 50], dir: [0, 0, -1], miss: true } },
-  // Next to the hole: the *copy*'s top face at z = +1. (No `name` here:
-  // names on an Instance wrapper don't reach the mesh node raycast reports.)
-  { raycast: { origin: [24, 0, 50], dir: [0, 0, -1], distance: [49, 1e-6] } },
+  // Next to the hole: the *copy*'s top face at z = +1. The name on the
+  // Instance wrapper attributes the hit, which is how two copies of one
+  // content-addressed subtree are told apart.
+  { raycast: { origin: [24, 0, 50], dir: [0, 0, -1], distance: [49, 1e-6], name: 'copy' } },
+  { raycast: { origin: [4, 0, 50], dir: [0, 0, -1], distance: [49, 1e-6], name: 'plate' } },
   { console: ['drilling r=2', 'drilled one blank'] },
 ];

@@ -379,7 +379,9 @@ const SPECS: &[CommandSpec] = &[
             "array",
             "rays to fire, each `{\"origin\": [x,y,z], \"dir\": [x,y,z]}` (optional \
              `\"max_dist\"`); all against the request's one view, answered in order — \
-             `hits` holds `{id, name, distance, point, normal}` or `null` per ray",
+             `hits` holds `{id, name, distance, point, normal}` or `null` per ray. `id` is \
+             the mesh node's index path; `name` is that node's own name, else its nearest \
+             named ancestor's (so naming an invoked part labels hits inside it), else null",
         )],
         js_twin: Some(
             "`s.raycast(origin, dir, maxDist?)` — same query, same result shape; the CLI \
