@@ -89,8 +89,12 @@ mid-turn, hung prompt → watchdog. Real adapters are an opt-in lane.
 - A user message = `session/prompt` (or steer when a turn is running)
   with the view snapshot attached as content ("user state: sent, not
   sampled" holds — it rides the prompt instead of the poll response).
-- Working status = ACP turn state (+ plan entry if any); `say --task/--done`
-  and `PROCESSING` go. Lamp: dark = not configured/not running, green =
+- Working status is derived, never agent-set: working/not = ACP turn state
+  (so it cannot go stale); text = the in-progress plan entry, else the
+  running tool call's title, else "Working". `say --task/--done`,
+  `PROCESSING` and the stale-task echo go. If the derived text reads poorly
+  (judge in phase 0), fallback is `odm task "<text>"`, auto-cleared at turn
+  end. Lamp: dark = not configured/not running, green =
   idle session, blinking = turn running.
 - Lifecycle: spawn lazily on first message (header shows cached info until
   then); resume via `session/load` when supported, else fresh session;
