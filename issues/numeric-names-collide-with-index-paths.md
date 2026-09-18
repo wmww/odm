@@ -17,3 +17,5 @@ Options: prefer a name match and fall back to the index path (a name is
 explicit, an index is not); or require index paths to contain a `/` or a
 leading marker. Either way the duplicate-name tiebreaker in
 docs/cli.md "Addressing" needs updating.
+
+Plan: plans/slash-marked-index-paths.md (index paths start with `/`).
