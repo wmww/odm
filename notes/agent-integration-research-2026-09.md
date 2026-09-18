@@ -54,3 +54,17 @@ thenewstack.io/anthropic-pauses-claude-agent-sdk-subscription-change/
 - ODM side is pure Rust: `agent-client-protocol` crate (2.2.0, actively
   released). Nothing Node ships in ODM; Node is a user-machine runtime
   prerequisite for Claude/Codex/Gemini, not for opencode.
+
+## Design direction from the user (2026-09-18, not yet a plan)
+
+- If ACP holds up (steering spike first): drop `odm poll`, make `odm say` a
+  plain message to the user, delete plans/terminal.md unbuilt.
+- The user always picks the agent explicitly — never inferred from what is
+  installed. Nothing is fetched from npm without asking.
+- Selection is never committed. Leaning: system-wide setting (new — ODM has
+  no system config yet) + per-project value in `.odm/`, choosing in a
+  project also updating the system default.
+- Agent panel: input placeholder "Message <model>" (blank if unconfigured);
+  a session header (harness, version, model, …) with a settings button is
+  the first transcript item and scrolls with it; settings open as a main
+  tab (like the Feedback page), also from the context menu.
