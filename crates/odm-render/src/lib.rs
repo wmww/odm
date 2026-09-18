@@ -63,7 +63,7 @@ pub enum RenderError {
 }
 
 pub struct Instance {
-    /// Node id: child-index path from the root ("", "0", "0/2", ...).
+    /// Node id: child-index path from the root ("", "/0", "/0/2", ...).
     pub id: String,
     /// The mesh node's own name, else its nearest named ancestor's.
     pub name: Option<String>,

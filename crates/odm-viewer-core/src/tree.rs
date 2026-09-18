@@ -67,10 +67,8 @@ impl TreeState {
     pub(crate) fn reveal(&mut self, selected: &[(String, Option<String>)]) {
         let mut needed: HashSet<String> = HashSet::new();
         for (id, _) in selected {
-            if id.is_empty() {
-                continue;
-            }
-            needed.insert(String::new());
+            // Every ancestor is a prefix ending just before a '/', and the
+            // leading '/' yields the root's own empty id.
             needed.extend(id.match_indices('/').map(|(i, _)| id[..i].to_string()));
         }
         let stale: Vec<String> =
@@ -90,9 +88,9 @@ impl TreeState {
     }
 }
 
-/// Depth of a node id: "" is 0, "3" is 1, "3/1" is 2, ...
+/// Depth of a node id: "" is 0, "/3" is 1, "/3/1" is 2, ...
 fn node_depth(id: &str) -> usize {
-    if id.is_empty() { 0 } else { id.matches('/').count() + 1 }
+    id.matches('/').count()
 }
 
 /// The tree's shared state for one pass of `tree_node_ui`.
@@ -254,7 +252,7 @@ mod tests {
                 let mut tv = TreeUi { tree, selected, clicked: None };
                 tree_node_ui(ui, root, "", 0, &mut Vec::new(), true, &mut tv);
                 clicked = tv.clicked;
-                for id in ["", "0", "0/0", "0/0/0", "0/0/1", "1"] {
+                for id in ["", "/0", "/0/0", "/0/0/0", "/0/0/1", "/1"] {
                     let row_id = ui.make_persistent_id(format!("tree-{id}"));
                     let rect = |w: egui::Id| ui.ctx().read_response(w).map(|r| r.rect);
                     if let Some(r) = rect(row_id.with("row")) {
@@ -315,14 +313,14 @@ mod tests {
     fn tree_rows_multi_select() {
         let mut h = Harness::new(cart());
 
-        h.select_row("0", false);
-        assert_eq!(ids(&h.selected), ["0"]);
-        h.select_row("1", true);
-        assert_eq!(ids(&h.selected), ["0", "1"]);
-        h.select_row("0", true);
-        assert_eq!(ids(&h.selected), ["1"], "shift-clicking a selected row deselects it");
-        h.select_row("0", false);
-        assert_eq!(ids(&h.selected), ["0"], "a plain click replaces the selection");
+        h.select_row("/0", false);
+        assert_eq!(ids(&h.selected), ["/0"]);
+        h.select_row("/1", true);
+        assert_eq!(ids(&h.selected), ["/0", "/1"]);
+        h.select_row("/0", true);
+        assert_eq!(ids(&h.selected), ["/1"], "shift-clicking a selected row deselects it");
+        h.select_row("/0", false);
+        assert_eq!(ids(&h.selected), ["/0"], "a plain click replaces the selection");
     }
 
     /// Selecting a hidden node brings it into view by expanding its parents,
@@ -330,28 +328,28 @@ mod tests {
     #[test]
     fn tree_reveals_selected_rows() {
         let mut h = Harness::new(cart());
-        assert!(!h.rects.contains_key("0/0/1"), "great-grandchildren start folded");
+        assert!(!h.rects.contains_key("/0/0/1"), "great-grandchildren start folded");
 
-        h.selected = sel(&["0/0/1"]);
+        h.selected = sel(&["/0/0/1"]);
         h.tree.reveal(&h.selected);
         h.frame(Vec::new());
-        assert!(h.rects.contains_key("0/0/1"), "revealed by the selection");
+        assert!(h.rects.contains_key("/0/0/1"), "revealed by the selection");
 
-        h.select_row("0/0/0", true);
-        assert_eq!(ids(&h.selected), ["0/0/1", "0/0/0"]);
+        h.select_row("/0/0/0", true);
+        assert_eq!(ids(&h.selected), ["/0/0/1", "/0/0/0"]);
     }
 
     /// The +/- box toggles without selecting, and its state sticks.
     #[test]
     fn expander_box_toggles() {
         let mut h = Harness::new(cart());
-        h.click_at(h.expander("0/0"), false);
+        h.click_at(h.expander("/0/0"), false);
         assert!(h.clicked.is_none(), "the box is not a selection");
-        assert!(open(&h.tree, "0/0"));
+        assert!(open(&h.tree, "/0/0"));
         h.frame(Vec::new());
-        assert!(h.rects.contains_key("0/0/0"));
-        h.click_at(h.expander("0/0"), false);
-        assert!(!open(&h.tree, "0/0"));
+        assert!(h.rects.contains_key("/0/0/0"));
+        h.click_at(h.expander("/0/0"), false);
+        assert!(!open(&h.tree, "/0/0"));
     }
 
     /// Revealing a deep node opens its ancestors; dropping the selection puts
@@ -359,11 +357,11 @@ mod tests {
     #[test]
     fn auto_expand_is_undone() {
         let mut tree = TreeState::default();
-        assert!(!open(&tree, "0/1/2"));
-        tree.reveal(&sel(&["0/1/2/3"]));
-        assert!(open(&tree, "0/1/2") && open(&tree, "0/1") && open(&tree, "0"));
+        assert!(!open(&tree, "/0/1/2"));
+        tree.reveal(&sel(&["/0/1/2/3"]));
+        assert!(open(&tree, "/0/1/2") && open(&tree, "/0/1") && open(&tree, "/0"));
         tree.reveal(&[]);
-        assert!(!open(&tree, "0/1/2"));
+        assert!(!open(&tree, "/0/1/2"));
         assert!(tree.open.is_empty(), "no leftover overrides: {:?}", tree.open);
     }
 
@@ -372,43 +370,43 @@ mod tests {
     #[test]
     fn manual_expand_survives() {
         let mut tree = TreeState::default();
-        tree.set_manual("0/1/2", true);
-        tree.reveal(&sel(&["0/1/2/3/4"]));
+        tree.set_manual("/0/1/2", true);
+        tree.reveal(&sel(&["/0/1/2/3/4"]));
         tree.reveal(&[]);
-        assert!(open(&tree, "0/1/2"), "expanded before the selection");
-        assert!(!open(&tree, "0/1/2/3"), "only auto-expanded");
+        assert!(open(&tree, "/0/1/2"), "expanded before the selection");
+        assert!(!open(&tree, "/0/1/2/3"), "only auto-expanded");
 
-        tree.reveal(&sel(&["0/1/2/3/4"]));
-        tree.set_manual("0/1/2/3", false);
-        tree.set_manual("0/1/2/3", true);
+        tree.reveal(&sel(&["/0/1/2/3/4"]));
+        tree.set_manual("/0/1/2/3", false);
+        tree.set_manual("/0/1/2/3", true);
         tree.reveal(&[]);
-        assert!(open(&tree, "0/1/2/3"), "re-expanded by hand since the auto-expand");
+        assert!(open(&tree, "/0/1/2/3"), "re-expanded by hand since the auto-expand");
     }
 
     /// A node collapsed by hand goes back to collapsed, not to its default.
     #[test]
     fn manual_collapse_is_restored() {
         let mut tree = TreeState::default();
-        tree.set_manual("0", false);
-        tree.reveal(&sel(&["0/1"]));
-        assert!(open(&tree, "0"));
+        tree.set_manual("/0", false);
+        tree.reveal(&sel(&["/0/1"]));
+        assert!(open(&tree, "/0"));
         tree.reveal(&[]);
-        assert!(!open(&tree, "0"));
+        assert!(!open(&tree, "/0"));
     }
 
     /// Shift accumulates and toggles; a plain click starts over.
     #[test]
     fn shift_click_accumulates() {
         let hit = |id: &str| Some((id.to_string(), None));
-        let s = click_selection(Vec::new(), hit("0"), false);
-        let s = click_selection(s, hit("1/2"), true);
-        assert_eq!(s, sel(&["0", "1/2"]));
+        let s = click_selection(Vec::new(), hit("/0"), false);
+        let s = click_selection(s, hit("/1/2"), true);
+        assert_eq!(s, sel(&["/0", "/1/2"]));
         // Shift-clicking a selected node takes it back out.
-        let s = click_selection(s, hit("0"), true);
-        assert_eq!(s, sel(&["1/2"]));
+        let s = click_selection(s, hit("/0"), true);
+        assert_eq!(s, sel(&["/1/2"]));
         // Shift on empty space leaves the selection alone; a plain click clears.
         let s = click_selection(s, None, true);
-        assert_eq!(s, sel(&["1/2"]));
+        assert_eq!(s, sel(&["/1/2"]));
         assert_eq!(click_selection(s, None, false), sel(&[]));
     }
 
@@ -416,10 +414,10 @@ mod tests {
     #[test]
     fn reveal_keeps_shared_ancestors() {
         let mut tree = TreeState::default();
-        tree.reveal(&sel(&["0/1/2/9", "0/5/6"]));
-        assert!(open(&tree, "0/1/2") && open(&tree, "0/5"));
-        tree.reveal(&sel(&["0/1/2/9"]));
-        assert!(open(&tree, "0/1/2"), "still selected");
-        assert!(!open(&tree, "0/5"), "no longer selected");
+        tree.reveal(&sel(&["/0/1/2/9", "/0/5/6"]));
+        assert!(open(&tree, "/0/1/2") && open(&tree, "/0/5"));
+        tree.reveal(&sel(&["/0/1/2/9"]));
+        assert!(open(&tree, "/0/1/2"), "still selected");
+        assert!(!open(&tree, "/0/5"), "no longer selected");
     }
 }

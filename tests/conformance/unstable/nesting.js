@@ -62,7 +62,7 @@ export const checks = [
   { node: 'empty', volume: [0, 1e-12] },
   // The surviving arrays are nodes: 'nested' -> array -> array -> box.
   { node: 'nested', volume: [8, 1e-9], bounds: { min: [-1, 39, -1], max: [1, 41, 1], eps: 1e-9 } },
-  { node: '4/0/0/0', volume: [8, 1e-9] },
+  { node: '/4/0/0/0', volume: [8, 1e-9] },
   // Five boxes of side 2 (one in `deep`, three in `flat`, one in `nested`);
   // the empty solid and the two empty groups add nothing.
   { volume: [40, 1e-9] },

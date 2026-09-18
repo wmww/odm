@@ -1,5 +1,6 @@
 //! Scene queries behind the CLI `inspect` command: node addressing (index
-//! path or name), recursive node summaries with aggregate measurements, and
+//! path or name — a leading `/` marks a path, so the two kinds are
+//! disjoint), recursive node summaries with aggregate measurements, and
 //! world-space raycasts. Flattening and matrix math live in odm-render
 //! (single code path with rendering).
 
@@ -21,22 +22,17 @@ fn child_node(store: &Store, h: Hash) -> Option<Node> {
 
 // --- addressing ---------------------------------------------------------
 
-/// Does this address look like an index path (`0`, `1/0/2`) rather than a
-/// name? A node named "0" is unreachable by name — index paths win, and the
-/// name is still reachable by its path.
-fn is_index_path(s: &str) -> bool {
-    s.split('/').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-}
-
 /// Locate a node by name or index path. Returns its id, the node, and its
 /// **parent's** world transform (the node's own is applied by the walk).
-/// `""` is the root. Errors are agent-facing: they list the candidates.
+/// An address starting with `/` is an index path (`/0`, `/1/0/2`); anything
+/// else is a name, so a node named `12` is reachable. `""` and `/` are the
+/// root. Errors are agent-facing: they list the candidates.
 pub fn locate(store: &Store, root: &Node, addr: &str) -> Result<(String, Node, Mat4), String> {
-    if addr.is_empty() {
+    if addr.is_empty() || addr == "/" {
         return Ok((String::new(), root.clone(), odm_render::math::IDENTITY));
     }
-    if is_index_path(addr) {
-        return find_by_path(store, root, addr)
+    if let Some(path) = addr.strip_prefix('/') {
+        return find_by_path(store, root, path)
             .map(|(node, parent)| (addr.to_string(), node, parent))
             .ok_or_else(|| format!("no node at index path {addr:?}"));
     }
@@ -62,12 +58,12 @@ pub fn locate(store: &Store, root: &Node, addr: &str) -> Result<(String, Node, M
     }
 }
 
-/// Walk an index path, accumulating the transforms of everything above the
-/// target.
-fn find_by_path(store: &Store, root: &Node, id: &str) -> Option<(Node, Mat4)> {
+/// Walk an index path (already stripped of its leading `/`), accumulating
+/// the transforms of everything above the target.
+fn find_by_path(store: &Store, root: &Node, path: &str) -> Option<(Node, Mat4)> {
     let mut cur = root.clone();
     let mut parent = odm_render::math::IDENTITY;
-    for part in id.split('/') {
+    for part in path.split('/') {
         let idx: usize = part.parse().ok()?;
         if !cur.transform.is_identity() {
             parent = mat_mul(&parent, &cur.transform.0);
@@ -832,7 +828,7 @@ mod tests {
         let kids = v["children"].as_array().unwrap();
         assert_eq!(kids.len(), 1, "identical siblings collapse: {v}");
         assert_eq!(kids[0]["repeat"], json!(3));
-        assert_eq!(kids[0]["id"], json!("0"));
+        assert_eq!(kids[0]["id"], json!("/0"));
         // The shown fields are the run's first member's.
         assert_eq!(kids[0]["bounds"]["max"], json!([1.0, 1.0, 0.0]));
     }
@@ -900,16 +896,36 @@ mod tests {
         assert_eq!(node.name.as_deref(), Some("chain"));
 
         let e = locate(&store, &root, "link").unwrap_err();
-        assert!(e.contains("matches 3") && e.contains("0, 1, 2"), "{e}");
+        assert!(e.contains("matches 3") && e.contains("/0, /1, /2"), "{e}");
 
         let e = locate(&store, &root, "seat").unwrap_err();
         assert!(e.contains("chain") && e.contains("link"), "{e}");
 
         // Index paths remain the tiebreaker.
-        let (_, node, parent) = locate(&store, &root, "2").unwrap();
+        let (_, node, parent) = locate(&store, &root, "/2").unwrap();
         assert_eq!(node.name.as_deref(), Some("link"));
         assert_eq!(parent, odm_render::math::IDENTITY);
-        assert!(locate(&store, &root, "9").unwrap_err().contains("index path"));
+        assert!(locate(&store, &root, "/9").unwrap_err().contains("index path"));
+    }
+
+    #[test]
+    fn numeric_names_and_slash_root() {
+        let (store, mut root) = scene();
+        let store = store;
+        let odd = store.put(Object::Node(Node { name: Some("12".into()), ..Node::default() }));
+        root.children.push(odd);
+
+        // A digits-only name is a name, not a path.
+        let (id, node, _) = locate(&store, &root, "12").unwrap();
+        assert_eq!(node.name.as_deref(), Some("12"));
+        assert_eq!(id, "/3");
+        // ...and its index path still addresses it.
+        assert_eq!(locate(&store, &root, "/3").unwrap().1.name.as_deref(), Some("12"));
+
+        // "/" is an alias for the root's empty id.
+        let (id, node, _) = locate(&store, &root, "/").unwrap();
+        assert_eq!(id, "");
+        assert_eq!(node.name.as_deref(), Some("chain"));
     }
 
     #[test]
@@ -942,7 +958,7 @@ mod tests {
         assert!((c.distance - 5.0).abs() < 1e-9, "{c:?}");
         assert_eq!(c.between, ["seat".to_string(), "link".to_string()]);
         assert!(c.closest.is_some() && c.overlapping.is_empty(), "{c:?}");
-        let c = clearance(&store, &kernel, &root, "seat", "1/0").unwrap();
+        let c = clearance(&store, &kernel, &root, "seat", "/1/0").unwrap();
         assert!((c.distance - 5.0).abs() < 1e-9, "index paths address too: {c:?}");
 
         let e = clearance(&store, &kernel, &root, "seat", "seat").unwrap_err();

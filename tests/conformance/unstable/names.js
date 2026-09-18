@@ -35,8 +35,9 @@ export const checks = [
   // only at 45° if you account for the diagonal: 2·√2/2 = √2 each way.
   { node: 'moved', volume: [16, 1e-9], bounds: { min: [-Math.SQRT2, -Math.SQRT2, 18], max: [Math.SQRT2, Math.SQRT2, 22], eps: 1e-9 } },
 
-  // name(123) stores the string '123' — checked through raycast below,
-  // since a purely numeric name reads as an index path to node addressing.
+  // name(123) stores the string '123', and a digits-only name is a name:
+  // index paths are the ones that start with a slash.
+  { node: '123', volume: [8, 1e-9] },
 
   // The replaced name is gone, not shadowed.
   { node: 'second', volume: [8, 1e-9] },

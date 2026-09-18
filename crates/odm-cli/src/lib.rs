@@ -726,7 +726,7 @@ mod tests {
     fn short_values_stay_on_one_line() {
         let v = json!({
             "node": {
-                "id": "0",
+                "id": "/0",
                 "name": "chassis",
                 "bounds": {"min": [-35.0, -15.0, 11.0], "max": [35.0, 15.0, 21.0]},
             },

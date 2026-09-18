@@ -79,7 +79,7 @@ No request fields.
 
 the scene tree, measured exactly: names, bounds, counts — and, on the root entry, the view's interface.
 
-- `node` (string) — one node, by the name you gave it (`"seat"`) or by index path (`"1/0/2"`); default the root
+- `node` (string) — one node, by the name you gave it (`"seat"`) or by index path, which starts with a slash (`"/1/0/2"`); default the root
 - `depth` (number) — expand this many levels below the addressed node
 - `recursive` (bool) — expand fully
 - `full` (bool) — every measurement field, repeats expanded; `fields` overrides it
@@ -98,7 +98,7 @@ render a PNG; prints its path and echoes the resolved camera (`eye`/`target`/`up
 - `opacity` (number) — x-ray, 0..=1: multiplies every object's alpha, so everything turns translucent and interiors show through
 - `supersample` (number) — render k× larger internally and box-downsample: anti-aliasing on demand, none by default (integer 1..=8; k×width/height must fit the GPU's texture limit)
 - `look` (keyword | [x,y,z]) — `"top"`/`"bottom"`/`"front"`/`"back"`/`"left"`/`"right"` — the six axis-aligned drafting views, orthographic; or gaze along a vector, perspective (`front` looks along +y, `top` along -z); default a framed perspective overview
-- `focus` (string) — frame this node's subtree (name or index path, as `inspect` addresses nodes); the rest of the scene is still drawn
+- `focus` (string) — frame this node's subtree (name or `/1/0/2` index path, as `inspect` addresses nodes); the rest of the scene is still drawn
 - `zoom` (number) — factor on the auto-fitted distance/height: 2 = twice as close
 - `ortho` (bool) — projection override; beats what `look` implies in either direction
 - `eye` ([x,y,z]) — camera position; alone, it looks at the (focused) center
@@ -119,7 +119,7 @@ JS twin: `s.raycast(origin, dir, maxDist?)` — same query, same result shape; t
 
 assembly check: per pair of nodes, the signed distance between them (positive = exact gap, negative = penetration).
 
-- `pairs` (array) — node pairs to check, each `["a", "b"]` (names or index paths, as `inspect` addresses them; each node stands for its whole subtree); all against the request's one view, answered in order. Per pair, `clearances` holds a signed `distance` — positive: the exact minimum gap, with `closest` (the two nearest points) — negative: the parts overlap, and `separate` is a translation of the pair's second node that clears the first (its length is `-distance`, an upper bound on true penetration depth). `between` names the deciding leaf pair, and a negative result adds `overlapping`: every colliding leaf pair. The sign of a near-zero distance is float noise (exact tangency): treat `|distance|` below your own tolerance as contact — don't nudge geometry to disambiguate
+- `pairs` (array) — node pairs to check, each `["a", "b"]` (names or `/1/0/2` index paths, as `inspect` addresses them; each node stands for its whole subtree); all against the request's one view, answered in order. Per pair, `clearances` holds a signed `distance` — positive: the exact minimum gap, with `closest` (the two nearest points) — negative: the parts overlap, and `separate` is a translation of the pair's second node that clears the first (its length is `-distance`, an upper bound on true penetration depth). `between` names the deciding leaf pair, and a negative result adds `overlapping`: every colliding leaf pair. The sign of a near-zero distance is float noise (exact tangency): treat `|distance|` below your own tolerance as contact — don't nudge geometry to disambiguate
 
 JS twin: `a.clearance(b)` on Solids — same query; the numeric fields only (in JS you hold the two solids, so there is nothing to name), points as Vector3s; the CLI addresses nodes and maps over `pairs`.
 
@@ -195,10 +195,13 @@ odm inspect '{"fields": ["inputs", "presets"]}'     # the view's interface
 ```
 
 **Addressing.** A node is addressed by the `name` you gave it
-(`s.name('seat')`). An index path from the root also works — `"0"`,
-`"1/0/2"`, `""` for the root — and is the tiebreaker when a name is
-used more than once: the duplicate-name error lists the matching ids,
-which are index paths.
+(`s.name('seat')`). An index path from the root also works — it starts
+with a slash (`"/0"`, `"/1/0/2"`; `""` or `"/"` is the root) — and is the
+tiebreaker when a name is used more than once: the duplicate-name error
+lists the matching ids, which are index paths. The slash is what tells
+the two apart, so a name is never mistaken for a path (`"12"` is the node
+you called `12`); a name that itself starts with `/` is reachable only by
+its index path.
 
 **Scope.** Bare `inspect` is a whole-scene recursive overview; naming a
 node asks about that node, with its children as a count. `depth`
@@ -343,9 +346,9 @@ odm raycast '{"rays": [{"origin": [0, 0, 50], "dir": [0, 0, -1]},
 ### clearance
 
 The assembly self-check: "is A attached to B / do these collide". Each
-pair is two nodes (names or index paths, as `inspect` addresses them),
-each standing for its whole subtree; `clearances` answers per pair, in
-order:
+pair is two nodes (names or `/1/0/2` index paths, as `inspect` addresses
+them), each standing for its whole subtree; `clearances` answers per
+pair, in order:
 
 ```
 odm clearance '{"pairs": [["seat", "chainL"], ["seat", "chainR"]], "inputs": {"t": 1.5}}'

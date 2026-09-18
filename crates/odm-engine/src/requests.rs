@@ -52,7 +52,7 @@ pub(crate) struct InspectReq {
     pub inputs: Map<String, Value>,
     pub preset: Option<String>,
     pub view: Option<ViewSel>,
-    /// Name or index path; absent (or "") is the root.
+    /// Name, or index path (leading `/`); absent, "" or "/" is the root.
     pub node: Option<String>,
     pub depth: Option<f64>,
     #[serde(default)]
@@ -268,8 +268,8 @@ const SPECS: &[CommandSpec] = &[
             f(
                 "node",
                 "string",
-                "one node, by the name you gave it (`\"seat\"`) or by index path \
-                 (`\"1/0/2\"`); default the root",
+                "one node, by the name you gave it (`\"seat\"`) or by index path, which \
+                 starts with a slash (`\"/1/0/2\"`); default the root",
             ),
             f("depth", "number", "expand this many levels below the addressed node"),
             f("recursive", "bool", "expand fully"),
@@ -344,8 +344,8 @@ const SPECS: &[CommandSpec] = &[
             f(
                 "focus",
                 "string",
-                "frame this node's subtree (name or index path, as `inspect` addresses \
-                 nodes); the rest of the scene is still drawn",
+                "frame this node's subtree (name or `/1/0/2` index path, as `inspect` \
+                 addresses nodes); the rest of the scene is still drawn",
             ),
             f("zoom", "number", "factor on the auto-fitted distance/height: 2 = twice as close"),
             f(
@@ -397,8 +397,8 @@ const SPECS: &[CommandSpec] = &[
         fields: &[f(
             "pairs",
             "array",
-            "node pairs to check, each `[\"a\", \"b\"]` (names or index paths, as `inspect` \
-             addresses them; each node stands for its whole subtree); all against the \
+            "node pairs to check, each `[\"a\", \"b\"]` (names or `/1/0/2` index paths, as \
+             `inspect` addresses them; each node stands for its whole subtree); all against the \
              request's one view, answered in order. Per pair, `clearances` holds a signed \
              `distance` — positive: the exact minimum gap, with `closest` (the two nearest \
              points) — negative: the parts overlap, and `separate` is a translation of the \

@@ -203,7 +203,10 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   the single flattener `flatten_node` (color replace-wins inheritance,
   multiplicative opacity product into instance alpha, sRGB→linear — the
   only conversion in the system, world AABB, node ids for picking — engine
-  and viewer both use it) → one draw_indexed per
+  and viewer both use it; `node_id` is the *one* place ids are minted:
+  `/`-led child-index paths, `""` for the root, so an address starting
+  with `/` is a path and anything else is a name — the two kinds are
+  disjoint and a node named `12` is reachable) → one draw_indexed per
   instance with dynamic uniform offsets (not instanced draws), flat shading
   via screen-space derivatives, auto-framing perspective/ortho cameras;
   `render_png` and the viewer viewport share `render_to_target` (renderer
@@ -936,7 +939,7 @@ Consequences:
 grid, with mismatched field names). Two orthogonal knobs, both defaulting
 off one signal — *did you name a node?*:
 
-- **scope**: `node` (name, or index path as tiebreaker) plus
+- **scope**: `node` (name, or `/`-led index path as tiebreaker) plus
   `depth`/`recursive`. Unnamed → whole scene, recursive; named →
   that node, children as a count.
 - **detail**: summary (unnamed) | full (named, or `"full": true`) |

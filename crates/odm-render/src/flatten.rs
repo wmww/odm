@@ -18,9 +18,11 @@ fn to_linear(c: odm_ir::Color) -> [f32; 4] {
     [ch(c.r), ch(c.g), ch(c.b), c.a]
 }
 
-/// Node ids are child-index paths from the root: "" (root), "0", "0/2", ...
+/// Node ids are child-index paths from the root: "" (root), "/0", "/0/2", ...
+/// The leading slash is what makes an id self-marking: an address that starts
+/// with one is a path, anything else is a name.
 pub fn node_id(prefix: &str, index: usize) -> String {
-    if prefix.is_empty() { index.to_string() } else { format!("{prefix}/{index}") }
+    format!("{prefix}/{index}")
 }
 
 /// Flatten a stored Node hash into world-space render instances.
@@ -209,7 +211,7 @@ mod tests {
             color: DEFAULT_COLOR,
         };
         RenderScene {
-            instances: vec![inst("0", math::IDENTITY), inst("1", far)],
+            instances: vec![inst("/0", math::IDENTITY), inst("/1", far)],
             meshes: HashMap::from([(hash, mesh)]),
             bounds: None,
         }
@@ -219,7 +221,7 @@ mod tests {
     fn subset_bounds_fits_only_what_is_kept() {
         let scene = two_cubes();
         assert_eq!(
-            subset_bounds(&scene, |i| i.id == "1"),
+            subset_bounds(&scene, |i| i.id == "/1"),
             Some(([10.0, 0.0, 0.0], [11.0, 1.0, 1.0]))
         );
         assert_eq!(
