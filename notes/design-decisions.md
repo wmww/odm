@@ -149,14 +149,10 @@ manifold-csg. Flags: fidget is MPL-2.0 (file-level copyleft — usable as a
 dep, note if adopted); OCCT is LGPL-2.1 (another reason it stays out).
 Nearly all of them require their notices to ship with binaries.
 
-ODM's own release (user, 2026-09-17, probable): the repo goes public under
-a **copyleft** license at first release, with rights retained by not
-accepting PRs, or via a basic CLA. So release = one repo made public +
-GitHub Releases on it; no separate distribution channel. The `license =
-"MIT"` in the Cargo manifests predates this and is wrong until changed
-(`plans/release.md`). Open question there: exports embed ODM's web
-runtime, so copyleft needs an output exception or a permissive license on
-the exported parts.
+ODM's own release: MIT, everything (user, 2026-09-17; `LICENSE`, holder
+"the ODM authors"). No CLA (inbound=outbound). One repo made public +
+GitHub Releases on it; no separate distribution channel. Exports embed
+ODM's web runtime, which MIT makes a non-issue.
 
 ## egui text/i18n limits (checked 2026-07)
 
