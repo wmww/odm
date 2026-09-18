@@ -105,9 +105,9 @@ impl Item {
     }
 }
 
-/// `odm <version> (<commit>, <target triple>)` — what `build.rs` stamped in.
+/// `odm <engine version> (<commit>, <target triple>)` — what `build.rs` stamped in.
 pub fn build_string() -> String {
-    format!("odm {} ({}, {})", env!("CARGO_PKG_VERSION"), env!("ODM_GIT"), env!("ODM_TARGET"))
+    format!("odm {} ({}, {})", odm_build::ENGINE_VERSION, env!("ODM_GIT"), env!("ODM_TARGET"))
 }
 
 /// The machine, as far as it is cheap to say: os/arch always, plus the distro

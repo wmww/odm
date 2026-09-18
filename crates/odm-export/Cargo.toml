@@ -3,7 +3,7 @@
 # browser half (the template) is crates/odm-web, built by xtask only.
 [package]
 name = "odm-export"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 

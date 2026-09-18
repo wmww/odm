@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Unified inputs: plain inputs come from the immediate caller (the view
 // here) with declared defaults; cascade inputs resolve up the invoke chain,
 // view outermost, nearest provided value winning; a declaration

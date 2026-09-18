@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Transform semantics: chaining order (world-frame, applied left-multiplied),
 // volume under scale (×|det|), bounds under rotation, raycast through
 // transformed instances.

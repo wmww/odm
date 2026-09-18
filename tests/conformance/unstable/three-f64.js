@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // f32-regression tripwire, pinning three layers at once: the vendored three
 // generators must emit f64 position attributes, fromThreeGeometry must not
 // coerce to Float32Array, and op_solid_from_mesh must take f64. 0.1 is not an

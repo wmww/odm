@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Takes a Solid across the invoke boundary and hands it straight back: the
 // geometry travels as a content hash, so it is never rebuilt or re-interned.
 export const meta = {

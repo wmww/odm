@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // The {about} pivot on rotations and scale, applyMatrix4, and THREE-typed
 // query results (Box3 from bounds(), Vector3 point from raycast()) used to
 // position geometry inside a build.

@@ -1,6 +1,6 @@
 //! odm.toml: the project marker, and the ONE file the engine writes back.
 
-use odm_build::{ENGINE_VERSION, EXPORT_MARKER, is_project, read_marker, sync_marker};
+use odm_build::{EXPORT_MARKER, is_project, read_marker, sync_marker, sync_marker_as};
 
 #[test]
 fn a_project_is_a_dir_with_the_marker_in_it() {
@@ -21,7 +21,7 @@ fn a_project_is_a_dir_with_the_marker_in_it() {
 #[test]
 fn scan_skips_exported_sites() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("root.js"), "//! odm unstable\n").unwrap();
+    std::fs::write(dir.path().join("root.js"), "//! ODM API unstable\n").unwrap();
     let site = dir.path().join("web-export");
     std::fs::create_dir(&site).unwrap();
     std::fs::write(site.join("runtime.js"), "not a doohickey").unwrap();
@@ -29,7 +29,7 @@ fn scan_skips_exported_sites() {
     // Plain subdirs still scan.
     let parts = dir.path().join("parts");
     std::fs::create_dir(&parts).unwrap();
-    std::fs::write(parts.join("gear.js"), "//! odm unstable\n").unwrap();
+    std::fs::write(parts.join("gear.js"), "//! ODM API unstable\n").unwrap();
 
     let snap = odm_build::scan_project(dir.path()).unwrap();
     let paths: Vec<&str> = snap.sources.keys().map(|s| s.as_str()).collect();
@@ -55,19 +55,24 @@ fn marker_parses_and_rejects_unknown_keys() {
 }
 
 #[test]
-fn sync_marker_rewrites_only_the_engine_line() {
+fn sync_marker_only_raises_the_engine_line() {
     let dir = tempfile::tempdir().unwrap();
-    let toml = "# my project\nname = \"widget\"\nengine = 99\n";
-    std::fs::write(dir.path().join("odm.toml"), toml).unwrap();
+    let path = dir.path().join("odm.toml");
+    std::fs::write(&path, "# my project\nname = \"widget\"\nengine = 5\n").unwrap();
 
-    // A newer engine version warns, then records ours.
-    let warning = sync_marker(dir.path()).unwrap().expect("newer engine warns");
-    assert!(warning.contains("99"), "{warning}");
-    let text = std::fs::read_to_string(dir.path().join("odm.toml")).unwrap();
-    assert_eq!(text, format!("# my project\nname = \"widget\"\nengine = {ENGINE_VERSION}\n"));
+    // A project from a newer engine warns and is left alone.
+    let warning = sync_marker_as(dir.path(), 3).unwrap().expect("newer engine warns");
+    assert!(warning.contains('5') && warning.contains('3'), "{warning}");
+    assert!(std::fs::read_to_string(&path).unwrap().contains("engine = 5"));
 
-    // Up to date: no warning, no write (mtime-insensitive check via content).
-    assert!(sync_marker(dir.path()).unwrap().is_none());
+    // An older one is raised to ours; only that line changes.
+    assert!(sync_marker_as(dir.path(), 7).unwrap().is_none());
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text, "# my project\nname = \"widget\"\nengine = 7\n");
+
+    // Up to date: no warning, no write.
+    assert!(sync_marker_as(dir.path(), 7).unwrap().is_none());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 
     // No marker at all: nothing to do.
     let empty = tempfile::tempdir().unwrap();

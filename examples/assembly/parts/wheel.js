@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 //! A wheel: tire + hub + spokes, built along the Z axis.
 export const meta = {
   inputs: {

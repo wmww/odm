@@ -1,7 +1,7 @@
 # Writing doohickeys
 
 ```js
-//! odm unstable
+//! ODM API unstable
 export default function build(ctx) {
   const plate = odm.box([40, 20, 5]);
   const hole = odm.cylinder(3, 12);
@@ -12,7 +12,7 @@ export default function build(ctx) {
 Doohickeys run in an isolated sandbox with the `odm` and `THREE` globals
 preloaded — no imports, no file or network access. Return a `Solid`,
 `Group`, `Instance`, an array of these, or `null`. Start every file with
-the `//! odm unstable` pragma: it names the JS API version the file
+the `//! ODM API unstable` pragma: it names the JS API version the file
 targets (`odm docs versioning`).
 
 **Everything is immutable**: every method returns a new value (unlike
@@ -87,7 +87,7 @@ Declare everything a file can be given in `export const meta`; read
 with `ctx.input(name)` (reading an undeclared name is an error):
 
 ```js
-//! odm unstable
+//! ODM API unstable
 export const meta = {
   inputs: {
     width: { type: 'number', default: 40, minimum: 1 },   // caller/view arg

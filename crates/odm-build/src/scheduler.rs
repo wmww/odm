@@ -122,7 +122,7 @@ pub enum FailureKind {
     Cancelled,
     MissingDoohickey,
     BadOutput,
-    /// Bad or unsupported `//! odm <version>` pragma.
+    /// Bad or unsupported `//! ODM API <version>` pragma.
     Version,
     /// `export const meta` failed to extract or validate.
     Meta,

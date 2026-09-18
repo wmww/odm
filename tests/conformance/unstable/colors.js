@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Color contract: hex strings ('#rrggbb'/'#rgb') and [r,g,b]/[r,g,b,1]
 // sRGB arrays, nothing else. Named colors and 0xRRGGBB numbers are
 // deliberately rejected with pointed errors.

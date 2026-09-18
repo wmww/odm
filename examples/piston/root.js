@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 //! A crank–rod–piston assembly; motion is a pure function of the cascade
 //! input `t`. Declaring t with range 0–2 makes the viewer loop it every
 //! two seconds (one crank revolution at the default rpm).

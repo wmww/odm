@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // odm.sphere(r, { segments }): default 48 segments, centered on the origin.
 // A sphere's volume is discretization-dependent, so what is pinned is the
 // shape of the dependence — monotone in `segments`, always inscribed — plus

@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Helper for invoke/root.js: bores a hole through whatever Solid it is given.
 export const meta = {
   inputs: {

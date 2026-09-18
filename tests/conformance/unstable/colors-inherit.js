@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Color and opacity inheritance, end to end: `node` reads what was
 // *authored*, `flat` the effective per-instance colors the renderer draws.
 //

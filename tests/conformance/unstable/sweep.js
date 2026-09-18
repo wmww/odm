@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // sweep(profile, path, opts): rotation-minimizing frames along a polyline,
 // mitered corners, always capped. All three volumes here are exact.
 export default function build() {

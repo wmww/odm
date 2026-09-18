@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 //! Primitives + booleans: an L-bracket with four bolt holes.
 export default function build(ctx) {
   // Base plate on the XY floor, upright wall along the -X edge. Units: mm.

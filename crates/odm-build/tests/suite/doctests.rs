@@ -8,7 +8,7 @@
 //! - `ctx.invoke('path')` references get stub doohickeys, so composition
 //!   examples run without their whole imaginary project.
 //!
-//! Blocks in the live tree run as `unstable`. When frozen `docs/vN/`
+//! Blocks in the live tree run as `unstable`. When frozen `docs/api-N/`
 //! snapshots exist, their blocks must run under version N instead.
 
 use odm_build::{BuildEngine, View};
@@ -148,7 +148,7 @@ fn run_block(block: &Block) -> Result<(), String> {
         block.code.clone()
     } else {
         format!(
-            "//! odm unstable\nexport default function build(ctx) {{\n{}\nreturn null;\n}}\n",
+            "//! ODM API unstable\nexport default function build(ctx) {{\n{}\nreturn null;\n}}\n",
             block.code
         )
     };
@@ -166,7 +166,7 @@ fn run_block(block: &Block) -> Result<(), String> {
         let inputs: String =
             keys.iter().map(|k| format!("{k}: {{ default: null }}, ")).collect();
         let stub = format!(
-            "//! odm unstable\nexport const meta = {{ inputs: {{ {inputs} }} }};\n\
+            "//! ODM API unstable\nexport const meta = {{ inputs: {{ {inputs} }} }};\n\
              export default function build() {{ return odm.box(1); }}\n"
         );
         std::fs::write(p, stub).map_err(|e| e.to_string())?;

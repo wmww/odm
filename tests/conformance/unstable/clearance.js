@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // s.clearance(other): signed distance. Positive = exact minimum gap with
 // closest points; negative = overlap, with a separating translation whose
 // length is -distance. The assertions run inside build() — a wrong answer

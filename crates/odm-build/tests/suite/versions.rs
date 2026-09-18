@@ -1,4 +1,4 @@
-//! API version routing: the `//! odm <version>` pragma picks the framework
+//! API version routing: the `//! ODM API <version>` pragma picks the framework
 //! snapshot a doohickey's isolate is created from. Exercised through the
 //! test-only `test` version (odm-js `test-api-version` feature), whose one
 //! surface difference is `odm.apiProbe`.
@@ -30,7 +30,7 @@ fn build(dir: &Path) -> Result<(), odm_build::BuildFailure> {
 
 /// Throws unless the surface matches what the file's pragma selects.
 const ASSERT_UNSTABLE: &str = r#"
-//! odm unstable
+//! ODM API unstable
 export default function build() {
     if (typeof odm.apiProbe !== 'undefined') {
         throw new Error('unstable surface must not have odm.apiProbe');
@@ -40,7 +40,7 @@ export default function build() {
 "#;
 
 const ASSERT_TEST: &str = r#"
-//! odm test
+//! ODM API test
 import { apiProbe } from 'odm';
 export default function build() {
     if (odm.apiProbe() !== 'test') throw new Error('bad global probe');
@@ -73,7 +73,7 @@ export default function build() {
 }
 "#,
     );
-    build(dir.path()).expect("no pragma = unstable until v1 exists");
+    build(dir.path()).expect("no pragma = unstable until API 1 exists");
 }
 
 /// Both versions coexist in one pass, and ctx.invoke crosses them in both
@@ -85,7 +85,7 @@ fn cross_version_invoke_coexists_in_one_pass() {
         dir.path(),
         "main.js",
         r#"
-//! odm unstable
+//! ODM API unstable
 export default function build(ctx) {
     if (typeof odm.apiProbe !== 'undefined') throw new Error('unstable got the test surface');
     const part = ctx.invoke('part.js', { r: 2 });
@@ -97,7 +97,7 @@ export default function build(ctx) {
         dir.path(),
         "part.js",
         r#"
-//! odm test
+//! ODM API test
 export const meta = { inputs: { r: { type: 'number' } } };
 export default function build(ctx) {
     if (odm.apiProbe() !== 'test') throw new Error('test file got the unstable surface');
@@ -111,7 +111,7 @@ export default function build(ctx) {
         dir.path(),
         "inner.js",
         r#"
-//! odm unstable
+//! ODM API unstable
 export default function build() {
     if (typeof odm.apiProbe !== 'undefined') throw new Error('unstable got the test surface');
     return odm.box(0.5);
@@ -124,17 +124,17 @@ export default function build() {
 #[test]
 fn unknown_version_fails_that_file_with_the_supported_list() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "main.js", "//! odm v1\nexport default function build() { return null; }\n");
+    write(dir.path(), "main.js", "//! ODM API 1\nexport default function build() { return null; }\n");
     let err = build(dir.path()).unwrap_err();
     assert_eq!(err.kind, FailureKind::Version);
-    assert!(err.message.contains("unknown API version \"v1\""), "{}", err.message);
+    assert!(err.message.contains("unknown API version \"1\""), "{}", err.message);
     assert!(err.message.contains("unstable"), "{}", err.message);
 }
 
 #[test]
 fn malformed_pragma_fails_that_file() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "main.js", "//! odm\nexport default function build() { return null; }\n");
+    write(dir.path(), "main.js", "//! ODM API\nexport default function build() { return null; }\n");
     let err = build(dir.path()).unwrap_err();
     assert_eq!(err.kind, FailureKind::Version);
     assert!(err.message.contains("missing its version"), "{}", err.message);
@@ -145,6 +145,6 @@ fn malformed_pragma_fails_that_file() {
 fn bad_pragma_in_an_unused_file_is_harmless() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "main.js", "export default function build() { return odm.box(1); }\n");
-    write(dir.path(), "scratch.js", "//! odm v99\nexport default function build() { return null; }\n");
+    write(dir.path(), "scratch.js", "//! ODM API 99\nexport default function build() { return null; }\n");
     build(dir.path()).expect("unused file's pragma error must not block the build");
 }

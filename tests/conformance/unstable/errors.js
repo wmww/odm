@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Error contract: wrong CSG operands fail the build with the documented
 // message. (Only build()-time failures can be conformance-tested this way —
 // the module itself must evaluate for `checks` to be readable.)

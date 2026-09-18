@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // extrude(profile, height, opts): positional height; linear taper via the
 // scale option is exact polyhedral arithmetic. Also `twist`/`slices` (the
 // twisted solid is a stack of lofts, so refining slices converges *down* to

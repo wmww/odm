@@ -1,6 +1,6 @@
 # API migration guides
 
-One file per version hop: `vN.md` covers migrating v(N-1) → vN. Bullets
+One file per version hop: `api-N.md` covers migrating API N-1 → API N. Bullets
 only — a mechanical before → after per breaking change, each snippet
 doctested under its respective version. Guides freeze once written (typo
 fixes ok).

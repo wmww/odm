@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Curved solids: values are discretization-dependent, and the default
 // segment counts (cylinder 64, sphere 48, revolve 64) are API surface.
 // Epsilons are sanity bands around the analytic value — wide enough for an

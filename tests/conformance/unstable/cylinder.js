@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // odm.cylinder(r, h, opts): axis along Z, centered by default, `segments`
 // (default 64) explicit and >= 3, `r2` making a frustum.
 //

@@ -102,7 +102,7 @@ mod tests {
             "opus".into(),
         );
         item.platform = "linux x86_64".into();
-        item.build = "odm 0.1.0 (abc1234, x86_64-unknown-linux-gnu)".into();
+        item.build = "odm 0 (abc1234, x86_64-unknown-linux-gnu)".into();
         item
     }
 
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(pairs[HARNESS], "Claude Code");
         assert_eq!(pairs[MODEL], "opus");
         assert_eq!(pairs[PLATFORM], "linux x86_64");
-        assert_eq!(pairs[BUILD], "odm 0.1.0 (abc1234, x86_64-unknown-linux-gnu)");
+        assert_eq!(pairs[BUILD], "odm 0 (abc1234, x86_64-unknown-linux-gnu)");
         assert_eq!(pairs.len(), 6, "no field is invented or dropped: {body}");
     }
 

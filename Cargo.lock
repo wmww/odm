@@ -2759,7 +2759,7 @@ dependencies = [
 
 [[package]]
 name = "odm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -2774,7 +2774,7 @@ dependencies = [
 
 [[package]]
 name = "odm-build"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "jsonschema",
  "odm-dylib",
@@ -2792,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "odm-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "include_dir",
@@ -2804,7 +2804,7 @@ dependencies = [
 
 [[package]]
 name = "odm-dylib"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "odm-build",
  "odm-cli",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "odm-engine"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -2840,7 +2840,7 @@ dependencies = [
 
 [[package]]
 name = "odm-export"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "include_dir",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "odm-ir"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "blake3",
  "serde",
@@ -2867,7 +2867,7 @@ dependencies = [
 
 [[package]]
 name = "odm-js"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "deno_core",
  "deno_error",
@@ -2886,7 +2886,7 @@ dependencies = [
 
 [[package]]
 name = "odm-kernel"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "manifold-csg",
  "odm-dylib",
@@ -2897,14 +2897,14 @@ dependencies = [
 
 [[package]]
 name = "odm-prompt"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "odm-render"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bytemuck",
  "font8x8",
@@ -2920,7 +2920,7 @@ dependencies = [
 
 [[package]]
 name = "odm-store"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "odm-ir",
  "serde",
@@ -2929,7 +2929,7 @@ dependencies = [
 
 [[package]]
 name = "odm-viewer-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "eframe",
  "odm-build",
@@ -2943,7 +2943,7 @@ dependencies = [
 
 [[package]]
 name = "odm-web"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "console_error_panic_hook",
  "eframe",
@@ -5261,7 +5261,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "odm-dylib",

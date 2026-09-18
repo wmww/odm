@@ -2,7 +2,7 @@
 
 Per-API-version test doohickeys asserting what the JS API *means*. One
 directory per version channel. `unstable/` is mutable and grows with every
-feature and every bug found — it is the seed of the future v1 suite. From v1
+feature and every bug found — it is the seed of the future API 1 suite. From API 1
 on, a stamped version's suite follows the contract in `docs/versioning.md`:
 add tests freely, port to new runner infra, weaken or remove assertions
 never; asserting a bugfix in a stamped version is a deliberate per-case
@@ -16,11 +16,11 @@ test:
 - `name/` — a whole project directory (`root.js` plus parts), for
   invoke/inputs tests.
 
-Every test file carries its `//! odm <version>` pragma and exports its
+Every test file carries its `//! ODM API <version>` pragma and exports its
 assertions next to its geometry:
 
 ```js
-//! odm unstable
+//! ODM API unstable
 export default function build(ctx) { return odm.box(10); }
 
 export const checks = [

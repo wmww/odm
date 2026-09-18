@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // 0xRRGGBB numbers are rejected — by the time the parser sees one it is
 // indistinguishable from any other integer. The error spells out the fix.
 export default function build() {

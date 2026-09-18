@@ -27,7 +27,7 @@ fn meta_is_extracted_and_normalized() {
     write(
         dir.path(),
         "wheel.js",
-        r#"//! odm unstable
+        r#"//! ODM API unstable
 //! A wheel.
 //!
 //! Radius and offset are knobs.
@@ -65,12 +65,12 @@ export default function build(ctx) { return odm.cylinder(1, 1); }
 #[test]
 fn missing_meta_is_empty_and_errors_are_reported() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "plain.js", "//! odm unstable\nexport default () => odm.box(1);\n");
-    write(dir.path(), "broken.js", "//! odm unstable\nthrow new Error('top-level boom');\n");
+    write(dir.path(), "plain.js", "//! ODM API unstable\nexport default () => odm.box(1);\n");
+    write(dir.path(), "broken.js", "//! ODM API unstable\nthrow new Error('top-level boom');\n");
     write(
         dir.path(),
         "bad-meta.js",
-        "//! odm unstable\nexport const meta = { inputs: { w: { typ: 'number' } } };\n\
+        "//! ODM API unstable\nexport const meta = { inputs: { w: { typ: 'number' } } };\n\
          export default () => null;\n",
     );
 

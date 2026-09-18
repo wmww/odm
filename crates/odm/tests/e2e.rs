@@ -17,8 +17,8 @@ use tempfile::TempDir;
 
 const BIN: &str = env!("CARGO_BIN_EXE_odm");
 
-const BOX10: &str = "//! odm unstable\nexport default () => odm.box(10);\n";
-const BOX20: &str = "//! odm unstable\nexport default () => odm.box(20);\n";
+const BOX10: &str = "//! ODM API unstable\nexport default () => odm.box(10);\n";
+const BOX20: &str = "//! ODM API unstable\nexport default () => odm.box(20);\n";
 
 /// A project directory under `/tmp`: the socket lives at
 /// `<project>/.odm/engine.sock` and unix socket paths cap out around 104
@@ -258,7 +258,7 @@ fn the_watcher_rebuilds_without_any_query() {
 
     // Give the follower time to connect and park before touching anything.
     std::thread::sleep(Duration::from_millis(300));
-    write(dir.path(), "root.js", "//! odm unstable\nthis is not javascript(((\n");
+    write(dir.path(), "root.js", "//! ODM API unstable\nthis is not javascript(((\n");
     await_build_state(&lines, "error");
     write(dir.path(), "root.js", BOX20);
     await_build_state(&lines, "ok");
@@ -286,7 +286,7 @@ fn await_build_state(lines: &std::sync::mpsc::Receiver<String>, want: &str) {
 
 #[test]
 fn a_thrown_build_fails_loudly_and_heals() {
-    const BOOM: &str = "//! odm unstable\n\
+    const BOOM: &str = "//! ODM API unstable\n\
         export const meta = { inputs: { size: { type: 'number', default: 3 } } };\n\
         export default () => { throw new Error('boom'); };\n";
     let dir = project(&[("root.js", BOOM)]);

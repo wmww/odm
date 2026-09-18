@@ -3,8 +3,8 @@
 //! matches the engine build. Markdown out: for reading (or grepping), not
 //! parsing.
 //!
-//! At a version cut, the live tree is copied to `docs/vN/` and `--api N`
-//! starts reading from that snapshot; until v1 exists only the live
+//! At a version cut, the live tree is copied to `docs/api-N/` and `--api N`
+//! starts reading from that snapshot; until API 1 exists only the live
 //! (unstable) tree is valid.
 
 use anyhow::bail;
@@ -15,7 +15,7 @@ static DOCS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../docs");
 pub const USAGE: &str = "  docs                       list reference topics
   docs <topic>               print one topic (e.g. `odm docs solids`)
   docs search <pattern>      find <pattern> in the reference (case-insensitive)
-  docs changes <from> <to>   migration guides for API v<from> -> v<to>
+  docs changes <from> <to>   migration guides for API <from> -> <to>
 ";
 
 /// A named markdown topic: (topic, contents).
@@ -54,7 +54,7 @@ fn changes() -> Vec<(u32, &'static str)> {
         for f in dir.files() {
             let name = f.path().file_stem().unwrap_or_default().to_string_lossy();
             if let (Some(n), Some(body)) =
-                (name.strip_prefix('v').and_then(|s| s.parse().ok()), f.contents_utf8())
+                (name.strip_prefix("api-").and_then(|s| s.parse().ok()), f.contents_utf8())
             {
                 out.push((n, body));
             }
@@ -175,14 +175,14 @@ fn print_changes(args: &[String]) -> anyhow::Result<i32> {
         if available.is_empty() {
             "none exist yet (no stamped versions, no breaking changes)".into()
         } else {
-            available.iter().map(|(n, _)| format!("v{n}")).collect::<Vec<_>>().join(", ")
+            available.iter().map(|(n, _)| format!("API {n}")).collect::<Vec<_>>().join(", ")
         }
     };
     let [from, to] = args else {
         bail!("usage: odm docs changes <from> <to>   (available: {})", list());
     };
     let parse = |s: &String| -> anyhow::Result<u32> {
-        s.trim_start_matches('v')
+        s
             .parse()
             .map_err(|_| anyhow::anyhow!("{s:?} is not a version number"))
     };
@@ -197,7 +197,7 @@ fn print_changes(args: &[String]) -> anyhow::Result<i32> {
                 out.push_str(body.trim_end());
                 out.push_str("\n\n");
             }
-            None => bail!("no migration guide for v{n} (available: {})", list()),
+            None => bail!("no migration guide for API {n} (available: {})", list()),
         }
     }
     print!("{out}");

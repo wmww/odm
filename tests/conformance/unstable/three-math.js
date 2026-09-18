@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // The THREE math types are accepted wherever the array form is, and the
 // rotation constructions agree. Equalities are asserted here in JS (a wrong
 // answer throws, which the runner reports as a failed build); one summary

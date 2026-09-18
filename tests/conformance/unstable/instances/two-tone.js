@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // One coloured solid and one bare one, so an Instance colour on the caller
 // side has something to inherit into and something to lose to.
 export default function build() {

@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 //! One bar per entry of the `bars` array input: the array's *length* is
 //! part of what the input sets, so editing it adds and removes geometry.
 export const meta = {

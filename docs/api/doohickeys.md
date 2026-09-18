@@ -20,7 +20,7 @@ it differs from its own — the one project file it ever writes — and
 warns when the project was last touched by a newer engine.
 
 ```js
-//! odm unstable
+//! ODM API unstable
 //! A steel plate, for the doohickeys chapter.
 export default function build(ctx) {
   return odm.box([40, 20, 5]).color('#4682b4');
@@ -35,7 +35,7 @@ object carrying `ctx.input()` (declared inputs — see
 ## Description and metadata
 
 The leading `//!` comment block doubles as the file's prose
-description (the `odm <version>` pragma line is excluded): first line =
+description (the `ODM API <version>` pragma line is excluded): first line =
 one-sentence summary, the rest is the body. It is parsed without
 running the file, so it survives broken builds and is greppable.
 Structured metadata — input declarations, presets — lives in
@@ -45,12 +45,12 @@ reports both.
 
 ## The API version pragma
 
-`//! odm <version>` in the leading comments names the JS API version the
+`//! ODM API <version>` in the leading comments names the JS API version the
 file targets — `unstable` (the current, freely-breaking dev channel) or,
-once stamped versions exist, `v1`, `v2`, …. It is per file: versions
+once stamped versions exist, `1`, `2`, … (`//! ODM API 1`). It is per file: versions
 coexist in one project and `ctx.invoke` crosses them freely. A missing
-pragma currently means `unstable`; that default goes away when v1 is
-cut, so write the pragma. The whole story: `odm docs versioning`.
+pragma currently means `unstable`; that default goes away when API 1
+is cut, so write the pragma. The whole story: `odm docs versioning`.
 
 ## Return values
 

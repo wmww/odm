@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Fail-loud contract: unknown options, wrong arities, and removed forms all
 // throw with pointed messages instead of silently doing nothing. `mode`
 // selects which bad call to make so one file pins many errors.

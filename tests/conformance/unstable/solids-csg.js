@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Box primitives and booleans: everything here is exact arithmetic, so the
 // epsilons are tight. Curved solids (discretization-dependent) live in
 // curved.js.

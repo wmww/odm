@@ -127,7 +127,7 @@ fn unstable_suite() {
 fn every_api_name_is_exercised() {
     // The transform/color/name methods live on a mixin base class, so the
     // walk has to go up the prototype chain, not just read own properties.
-    const PROBE: &str = "//! odm unstable\n\
+    const PROBE: &str = "//! ODM API unstable\n\
         const proto = (c) => {\n\
           const out = [];\n\
           for (let p = c.prototype; p && p !== Object.prototype; p = Object.getPrototypeOf(p)) {\n\

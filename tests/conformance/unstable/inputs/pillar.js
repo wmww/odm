@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // A 1×1×lift box; `lift` cascades (default 1).
 export const meta = {
   inputs: {

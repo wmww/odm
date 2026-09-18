@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 //! An open box with a stacking lip; every dimension is an input.
 export const meta = {
   inputs: {

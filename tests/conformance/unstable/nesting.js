@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // odm.group: nesting, flattening, and the empty cases. A Group is pure
 // structure — one transform/color/name over children — and the transforms
 // accumulate down the tree.

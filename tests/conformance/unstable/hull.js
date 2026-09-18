@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // a.hull(...b): the convex hull of every operand together. Values here are
 // exact — a hull of axis-aligned boxes is a box, so no discretization.
 export const meta = {

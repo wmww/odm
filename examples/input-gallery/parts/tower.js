@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 //! The enum and check-box exhibit: `roof` picks a shape, `windows` cuts
 //! openings. It also declares the cascade input `detail` — root.js never
 //! mentions it, yet it falls through and the view can set it.

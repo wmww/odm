@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // odm.revolve(profile, { angle, segments, curveSegments }): the profile's
 // (x, y) is (radius, z), turned around the Z axis. Partial angles leave flat
 // end caps; a negative radius is an error, not quietly folded geometry.

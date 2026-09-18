@@ -58,9 +58,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   leave no way to fix it in the viewer. Two copies of that one-liner
   (`odm_build::is_project`, `odm_cli::is_project`) — odm-cli stays
   dependency-light on purpose.
-- `odm.toml` is one of the two project files the engine writes: it records its
-  `engine` version back on open (warning first if the file names a newer
-  engine). The other is the agent files — see below.
+- `odm.toml` is one of the two project files the engine writes: it raises the
+  `engine` version to its own on open (never lowers it; a file naming a newer
+  engine only gets a warning — notes/api-stability-and-docs.md). The other is the agent files — see below.
 - **Agent files** (`AGENTS.md`, `CLAUDE.md` at the project root): the standard
   prompt lives between `<!--- BEGIN/END STANDARD ODM PROMPT --->` lines, and a
   well-formed pair is the file's opt-in — `odm_prompt::sync` splices the
@@ -1026,8 +1026,8 @@ this.
 
 Contract: `docs/versioning.md`; rationale + implementation map:
 `notes/api-stability-and-docs.md`. The short version: every doohickey
-carries `//! odm <version>` (parsed at sync time in odm-build/sources.rs,
-missing = unstable until v1); `framework/versions/<v>` manifests register
+carries `//! ODM API <version>` (parsed at sync time in odm-build/sources.rs,
+missing = unstable until API 1); `framework/versions/<v>` manifests register
 per-version installers in one shared snapshot, `run_build` installs the
 selected surface into each isolate before its module loads, and bare
 `'odm'`/`'three'` imports resolve per version. A test-only `test` version
@@ -1108,7 +1108,7 @@ replay logs by design, so it is not observable from a conformance check;
 
 `cargo test` runs everything in ~1s after compile. Almost all tests are
 integration tests in `crates/*/tests/`; the unit tests in `src/` are
-`odm-render/src/grid.rs`, `odm-js/src/version.rs` (pragma parsing),
+`odm-render/src/grid.rs`, `odm-build/src/version.rs` (pragma parsing),
 `odm-prompt/src/` (marker splicing + the agent-file scan); in
 odm-viewer-core, `icons.rs`, `tree.rs`, `inputs.rs` (the input panel,
 headless egui) and `theme/scroll.rs`; and in odm-engine, `commands.rs`,
@@ -1123,7 +1123,7 @@ Two data-driven suites guard the JS API:
   `cargo test -p odm-engine conformance`. Declarative `export const
   checks` per test doohickey; format in `tests/conformance/README.md`.
   Add a test with every feature and every bug found — it seeds the frozen
-  v1 suite. `every_api_name_is_exercised` reads the live API surface and
+  API 1 suite. `every_api_name_is_exercised` reads the live API surface and
   fails until each name appears in the suite, so a new function cannot
   ship untested.
 - **Doctests**: every fenced ```js block under `docs/` must build

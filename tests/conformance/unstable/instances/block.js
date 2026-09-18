@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // A cube whose size is a cascade input, so a value set at any outer invoke
 // (or at the view) reaches it without every level redeclaring it.
 export const meta = {

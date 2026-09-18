@@ -10,7 +10,7 @@
 
 use std::process::Command;
 
-const ROOT_JS: &str = r#"//! odm unstable
+const ROOT_JS: &str = r#"//! ODM API unstable
 //! Node-test doohickey.
 import * as THREE from 'three';
 export const meta = { inputs: { t: { type: 'number', minimum: 0, maximum: 1, default: 0.25, cascade: true } } };

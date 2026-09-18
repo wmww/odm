@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Structured inputs: extension types at any depth, nested defaults applied
 // at normalization, tagged unions (`variants`) selected by tag, and
 // string-keyed maps (`additionalProperties`). ctx.input hydrates THREE

@@ -314,7 +314,7 @@ mod tests {
     fn bundles_framework_and_doohickeys() {
         let snap = snapshot(&[(
             "root.js",
-            "//! odm unstable\nexport default function build(ctx) { return odm.box(1); }\n",
+            "//! ODM API unstable\nexport default function build(ctx) { return odm.box(1); }\n",
         )]);
         let b = bundle(&snap).unwrap();
         assert!(b.js.contains(r#"B.module("framework/odm/index.js""#), "odm module missing");
@@ -332,9 +332,9 @@ mod tests {
         let snap = snapshot(&[
             (
                 "root.js",
-                "//! odm unstable\nimport x from './other.js';\nexport default () => null;\n",
+                "//! ODM API unstable\nimport x from './other.js';\nexport default () => null;\n",
             ),
-            ("ok.js", "//! odm unstable\nexport default () => null;\n"),
+            ("ok.js", "//! ODM API unstable\nexport default () => null;\n"),
         ]);
         let b = bundle(&snap).unwrap();
         assert_eq!(b.broken.len(), 1);

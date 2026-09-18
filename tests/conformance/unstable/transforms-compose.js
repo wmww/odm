@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // How transforms compose. Transforms are world-frame and applied in call
 // order — each call left-multiplies onto the pending matrix — so order
 // matters and the identities below are the ones a doohickey can rely on.

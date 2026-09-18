@@ -13,6 +13,10 @@ exclude = ["crates/odm-dylib"]
 default-members = ["crates/odm"]
 
 [workspace.package]
+# 1.N.0, where N is THE engine version: one integer, bumped every release
+# (odm_build::ENGINE_VERSION reads it; `odm.toml` records it). The 1 and the
+# trailing 0 are only there because cargo wants three parts.
+version = "1.0.0"
 edition = "2024"
 license = "MIT"
 

@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 //! One gallery object: a shape at a position. root.js invokes it once per
 //! `objects` element, so editing one element rebuilds one marker and
 //! memo-hits the rest (`"stats": true` shows it).

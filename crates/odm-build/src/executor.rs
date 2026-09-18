@@ -104,7 +104,7 @@ pub struct BuildInput<'a> {
     /// Project-relative path, used for module identity + error messages.
     pub path: &'a str,
     pub code: &'a str,
-    /// API version from the file's `//! odm <version>` pragma; selects the
+    /// API version from the file's `//! ODM API <version>` pragma; selects the
     /// framework surface this build runs against.
     pub api: ApiVersion,
     /// Effective args: caller args validated against the file's declared

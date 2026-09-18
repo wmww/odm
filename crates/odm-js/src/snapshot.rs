@@ -5,7 +5,7 @@
 //! API versions: ONE snapshot holds every supported version's modules. Each
 //! version's manifest module (framework/versions/…) registers an installer
 //! in `__odmVersions`; isolate creation runs the installer selected by the
-//! file's `//! odm <version>` pragma, and bare 'odm'/'three' imports resolve
+//! file's `//! ODM API <version>` pragma, and bare 'odm'/'three' imports resolve
 //! per version. One-snapshot-per-version does NOT work: V8 shares one
 //! read-only heap per process, seeded by the first snapshot blob used, and
 //! deserializing a structurally different blob dies on external-reference

@@ -21,4 +21,4 @@ snapshot (`odm docs --api N`); no snapshots exist yet. Every fenced
 `crates/odm-build/tests/doctests.rs`.
 
 **Stability**: the current API is the unstable dev channel. It breaks
-freely until v1 is cut; these docs track the live surface.
+freely until API 1 is cut; these docs track the live surface.

@@ -14,10 +14,22 @@ use std::path::Path;
 /// live inside the project they came from.
 pub const EXPORT_MARKER: &str = ".odm-export";
 
-/// The engine version this build writes into `odm.toml`. An integer,
-/// independent of the per-file JS API version; bumped when the *engine's*
-/// on-disk expectations change.
-pub const ENGINE_VERSION: i64 = 0;
+/// The engine version: one integer, bumped every release — the N of the
+/// workspace's `1.N.0` cargo version. Independent of the per-file JS API
+/// version. Written into `odm.toml`, so format migrations key off it.
+pub const ENGINE_VERSION: i64 = parse_version(env!("CARGO_PKG_VERSION_MINOR"));
+
+const fn parse_version(s: &str) -> i64 {
+    let bytes = s.as_bytes();
+    assert!(!bytes.is_empty());
+    let (mut n, mut i) = (0i64, 0);
+    while i < bytes.len() {
+        assert!(bytes[i].is_ascii_digit());
+        n = n * 10 + (bytes[i] - b'0') as i64;
+        i += 1;
+    }
+    n
+}
 
 /// `odm.toml`: the project marker — what makes a directory a project, and all
 /// that `is_project` looks at. Authored at project creation; the engine only
@@ -29,7 +41,7 @@ pub const ENGINE_VERSION: i64 = 0;
 pub struct ProjectMarker {
     /// Project name, shown in the window title / status.
     pub name: String,
-    /// Last-used engine version.
+    /// The newest engine version that has opened the project.
     pub engine: i64,
 }
 
@@ -50,9 +62,9 @@ pub enum ScanError {
 pub struct Source {
     pub code: String,
     pub hash: Hash,
-    /// From the `//! odm <version>` pragma; a bad pragma is kept as the
+    /// From the `//! ODM API <version>` pragma; a bad pragma is kept as the
     /// error and surfaces when (if) the file is built. Missing pragma =
-    /// unstable until v1 is cut, then it becomes an error too.
+    /// unstable until API 1 is cut, then it becomes an error too.
     pub api: Result<ApiVersion, String>,
     /// Prose from the `//!` comment block (pragma line excluded). First
     /// line = one-sentence summary. Parsed at sync time without evaluating
@@ -104,22 +116,29 @@ pub fn read_marker(dir: &Path) -> Result<Option<ProjectMarker>, ScanError> {
 /// Record this engine's version in `odm.toml` — the ONE exception to "the
 /// engine never writes project files". Called once, when a project is
 /// opened. Only the `engine` line is touched (comments and the rest of the
-/// file survive), and only when the value actually differs. Returns a
-/// warning when the project was last touched by a newer engine.
+/// file survive), and the value is only ever raised: it is the newest engine
+/// that has opened the project, so people on different engines don't flip it
+/// back and forth. A project from a newer engine is left alone and gets a
+/// warning back instead.
 pub fn sync_marker(dir: &Path) -> Result<Option<String>, ScanError> {
+    sync_marker_as(dir, ENGINE_VERSION)
+}
+
+/// `sync_marker` for an engine of version `engine`.
+pub fn sync_marker_as(dir: &Path, engine: i64) -> Result<Option<String>, ScanError> {
     let Some(marker) = read_marker(dir)? else {
         return Ok(None);
     };
-    if marker.engine == ENGINE_VERSION {
+    if marker.engine == engine {
         return Ok(None);
     }
-    let warning = (marker.engine > ENGINE_VERSION).then(|| {
-        format!(
-            "odm.toml says this project was last used with engine version {} — this engine \
-             is version {ENGINE_VERSION}, which may be too old for it",
+    if marker.engine > engine {
+        return Ok(Some(format!(
+            "odm.toml says this project has been used with engine version {} — this engine \
+             is version {engine}, which may be too old for it",
             marker.engine
-        )
-    });
+        )));
+    }
     let path = dir.join("odm.toml");
     let text = std::fs::read_to_string(&path)
         .map_err(|e| ScanError::Io { path: "odm.toml".into(), err: e.to_string() })?;
@@ -128,14 +147,14 @@ pub fn sync_marker(dir: &Path) -> Result<Option<String>, ScanError> {
         .iter()
         .position(|l| l.trim_start().starts_with("engine") && l.contains('='));
     match engine_line {
-        Some(i) => lines[i] = format!("engine = {ENGINE_VERSION}"),
-        None => lines.push(format!("engine = {ENGINE_VERSION}")),
+        Some(i) => lines[i] = format!("engine = {engine}"),
+        None => lines.push(format!("engine = {engine}")),
     }
     let mut out = lines.join("\n");
     out.push('\n');
     std::fs::write(&path, out)
         .map_err(|e| ScanError::Io { path: "odm.toml".into(), err: e.to_string() })?;
-    Ok(warning)
+    Ok(None)
 }
 
 /// Author a new project in `dir`: the marker that makes it one, a starter
@@ -180,7 +199,7 @@ fn write_new(path: &Path, contents: &str) -> Result<(), ScanError> {
 /// The doohickey a new project opens with: the smallest thing worth seeing.
 fn starter(name: &str) -> String {
     format!(
-        "//! odm unstable\n\
+        "//! ODM API unstable\n\
          //! {name}: a new project — start here.\n\
          export default function build(ctx) {{\n  \
            return odm.box([40, 30, 20]).color('#4682b4').name('block');\n\

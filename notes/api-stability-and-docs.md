@@ -50,7 +50,9 @@ Rules to preserve in future API work:
 
 ## Decisions and why (user-confirmed 2026-07-29)
 
-- **Per-file pragma** `//! odm <version>`, single integer versions
+- **Per-file pragma** `//! ODM API <version>` (`unstable`, later `1`,
+  `2`, …; renamed from `//! odm API 1` 2026-09-17 — self-explanatory, and
+  unambiguous next to the integer engine version), single integer versions
   (Rust-editions style): the pragma gates breaking changes only;
   features land in every version where they aren't a break (user
   explicitly wants no feature-hiding for old files — safe because a
@@ -69,7 +71,7 @@ Rules to preserve in future API work:
 - Suites assert semantics within epsilon, never bytes (Manifold
   upgrades change triangulation legitimately). Append-only within a
   version; existing assertions never weakened.
-- Pragma required once v1 exists (missing → error with hint);
+- Pragma required once API 1 exists (missing → error with hint);
   "default = latest" would reintroduce break-on-upgrade. Until then,
   missing = unstable.
 - Cross-version `ctx.invoke` works via the engine-mediated boundary
@@ -85,7 +87,7 @@ Rules to preserve in future API work:
 
 ## Implementation map (all built, tested)
 
-- **Pragma parsing**: `crates/odm-js/src/version.rs` (`ApiVersion`,
+- **Pragma parsing**: `crates/odm-build/src/version.rs` (`ApiVersion`,
   `SUPPORTED`, `parse_pragma` — only `//!` lines are pragma
   candidates, plain `//` comments never; parsed at sync time in
   `odm-build/src/sources.rs`, stored as `Source::api:
@@ -102,7 +104,7 @@ Rules to preserve in future API work:
 - **Test-only version** `test` (surface diff: `odm.apiProbe`) behind
   the odm-js cargo feature `test-api-version`, enabled by
   dev-dependencies only; release engines reject the id. Keeps routing,
-  coexistence, and cross-version invoke exercised before v1:
+  coexistence, and cross-version invoke exercised before API 1:
   `odm-build/tests/versions.rs`.
 - **Conformance suite**: `tests/conformance/unstable/*.js` (+ dirs for
   multi-file/params tests), declarative `export const checks` (volume/
@@ -119,7 +121,14 @@ Rules to preserve in future API work:
   expects failure; fragments get a build(ctx) wrapper; `invoke('…')`
   targets get stub doohickeys). Docs examples were made
   self-contained to pass — keep new examples runnable.
-- In-repo examples carry explicit `//! odm unstable` pragmas.
+- In-repo examples carry explicit `//! ODM API unstable` pragmas.
+- **Legacy spelling**: exactly `//! odm unstable` still parses as unstable
+  (`LEGACY_UNSTABLE` in version.rs) so the user's existing projects build.
+  Deliberately undocumented and unsupported; never mention it in docs or
+  prompts; may be removed.
+- Per-version directories are `api-N` (`framework/versions/api-N/`,
+  `tests/conformance/api-N/`, `docs/api-N/`, `docs/changes/api-N.md`);
+  none exist yet.
 
 ## V8 constraints discovered (2026-07-29, deno_core 0.408)
 
@@ -137,8 +146,14 @@ reproduce the aborts — run individually to re-verify on V8 upgrades):
   Consequence for tests: one `JsEnv` per test binary, built before
   builds run (OnceLock pattern everywhere).
 
-## Open questions
+## Engine version (user, 2026-09-17)
 
-- Project-level metadata recording a target engine version (nudge
-  agents on engine skew). Deferred — can be added
-  backwards-compatibly later.
+One integer, bumped every release; cargo carries it as `1.N.0`
+(`[workspace.package]`, odm-dylib keeps a hand-synced copy) and
+`odm_build::ENGINE_VERSION` parses the minor. `odm --version` prints the
+integer. `odm.toml`'s `engine` is the same number: raised on open, never
+lowered (newest engine that has touched the project — collaborators on
+different engines must not flip it), and an older engine warns instead of
+writing. This is the engine-skew nudge: API features land without an API
+bump, so the engine number is what says "upgrade". Format migrations key
+off it. No semver, no separate project-format counter.

@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // odm.fromThreeGeometry: the one door raw three.js geometry comes in
 // through. Every closed generator must survive the weld, three's Y-up axes
 // must be preserved (a silent axis swap would be worse than the documented

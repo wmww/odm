@@ -1,8 +1,8 @@
 [package]
 name = "odm-dylib"
-version = "0.1.0"
 # Explicit (not .workspace = true): this crate is workspace-excluded, see the
-# root Cargo.toml.
+# root Cargo.toml. Keep the version in step with it.
+version = "1.0.0"
 edition = "2024"
 license = "MIT"
 

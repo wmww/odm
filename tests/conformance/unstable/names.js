@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // .name(n): the label the viewer shows, `odm inspect <name>` addresses, and
 // a raycast hit reports. Names are strings — anything else is stringified —
 // and a second .name() replaces rather than appends.

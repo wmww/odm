@@ -295,7 +295,7 @@ mod tests {
 
     fn project(dir: &Path) -> &Path {
         std::fs::write(dir.join("odm.toml"), "name = \"t\"\nengine = 0\n").unwrap();
-        std::fs::write(dir.join("root.js"), "//! odm unstable\n").unwrap();
+        std::fs::write(dir.join("root.js"), "//! ODM API unstable\n").unwrap();
         dir
     }
 
@@ -317,7 +317,7 @@ mod tests {
         let p = project(dir.path());
         let parts = p.join("parts");
         std::fs::create_dir(&parts).unwrap();
-        std::fs::write(parts.join("wheel.js"), "//! odm unstable\n").unwrap();
+        std::fs::write(parts.join("wheel.js"), "//! ODM API unstable\n").unwrap();
         let err = check_destination(p, &parts).unwrap_err();
         assert!(err.contains("wheel.js"), "the error must name the file at risk: {err}");
     }

@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // A non-uniform scale is the case every query has to get right, because it
 // is the one where "measure the mesh then multiply" is wrong. Queries bake
 // the pending transform (docs/api/queries.md), so all four answer in the

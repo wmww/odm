@@ -24,14 +24,16 @@ from a release-process discussion; decisions marked (user) are theirs.
 - **Linux x86_64 only** for the first release (the socket is a Unix socket,
   the watcher is inotify-backed, only this platform has ever been run).
   Say so in the README; macOS and Windows are later ports.
-- **Three version numbers, kept separate**:
-  - Engine version: workspace semver, the tag `vX.Y.Z`. 0.x until the JS
-    API v1 cut; engine 1.0.0 is the release that ships API v1. Engine major
-    = a break in the CLI protocol, the project format, or a dropped
-    platform. Adding API vN+1 is a minor (old versions keep working).
-  - JS API version: the per-file pragma (`docs/versioning.md`).
-  - Project format: the integer `ENGINE_VERSION` written to `odm.toml`
-    (`odm-build/src/sources.rs`), bumped only when the format changes.
+- **Two version numbers** (user, 2026-09-17; semver bought nothing — no
+  dependents, one binary, no maintained old branches):
+  - Engine version: one integer N, bumped every release; tag `vN`. Cargo
+    gets `1.N.0` (workspace version; `odm_build::ENGINE_VERSION` reads the
+    minor). `odm.toml`'s `engine` is the same number, only ever raised on
+    open, so format migrations key off it and an older engine can say "too
+    old". Cutting a JS API version is just another engine release.
+  - JS API version: the per-file pragma `//! ODM API N`
+    (`docs/versioning.md`). Separate so files need no touching on engine
+    upgrades.
 
 ## Checklist: decide (before any code)
 
@@ -74,17 +76,13 @@ All decided (see Decisions). Remaining paperwork:
       with `split-debuginfo = "packed"` so the `.dwp` can be archived per
       release for symbolizing user backtraces. Check the release build
       time stays sane with fat LTO over V8.
-- [ ] One workspace version: `version.workspace = true` in all fifteen
-      crates (the excluded `odm-dylib` keeps an explicit copy, as its
-      edition/license do), so the release script bumps one line.
 - [ ] `odm --version` reports more: it exists and prints
-      `odm <version> (<git sha>, <target>)` (odm-engine's `build.rs` +
-      `build_string()`, built 2026-09-17 for feedback reports); still
-      missing the supported JS API versions and the project format
-      version.
+      `odm <engine version> (<git sha>, <target>)` (odm-engine's
+      `build.rs` + `build_string()`, built 2026-09-17 for feedback
+      reports); still missing the supported JS API versions.
 - [ ] CLI ↔ engine version handshake. After an upgrade, the old engine may
       still hold the socket. Each request carries the client's build id;
-      a mismatch gets a clear error ("engine is 0.3.1, this odm is 0.4.0;
+      a mismatch gets a clear error ("engine is 3, this odm is 4;
       restart it") rather than a protocol error. `odm run` on a socket
       held by a different build should replace it, or say to.
 - [ ] Store version marker in `.odm/`: the content store is a cache, so a
@@ -114,14 +112,14 @@ All decided (see Decisions). Remaining paperwork:
       manifold-csg-sys, V8 prebuilt in rusty_v8) are pinned; either accept
       them inside the container or bake them into the image.
 - [ ] `scripts/release.sh <version>`: refuses unless on `main` with a clean
-      tree and a CHANGELOG entry; bumps the workspace version and commits;
+      tree and a CHANGELOG entry; bumps the workspace version (`1.N.0`, and odm-dylib's copy) and commits;
       runs `cargo deny check`; runs the release-profile test invocation
       above in the container; builds the web template before the binary (embedded); packages
       `odm-<version>-x86_64-linux.tar.gz` (odm, LICENSE,
       THIRD_PARTY_LICENSES, README, `install.sh`) plus
       `.sha256` and the debug `.dwp`; tags `v<version>`; `gh release
       create --draft` with the assets and the CHANGELOG entry as notes.
-      The user publishes the draft. Pre-releases (`v0.4.0-alpha.1`) use
+      The user publishes the draft. Pre-releases (`v4-alpha.1`, cargo `1.4.0-alpha.1`) use
       `--prerelease` and are how testers get builds before the flip.
 - [ ] User installer: the tarball's `install.sh` places the binary and
       warns about PATH; a `curl -fsSL <release-url>/install.sh
@@ -141,9 +139,6 @@ All decided (see Decisions). Remaining paperwork:
 - [ ] Flip the repo public, then publish the release draft, in that order
       (a release on a private repo is invisible; assets attach fine either
       way).
-- [ ] Engine 1.0.0 only if the JS API v1 cut (`docs/versioning.md`
-      checklist) is in the same release; otherwise 0.x, and 1.0.0 follows
-      the cut.
 
 ## Later, not blocking
 

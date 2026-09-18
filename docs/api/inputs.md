@@ -3,7 +3,7 @@
 A doohickey declares everything it can be given in one place:
 
 ```js
-//! odm unstable
+//! ODM API unstable
 //! A parametric flange.
 export const meta = {
   inputs: {
@@ -75,7 +75,7 @@ Extension types also drive the viewer's typed controls
 still wanted).
 
 ```js
-//! odm unstable
+//! ODM API unstable
 export const meta = {
   inputs: {
     offset: { type: 'vector3', default: [0, 0, 10] },
@@ -109,7 +109,7 @@ per element so editing one object rebuilds one part and memo-hits the
 rest (`"stats": true` shows it):
 
 ```js
-//! odm unstable
+//! ODM API unstable
 export const meta = {
   inputs: {
     objects: {
@@ -164,7 +164,7 @@ matter for identity; the panel shows entries key-sorted, with an
 editable key column.
 
 ```js
-//! odm unstable
+//! ODM API unstable
 export const meta = {
   inputs: {
     anchors: {
@@ -240,7 +240,7 @@ The worked example — there is no animation system; `t` is an ordinary
 cascade number with a range:
 
 ```js
-//! odm unstable
+//! ODM API unstable
 //! One revolution every 2 seconds, standalone or composed.
 export const meta = {
   inputs: { t: { type: 'number', cascade: true, default: 0, minimum: 0, maximum: 2 } },

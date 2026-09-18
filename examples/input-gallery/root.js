@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 //! One exhibit per kind of input control the viewer's panel can show.
 //! Every input below is declared with a different schema, and every one
 //! changes something you can see; `parts/` adds a cascade input that

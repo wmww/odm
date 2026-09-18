@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Translucency: color alpha and node opacity are accepted and validated.
 // Alpha renders translucent (depth-peeled); geometry queries are unaffected.
 export const meta = {

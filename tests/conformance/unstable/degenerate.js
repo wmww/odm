@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Edge cases at the boundaries of the API: sizes that cannot make a solid,
 // rays that hit nothing, and the exact value of odm.deg.
 export const meta = {

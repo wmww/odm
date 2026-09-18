@@ -1,4 +1,4 @@
-//! odm unstable
+//! ODM API unstable
 // Instances: what ctx.invoke returns, and how they compose. The headline
 // property is sharing — one built subtree, placed many times, is interned
 // once, so `meshes` counts distinct geometry rather than placements.
