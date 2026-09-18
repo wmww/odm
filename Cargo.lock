@@ -2803,6 +2803,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "odm-config"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml_edit",
+]
+
+[[package]]
 name = "odm-dylib"
 version = "1.0.0"
 dependencies = [
@@ -4127,6 +4137,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

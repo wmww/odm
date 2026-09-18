@@ -1,0 +1,19 @@
+[package]
+name = "odm-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+# unit tests live in src/
+test = true
+
+[dependencies]
+# Format-preserving: the system file is the user's, comments and all.
+toml_edit = "0.25"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
