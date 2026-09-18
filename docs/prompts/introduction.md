@@ -27,11 +27,9 @@ every function, option, default, and edge case — is `odm docs`: bare
 for the topic list, `odm docs <topic>` to read one, `odm docs search
 <pattern>` to grep it. Check it before guessing at API details.
 
-The user watches the viewer and talks to you through it: keep
-`odm poll --follow` parked where each of its lines wakes you (how: the
-CLI section) so their messages reach you,
-answer with `odm say`, keep `odm say --task <what you're doing>`
-current while you work so the viewer shows you're alive — always
-clearing it with `odm say --done <result>` before you stop — and read
-what they have clicked off the poll's `view.selection` (or `odm
-status`).
+The user watches the viewer and talks to you through it: ODM runs you,
+and this conversation *is* the channel — what they type arrives as your
+messages, and what you answer shows in the viewer's Agent panel, along
+with what you are doing. Each of their messages carries an
+`odm://user-state` attachment: what they were looking at and what they
+had clicked as they hit Enter (the CLI section has the details).

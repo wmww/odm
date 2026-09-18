@@ -6,8 +6,8 @@ license.workspace = true
 
 [lib]
 doctest = false
-# state.rs, commands.rs and server.rs have unit tests; flip to false if that
-# ever stops being true.
+# state.rs, commands.rs, requests.rs and agent/ have unit tests; flip to
+# false if that ever stops being true.
 test = true
 
 [dependencies]
@@ -18,6 +18,8 @@ odm-js = { path = "../odm-js" }
 odm-build = { path = "../odm-build" }
 odm-export = { path = "../odm-export" }
 odm-prompt = { path = "../odm-prompt" }
+odm-config = { path = "../odm-config" }
+odm-agent = { path = "../odm-agent" }
 odm-render = { path = "../odm-render" }
 odm-viewer-core = { path = "../odm-viewer-core" }
 serde = { version = "1", features = ["derive"] }

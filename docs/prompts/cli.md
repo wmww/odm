@@ -17,11 +17,6 @@ odm inspect ['{…}']           # measure the scene / one node
 odm render  ['{…}']           # PNG → prints path
 odm raycast '{…}'             # nearest surface hit along rays
 odm clearance '{…}'           # per node pair: signed distance (gap/penetration)
-odm poll --follow             # stream user messages forever; park under a per-line watcher
-odm poll [--timeout <sec>]    # one-shot fallback: wait for messages, exit
-odm say <text>                # send a message to the user
-odm say --task <text>         # set the live "working on..." status
-odm say --done [<text>]       # clear it (+ optionally send a message)
 odm feedback '{…}'            # report an ODM bug or missing feature (human-reviewed)
 odm docs [<topic>]            # full reference (list topics when bare)
 odm docs search <pattern>     # grep the reference, whole sections out
@@ -29,8 +24,7 @@ odm docs search <pattern>     # grep the reference, whole sections out
 
 This page is the short version; `odm docs cli` is the full one — every
 request field of every command, explicit camera placement, viewer view
-slots, index paths, `--project`. (`poll` and `say` are the exceptions
-to the JSON grammar: a wait bound and free text.)
+slots, index paths, `--project`.
 
 Hit a bug in ODM itself, or a wall `odm docs` has no answer for? File
 it — `odm feedback '{"title": …, "body": …, "harness": …, "model": …}'`
@@ -111,87 +105,34 @@ Don't read dimensions off pixels — `inspect` is exact.
 
 ## Talking with the user
 
-The user types messages into the viewer. They queue in the engine until
-you collect them with `odm poll`:
+ODM runs you: the user types into the viewer's Agent panel and it
+arrives as a message in this conversation; your replies appear there
+as you write them. There is nothing to poll and nothing to send — just
+answer. Keep replies short and plain (a line or two; the panel shows
+text as typed, and the rebuilt scene speaks for itself).
 
-- `odm poll` blocks until at least one message is queued, then prints
-  them all — `{"ok": true, "messages": [{"text": "..."}, ...]}` — and
-  exits. If messages are already waiting it returns immediately. Each
-  message carries a `view` snapshot of what the user was looking at
-  when they sent it: viewer tab path, its input values, their
-  selection, and the camera — paste `view.camera`'s contents into
-  `odm render` to see exactly what they saw.
-- It also exits (nonzero) if the engine goes away, so it never hangs
-  forever. `--timeout <sec>` additionally bounds the wait, exiting with
-  `"messages": []` — use it if your harness limits how long a command
-  may run.
-- Every response also carries `builds` (each view slot's build state:
-  ok/error/pending, with the error) and `health` (files whose
-  background check failed) — so a broken build reaches you with the
-  next poll, viewed or not. Engine warnings arrive as messages marked
-  `"from": "engine"`.
-- `--follow` never exits: it prints one compact JSON line per batch (the
-  same object, one per line) and keeps waiting, including a line
-  whenever a build or health value changes (a slot turning red, a
-  heal). It survives engine restarts: on engine death it prints
-  `{"engine": "down"}`, reconnects when the engine returns, and prints
-  `{"engine": "back"}` — no retry wrapper needed, and starting it
-  before the engine is up parks it the same way.
-- Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
-  a message is only retired once the poll that took it has printed it,
-  so anything it didn't get to goes back in the queue for the next one.
-  The flip side is that a poll killed at exactly the wrong moment can
-  make one message arrive twice — if the same text turns up again
-  immediately, it is the same instruction, not a second one.
-
-**Stay reachable at all times**, including while you work: at the
-start of the session, park one `odm poll --follow` under a mechanism
-that *notifies you on each output line* (Claude Code: the `Monitor`
-tool with `persistent: true`). A mechanism that only notifies when the
-task exits does not work — `--follow` never exits, so its lines pile
-up unread while the viewer tells the user someone is listening
-(Claude Code: Bash `run_in_background` is exit-notify only; a shell
-`&` orphans the process entirely). If exit-notify background tasks
-are all your harness has, background a one-shot `odm poll` instead —
-it exits at the first batch, so the notification wakes you — and
-relaunch it each time you act on one. With no background mechanism at
-all, fall back to foreground `odm poll --timeout <sec>` between steps.
-Every line `--follow` prints is worth waking for: it only emits on
-messages, build breaks/heals, health changes, and engine down/back.
-Messages are never lost — anything sent while nothing was polling is
-delivered to the next poll, and the viewer shows the user which of
-their messages have reached you — but it also tells them nobody is
-listening when no poll is active, so the standing poll is what makes
-you reachable.
-
-`odm say <text>` sends a message back; it appears in the viewer next to
-the user's own messages. Use it to answer questions and report results
-— a line or two; the rebuilt scene speaks for itself.
-
-**Show what you're working on.** The viewer is the user's only window
-onto you, and a silent one reads as a dead one. Sending a message puts
-the status line up on its own — it reads "Processing" from the moment
-the user hits Enter — and it is yours from there: replace it with what
-you are actually doing, `odm say --task <text>` — a few words, present
-progressive ("resizing connectors"). Update it whenever you move to a
-new step (it's one line in the viewer, updated in place — cheap, so err
-on the side of updating).
-
-**Always clear the status before you stop.** `odm say --done <one-line
-result>` posts the message and clears it; `odm say --done` alone just
-clears it. A status left standing tells the user you are still working
-when you have finished and gone — so clear it before your last word,
-every time, including when you stop early or give up. There is one
-status at a time; setting another replaces it, and it never expires on
-its own — a standing `task` is echoed in every say/poll response, so if
-you see one that no longer matches what you're doing, clear or replace
-it.
+- Each user message carries an attachment, `odm://user-state`: a JSON
+  snapshot of what the user was looking at *as they sent it* — viewer
+  tab `slot` and `path`, its `inputs`, their `selection`, and the
+  `camera`. Paste `camera`'s contents into `odm render` to see exactly
+  what they saw. No attachment means no tab was open.
+- A message that starts `[odm engine]` was written by the engine, not
+  the user: a build broke (or a file's background check failed) while
+  you were idle, or a change you made left something failing when your
+  turn ended. The errors are attached as `odm://diagnostics`. Fix what
+  it names; nobody is waiting on a reply.
+- Your working status in the viewer is derived from your turn — the
+  plan entry in progress, else the tool call you are running — so there
+  is nothing to set or clear. The user can stop your turn from the
+  panel.
+- `odm` commands and edits inside the project run without asking;
+  anything else may ask the user for permission first.
 
 The viewer also logs what you do next to what you say: one line per
 command you run and per file you change.
 
 When the user refers to a part ("make *this* one longer"), the
-message's `view.selection` has it — clicked parts appear as
+message's `odm://user-state` `selection` has it — clicked parts appear as
 `{id, name}`, in pick order (shift-click selects several); `odm
 status` shows the current list on demand. To query exactly what the
 user is seeing (their tab, their input values), add `"view": true` to

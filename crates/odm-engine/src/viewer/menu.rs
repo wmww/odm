@@ -19,6 +19,7 @@ pub enum Action {
     ExportWeb,
     ExportStl,
     FocusAgent,
+    AgentSettings,
     Feedback,
     Quit,
     Frame,
@@ -44,6 +45,7 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
             // Ctrl+W closes whatever is in front; the label says which.
             let closing = match app.items.get(app.active) {
                 Some(super::Item::Feedback(_)) => "Close Feedback",
+                Some(super::Item::Settings(_)) => "Close Agent Settings",
                 _ => "Close Doohickey",
             };
             file.push(MenuEntry::item(Action::CloseDoohickey, closing).shortcut("Ctrl+W"));
@@ -61,7 +63,10 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
             action = action.or(theme::menu(
                 ui,
                 "Edit",
-                &[MenuEntry::item(Action::FocusAgent, "Message Agent").shortcut("Ctrl+Enter")],
+                &[
+                    MenuEntry::item(Action::FocusAgent, "Message Agent").shortcut("Ctrl+Enter"),
+                    MenuEntry::item(Action::AgentSettings, "Agent Settings…"),
+                ],
             ));
             // F does both jobs; the label says which one it will do now.
             let framing = match app.tab() {
@@ -199,7 +204,12 @@ fn apply(app: &mut ViewerApp, action: Action) {
         // without reaching for the mouse.
         Action::FocusAgent => {
             app.dock = super::Dock::Chat;
-            app.focus_chat = true;
+            app.panel.focus = true;
+        }
+        Action::AgentSettings => {
+            if app.session.is_some() {
+                app.open_agent_settings();
+            }
         }
         // The page of pending reports — opened, or brought forward.
         Action::Feedback => {

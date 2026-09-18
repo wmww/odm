@@ -38,7 +38,7 @@ impl EngineState {
             Err(e) => {
                 // Silently losing the watcher would end live rebuild for the
                 // whole session; the transcript makes it visible to the user
-                // and the agent's next poll.
+                // and the agent's next engine prompt.
                 eprintln!("file watcher unavailable: {e}");
                 self.engine_warning(format!(
                     "file watcher unavailable ({e}) — builds won't refresh on file saves \

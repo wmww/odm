@@ -29,12 +29,8 @@ odm render '{"inputs": {"t": 1.5}, "width": 640}'
 odm raycast '{"rays": [{"origin": [0, 0, 50], "dir": [0, 0, -1]}]}'
 ```
 
-The exceptions are the commands whose arguments aren't a structured
-request: `poll` takes `--timeout <sec>`/`--follow` (they configure the
-CLI's own waiting; the engine only ever sees poll requests), `say` takes
-free text (after an optional `--task`/`--done`), and `docs` is
-engineless and textual. `--project` stays a prefix — transport,
-resolved before a request exists.
+The exception is `docs`, which is engineless and textual. `--project`
+stays a prefix — transport, resolved before a request exists.
 
 Every command that looks at the scene **syncs first**: it rescans the
 project's files, rebuilds what changed, then answers — so a query can
@@ -130,21 +126,6 @@ write the view's solids to a file — binary STL, in millimetres, world coordina
 - `out` (string) — required: the file to write, replaced atomically; the extension picks the format — `.stl` is the only one today
 - `units` (string) — what one model unit is — `mm`, `m`, `in` or `ft`; default the project's (`units` in odm.toml, itself default `mm`; `status` reports it). The file is always millimetres
 - `union` (bool) — default true: fuse every solid into one valid manifold — overlaps merge, disjoint parts stay separate bodies. `false` writes each solid as-is (exact, but overlapping parts self-intersect)
-
-### poll
-
-wait for messages the user typed in the viewer; every response also carries `builds` (per-slot build state) and `health` (per-file failures from the background sweep).
-
-- `timeout` (number) — seconds to wait before answering with no messages (default: wait until a message arrives or the engine stops)
-- `events` (bool) — also answer (possibly with empty `messages`) whenever a slot's build value or a file's health value differs from what this connection last reported — what `odm poll --follow` sets
-
-### say
-
-send a message to the user, or set/clear the live working status the viewer shows; say, poll and status responses all echo a standing `task`.
-
-- `text` (string) — the message
-- `task` (string) — instead of a message: set/replace the working status (`odm say --task <text>` — a few words, present progressive); there is one at a time
-- `done` (bool) — clear the working status (`odm say --done [<text>]`); `text` alongside it is posted as a normal message
 
 ### feedback
 
@@ -285,8 +266,9 @@ Every response echoes the **resolved camera** — `camera`:
 `eye`/`target`/`up` plus `fov` or `ortho` + `ortho_height`, the same
 spelling the request accepts. Paste the object's *contents* back at
 the top level — there is no `camera` request field. "Slightly to the
-left" is a nudge of the echoed numbers pasted back; poll snapshots
-speak the same spelling, so the user's own view replays verbatim.
+left" is a nudge of the echoed numbers pasted back; a user message's
+`odm://user-state` speaks the same spelling, so their own view replays
+verbatim.
 
 **Contact sheets: `frames`.** One render, many tiles: `frames` is an
 array of partial requests, each merged over the base request (shallow
@@ -433,74 +415,46 @@ always produce the same bytes.
 
 ## Talking with the user
 
-The user types messages into the viewer's chat panel. They queue in the
-engine until collected with `odm poll`:
+There is no chat command. ODM runs the agent itself (over ACP — the
+Agent Client Protocol), and the conversation is the channel: what the
+user types into the viewer's Agent panel arrives as a message, and the
+agent's replies, tool calls and plan show there as they stream. The CLI
+is the agent's tool surface; it carries no messages. (`poll`, `say` and
+`ack` are gone; asking for them says so.)
 
-- `odm poll` blocks until at least one message is queued, then prints
-  them all — `{"ok": true, "messages": [{"text": "..."}, ...]}` — and
-  exits. If messages are already waiting it returns immediately. Each
-  message carries a `view` field: a snapshot of what the user was
-  looking at **when they sent it** (viewer tab path, its input values,
-  their selection, and the camera — in the same `eye`/`target`/`up`/
-  `fov` spelling `render` accepts, so pasting its contents into a
-  render replays their exact view). Stamped at send time: the user may
-  have moved on by the time you poll.
-- Every poll response also carries the current diagnostics: `builds`
-  (per active slot: `build` = `ok`/`error`/`pending`, `error`, and
-  `stale` when a newer answer is on the way) and `health` (per-file
-  failures from the background sweep — see `status` above). So "it
-  broke" arrives with the red slot attached, and a timed-out poll still
-  reports current state. Responses never carry build *logs* — query the
-  view (any view command) to get error + logs in full; memoization
-  returns the same bytes whether it replays or re-runs.
-- Messages from the engine itself — host warnings like "file watcher
-  unavailable" — arrive in the same queue, marked `"from": "engine"`
-  (absence = the user).
-- It also exits (nonzero) if the engine goes away, so it never hangs
-  forever. `--timeout <sec>` additionally bounds the wait, exiting with
-  `"messages": []` — use it if your harness limits how long a command
-  may run.
-- `--follow` never exits: it prints one compact JSON line per batch (the
-  same object, one per line) and keeps waiting. For a harness that
-  surfaces each line of a long-running command, this is one standing
-  command instead of a relaunch per message. It also sets `events`, so
-  a line arrives (possibly with empty `messages`) whenever a build or
-  health value *changes* — a slot turning red, a different error, a
-  heal. Value changes only: your own ok→ok saves, redundant rebuilds
-  and stale flips don't emit, and a reconnect re-reports current
-  failures rather than losing them.
-- `--follow` survives the engine too: when the engine stops it prints
-  `{"engine": "down"}`, waits for the socket, reconnects, and prints
-  `{"engine": "back"}` — one launch covers the whole session, engine
-  restarts included, no retry wrapper needed. Launched before any
-  engine is running, it starts in that same waiting state rather than
-  failing (a wrong `--project` path still fails outright). The engine
-  refusing the request itself still exits nonzero.
-- Interrupting a poll (Ctrl+C, a killed background task) loses nothing:
-  a message is only retired once the poll that took it has printed it,
-  so anything it didn't get to goes back in the queue for the next one.
-  The flip side is that a poll killed at exactly the wrong moment can
-  make one message arrive twice — if the same text turns up again
-  immediately, it is the same instruction, not a second one.
+- **User state is sent, not sampled.** Each user message carries a
+  second content block, an embedded resource `odm://user-state`: JSON
+  with the viewer tab's `slot` and `path`, its `inputs`, the user's
+  `selection` (`{id, name}` per clicked part, in pick order —
+  shift-click selects several) and the `camera`, in the same
+  `eye`/`target`/`up`/`fov` spelling `render` accepts, so pasting its
+  contents into a render replays their exact view. Stamped as they hit
+  Enter: the user may have moved on by the time it is read. No tab
+  open, no attachment. On demand, `odm status` shows the current
+  selection on the active view slot.
+- **Build diagnostics are pushed.** When the set of failing things —
+  view slots and files from the background sweep, each with its error —
+  changes while the agent is idle, the engine sends a prompt of its
+  own: text starting `[odm engine]`, with the full errors attached as
+  `odm://diagnostics`. While a turn is running nothing is pushed (the
+  agent's own half-done edits make transient failures, and its commands
+  already report build errors); whatever still stands when the turn
+  ends goes as one follow-up. Value changes only: ok→ok saves, stale
+  flips and heals send nothing. After three engine prompts in a row
+  with no user message between, the engine says so in the panel and
+  stops forwarding until the user next speaks. Engine host warnings
+  ("file watcher unavailable") ride the same prompts. `status` always
+  has the current state (`views[].build`, `health`); query the view
+  for error + logs in full.
+- **The working status is derived**, never set: the turn running is
+  the status, labelled with the plan entry in progress, else the
+  running tool call. It ends when the turn does.
+- **Permissions.** `odm` commands and edits inside the project run
+  unasked (where the agent has a way to be told so — Agent Settings);
+  everything else asks the user in the panel.
 
-`odm say <text>` sends a message back; it appears in the viewer next to
-the user's own messages. Everything after `say` (and its one optional
-leading flag) is the message — no quoting rules.
-
-**The working status.** `odm say --task <text>` sets the one live
-status line the viewer shows with an in-progress indicator — a few
-words, present progressive ("resizing connectors"). Setting another
-replaces it; `odm say --done [<text>]` clears it, posting any text as
-a normal message. The status never expires on its own — instead, a
-standing task is echoed as `task` in every `say`, `poll` and `status`
-response, so if you see one that no longer matches what you're doing
-(you forgot to clear it, or you're picking up after another agent),
-clear or replace it.
-
-When the user refers to a part ("make *this* one longer"), the
-message's `view.selection` has it — clicked parts appear as
-`{id, name}`, in pick order (shift-click selects several). On demand,
-`odm status` shows the current list on the active view slot.
+Agents run by hand, outside ODM, can still use the CLI — they just
+have no chat.
 
 ## Reporting problems
 
@@ -532,5 +486,5 @@ platform and the exact build are recorded for you.
 The report is written into the project (`.odm/feedback/<id>.json`) and
 goes no further on its own: **a human reads it in the viewer and
 decides whether to send it**, and may edit it first. You will not hear
-back — the response is a future release, and there is nothing to poll.
+back — the response is a future release, and there is nothing to wait for.
 So file it and move on with the work.

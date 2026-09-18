@@ -2,7 +2,7 @@
 //! selection and tree state are ephemeral. The tabs themselves are the viewer
 //! core's [`Tab`]; owning the strip and this file is desktop chrome.
 
-use super::{FeedbackPage, Item};
+use super::{FeedbackPage, Item, SettingsPage};
 use odm_viewer_core::{Orbit, Tab};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -19,6 +19,7 @@ struct SavedCamera {
 /// What kind of strip item this entry is. Absent — every file written before
 /// the feedback page existed — is a view.
 const FEEDBACK: &str = "feedback";
+const SETTINGS: &str = "agent-settings";
 
 #[derive(Serialize, Deserialize)]
 struct SavedTab {
@@ -69,6 +70,9 @@ pub fn load(project: &Path, mut slot: impl FnMut() -> String) -> Option<(Vec<Ite
             if s.kind.as_deref() == Some(FEEDBACK) {
                 return Item::Feedback(FeedbackPage::new());
             }
+            if s.kind.as_deref() == Some(SETTINGS) {
+                return Item::Settings(SettingsPage::new());
+            }
             let mut tab = Tab::new(slot(), s.path);
             tab.set_args = s.args;
             tab.set_cascade = s.cascade;
@@ -95,6 +99,10 @@ pub fn save(project: &Path, items: &[Item], active: usize) {
                 // directory, read when it is drawn.
                 Item::Feedback(_) => SavedTab {
                     kind: Some(FEEDBACK.to_owned()),
+                    ..SavedTab::default()
+                },
+                Item::Settings(_) => SavedTab {
+                    kind: Some(SETTINGS.to_owned()),
                     ..SavedTab::default()
                 },
                 Item::View(t) => SavedTab {

@@ -3,6 +3,7 @@
 //! viewer unless headless. Every command syncs (rescans + hashes sources) first,
 //! so CLI results always reflect the files on disk.
 
+mod agent;
 mod commands;
 mod feedback;
 mod requests;
@@ -38,7 +39,7 @@ pub fn run_headless(project: PathBuf) -> anyhow::Result<()> {
     let sock = project.join(".odm/engine.sock");
     let listener = server::bind(&sock)?;
     // Questions need a UI; headless gets the silent half (marker + marked
-    // agent files), drops the questions, and queues the warnings for poll.
+    // agent files), drops the questions, and keeps the warnings in the transcript.
     let scan = session::sync_on_open(&project);
     let state = state::EngineState::new(project.clone(), env)
         .map_err(|e| anyhow::anyhow!("engine startup failed: {e}"))?;
@@ -47,7 +48,7 @@ pub fn run_headless(project: PathBuf) -> anyhow::Result<()> {
     }
     // Headless runs the same background threads as a viewer session — the
     // engine keeps its slots' published values (and the health sweep)
-    // current; a viewer is just eyes on them. `status`/poll stay truthful,
+    // current; a viewer is just eyes on them. `status` stays truthful,
     // and background rebuilds keep the memo cache warm for agent queries.
     session::spawn_background(&state);
     state.rebuild_active();
@@ -65,7 +66,13 @@ pub fn run_viewer(project: Option<PathBuf>) -> anyhow::Result<()> {
         None => session::Sessions::empty(),
     }
     .map_err(|e| anyhow::anyhow!("engine startup failed: {e}"))?;
-    viewer::run_viewer(sessions).map_err(|e| anyhow::anyhow!("viewer error: {e}"))?;
+    let result = viewer::run_viewer(sessions.clone());
+    // Exiting takes the server threads with it — but not a child process:
+    // the agent is asked to go, and reaped, first.
+    if let Some(state) = sessions.current() {
+        state.agent().shutdown(true);
+    }
+    result.map_err(|e| anyhow::anyhow!("viewer error: {e}"))?;
     // eframe returned (window closed): exit, taking server threads with us.
     std::process::exit(0);
 }

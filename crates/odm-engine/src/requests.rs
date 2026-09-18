@@ -23,13 +23,7 @@ pub(crate) enum Request {
     Raycast(RaycastReq),
     Clearance(ClearanceReq),
     Export(ExportReq),
-    Poll(PollReq),
-    Say(SayReq),
     Feedback(FeedbackReq),
-    /// "I have the messages the last poll on this connection gave me." Sent by
-    /// the CLI after it prints them, and hidden from the reference because it
-    /// is part of poll's delivery handshake, not something an agent types.
-    Ack,
 }
 
 /// `view`, the one "target what the user sees" knob: `true` adopts the
@@ -184,28 +178,6 @@ pub(crate) struct ExportReq {
     pub union: Option<bool>,
     #[serde(default)]
     pub stats: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PollReq {
-    pub timeout: Option<f64>,
-    /// Also answer on build/health value changes (what `--follow` sets).
-    #[serde(default)]
-    pub events: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SayReq {
-    pub text: Option<String>,
-    /// Set/replace the working status (`odm say --task`). Exclusive with
-    /// `text`/`done` — enforced in `cmd_say`, where empty-text is too.
-    pub task: Option<String>,
-    /// Clear the working status (`odm say --done`), posting `text` — if
-    /// any — as a normal message.
-    #[serde(default)]
-    pub done: bool,
 }
 
 /// A bug report or feature request about ODM itself. All four fields are
@@ -480,53 +452,6 @@ const SPECS: &[CommandSpec] = &[
         hidden: false,
     },
     CommandSpec {
-        name: "poll",
-        summary: "wait for messages the user typed in the viewer; every response also \
-                  carries `builds` (per-slot build state) and `health` (per-file \
-                  failures from the background sweep)",
-        view: false,
-        fields: &[
-            f(
-                "timeout",
-                "number",
-                "seconds to wait before answering with no messages (default: wait until a \
-                 message arrives or the engine stops)",
-            ),
-            f(
-                "events",
-                "bool",
-                "also answer (possibly with empty `messages`) whenever a slot's build value \
-                 or a file's health value differs from what this connection last reported — \
-                 what `odm poll --follow` sets",
-            ),
-        ],
-        js_twin: None,
-        hidden: false,
-    },
-    CommandSpec {
-        name: "say",
-        summary: "send a message to the user, or set/clear the live working status the \
-                  viewer shows; say, poll and status responses all echo a standing `task`",
-        view: false,
-        fields: &[
-            f("text", "string", "the message"),
-            f(
-                "task",
-                "string",
-                "instead of a message: set/replace the working status (`odm say --task \
-                 <text>` — a few words, present progressive); there is one at a time",
-            ),
-            f(
-                "done",
-                "bool",
-                "clear the working status (`odm say --done [<text>]`); `text` alongside it \
-                 is posted as a normal message",
-            ),
-        ],
-        js_twin: None,
-        hidden: false,
-    },
-    CommandSpec {
         name: "feedback",
         summary: "report an ODM bug or missing feature. Writes the report into the project for \
                   the user to review; they send it, or throw it away. Nothing is reported back \
@@ -547,14 +472,6 @@ const SPECS: &[CommandSpec] = &[
         js_twin: None,
         hidden: false,
     },
-    CommandSpec {
-        name: "ack",
-        summary: "poll's delivery handshake",
-        view: false,
-        fields: &[],
-        js_twin: None,
-        hidden: true,
-    },
 ];
 
 fn command_list() -> String {
@@ -573,7 +490,17 @@ fn removed(cmd: &str) -> Option<&'static str> {
         }
         "selection" => {
             "`selection` is part of `status` now (the active view's `selection`); every \
-             poll carries it too (`view.selection`)"
+             message from the user carries it too (odm://user-state)"
+        }
+        "poll" | "ack" => {
+            "there is no `poll`: ODM runs the agent itself now, and the user's messages \
+             arrive as your conversation. Build errors are pushed to you the same way; \
+             `status` has the current build state"
+        }
+        "say" => {
+            "there is no `say`: ODM runs the agent itself now — just answer in your \
+             conversation, the user sees it in the viewer. The working status is derived \
+             from your turn, so there is nothing to set or clear"
         }
         "tree" => "`tree` is now `inspect`",
         "sync" => {
@@ -716,10 +643,7 @@ pub(crate) fn parse(req: Value) -> Result<Request, CmdError> {
         "raycast" => Request::Raycast(de(cmd, obj)?),
         "clearance" => Request::Clearance(de(cmd, obj)?),
         "export" => Request::Export(de(cmd, obj)?),
-        "poll" => Request::Poll(de(cmd, obj)?),
-        "say" => Request::Say(de(cmd, obj)?),
         "feedback" => Request::Feedback(de(cmd, obj)?),
-        "ack" => Request::Ack,
         _ => unreachable!("matched a spec above"),
     })
 }
@@ -901,6 +825,11 @@ mod tests {
         assert!(e.contains("docs prompt"), "{e}");
         let e = parse_str(r#"{"cmd":"tree"}"#).err().unwrap();
         assert!(e.contains("inspect"), "{e}");
+        // The chat loop went with the managed agent panel.
+        for cmd in ["poll", "say", "ack"] {
+            let e = parse_str(&format!(r#"{{"cmd":"{cmd}"}}"#)).err().unwrap();
+            assert!(e.contains("runs the agent itself"), "{e}");
+        }
     }
 
     #[test]
@@ -962,30 +891,6 @@ mod tests {
             parse_str(r#"{"cmd":"inspect","view":"tab-1"}"#),
             Ok(Request::Inspect(r)) if matches!(&r.view, Some(ViewSel::Slot(s)) if s == "tab-1")
         ));
-    }
-
-    #[test]
-    fn chat_commands() {
-        assert!(matches!(parse_str(r#"{"cmd":"poll"}"#), Ok(Request::Poll(p)) if p.timeout.is_none()));
-        assert!(
-            matches!(parse_str(r#"{"cmd":"poll","timeout":1.5}"#), Ok(Request::Poll(p)) if p.timeout == Some(1.5))
-        );
-        assert!(
-            matches!(parse_str(r#"{"cmd":"say","text":"hi"}"#), Ok(Request::Say(s)) if s.text.as_deref() == Some("hi"))
-        );
-        assert!(
-            matches!(parse_str(r#"{"cmd":"say","task":"resizing"}"#), Ok(Request::Say(s)) if s.task.as_deref() == Some("resizing"))
-        );
-        assert!(
-            matches!(parse_str(r#"{"cmd":"say","done":true}"#), Ok(Request::Say(s)) if s.done)
-        );
-        // All fields optional at parse time: "say needs a message" and the
-        // task/text/done exclusivity are cmd_say's to enforce.
-        assert!(matches!(parse_str(r#"{"cmd":"say"}"#), Ok(Request::Say(_))));
-        assert!(matches!(parse_str(r#"{"cmd":"ack"}"#), Ok(Request::Ack)));
-
-        let e = parse_str(r#"{"cmd":"poll","timout":1}"#).err().unwrap();
-        assert!(e.contains("timout") && e.contains("timeout"), "{e}");
     }
 
     /// A report nobody can act on is worse than none: every field is

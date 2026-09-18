@@ -59,7 +59,7 @@ pub trait Engine {
     ) -> Option<(String, Option<String>)>;
 
     /// The selection of the tab the user is looking at, for hosts that
-    /// report it onward (the desktop CLI's `status`/poll snapshots).
+    /// report it onward (the desktop CLI's `status`).
     fn set_selection(&self, sel: &[(String, Option<String>)]) {
         let _ = sel;
     }

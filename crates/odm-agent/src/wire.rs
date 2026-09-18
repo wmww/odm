@@ -16,6 +16,9 @@ pub struct AgentInfo {
     pub load_session: bool,
     /// `_meta.steering.supported`: the agent takes `_session/steering`.
     pub steering: bool,
+    /// `promptCapabilities.embeddedContext`: prompts may carry `resource`
+    /// blocks. Without it they are sent as text.
+    pub embedded_context: bool,
     /// How to log in, when the agent says: (name, description).
     pub auth_methods: Vec<(String, Option<String>)>,
 }
@@ -118,6 +121,10 @@ pub(crate) fn agent_info(result: &Value) -> AgentInfo {
         title: str_of(info, "title").or_else(|| str_of(info, "name")),
         version: str_of(info, "version"),
         load_session: caps.get("loadSession").and_then(Value::as_bool).unwrap_or(false),
+        embedded_context: caps
+            .pointer("/promptCapabilities/embeddedContext")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         steering: result
             .pointer("/_meta/steering/supported")
             .and_then(Value::as_bool)

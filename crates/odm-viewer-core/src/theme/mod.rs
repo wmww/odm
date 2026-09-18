@@ -867,6 +867,21 @@ pub fn menu<T: Copy>(ui: &mut Ui, title: &str, entries: &[MenuEntry<'_, T>]) -> 
     picked
 }
 
+/// The same drop-down as a right-click menu on `response`.
+pub fn context_menu<T: Copy>(
+    ui: &Ui,
+    response: &Response,
+    entries: &[MenuEntry<'_, T>],
+) -> Option<T> {
+    let mut picked = None;
+    let popup = egui::Popup::context_menu(response).show(|ui| picked = drop_down(ui, entries));
+    if let Some(popup) = popup {
+        let painter = ui.ctx().layer_painter(popup.response.layer_id);
+        bevel(&painter, popup.response.rect, Bevel::Raised);
+    }
+    picked
+}
+
 /// UI text laid out on one line, ready to paint or measure.
 fn label(ui: &Ui, text: &str) -> Arc<egui::Galley> {
     ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(UI_SIZE), TEXT)

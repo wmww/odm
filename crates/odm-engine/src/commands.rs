@@ -3,11 +3,10 @@
 
 use crate::feedback::Item;
 use crate::requests::{
-    self, ExportReq, FeedbackReq, Look, Ray, RenderFrame, RenderReq, Request, SayReq, ViewSel,
+    self, ExportReq, FeedbackReq, Look, Ray, RenderFrame, RenderReq, Request, ViewSel,
 };
 use crate::scene;
-use crate::server::Conn;
-use crate::state::{ActivityKind, EngineState, PollOutcome, Published};
+use crate::state::{ActivityKind, EngineState, Published};
 use crate::stl::{StlOptions, export_stl};
 use odm_build::{
     BuildFailure, FailureKind, InputReport, PassResult, SyncResult, View, check_input_names,
@@ -117,11 +116,9 @@ impl CmdError {
 }
 
 impl EngineState {
-    /// Answer one request. `conn` is the connection it arrived on: chat
-    /// commands need it to notice a client going away, and to keep messages
-    /// tied to the connection that has to acknowledge them.
-    pub fn handle(&self, req: Value, conn: &mut Conn) -> Value {
-        let result = requests::parse(req).and_then(|req| self.dispatch(req, conn));
+    /// Answer one request.
+    pub fn handle(&self, req: Value) -> Value {
+        let result = requests::parse(req).and_then(|req| self.dispatch(req));
         match result {
             Ok(mut v) => {
                 if let Some(o) = v.as_object_mut() {
@@ -138,13 +135,12 @@ impl EngineState {
         }
     }
 
-    fn dispatch(&self, req: Request, conn: &mut Conn) -> Result<Value, CmdError> {
+    fn dispatch(&self, req: Request) -> Result<Value, CmdError> {
         // Every command that looks at the project is one line in the
-        // viewer's chat log — the chat commands are not, being the chat.
+        // viewer's Agent panel.
         let verb = match &req {
-            // The chat commands are the chat, not actions; `feedback` logs
-            // its own line, with the report's title on it.
-            Request::Poll(_) | Request::Say(_) | Request::Ack | Request::Feedback(_) => None,
+            // `feedback` logs its own line, with the report's title on it.
+            Request::Feedback(_) => None,
             Request::Status => Some("status"),
             Request::Inspect(_) => Some("inspect"),
             Request::Render(..) => Some("render"),
@@ -152,7 +148,7 @@ impl EngineState {
             Request::Clearance(_) => Some("clearance"),
             Request::Export(_) => Some("export"),
         };
-        let out = self.dispatch_inner(req, conn);
+        let out = self.dispatch_inner(req);
         if let Some(verb) = verb {
             self.log_action(action_line(verb, &out));
         }
@@ -162,15 +158,11 @@ impl EngineState {
     /// The command line as the user reads it: the verb, the doohickey it
     /// answered about (the response's own resolved path, so a defaulted
     /// `root.js` reads as one), and a failure said plainly.
-    fn dispatch_inner(&self, req: Request, conn: &mut Conn) -> Result<Value, CmdError> {
+    fn dispatch_inner(&self, req: Request) -> Result<Value, CmdError> {
         // No global lock: commands run concurrently. Builds hold the build
-        // gate shared inside `query_view`; the chat commands neither sync
-        // nor build, so a poll blocked for minutes holds up nothing.
+        // gate shared inside `query_view`.
         match req {
-            Request::Poll(p) => self.cmd_poll(p.timeout, p.events, conn),
-            Request::Say(s) => self.cmd_say(&s),
             Request::Feedback(f) => self.cmd_feedback(f),
-            Request::Ack => Ok(json!({ "acked": conn.confirm() })),
             Request::Status => self.cmd_status(),
             Request::Inspect(r) => {
                 let view = ViewReq {
@@ -256,29 +248,7 @@ impl EngineState {
         // `"view": <slot>` requests adopt their state.
         o.insert("views".into(), json!(views));
         o.insert("health".into(), self.health_json(Some(sync.generation.0)));
-        // The standing `odm say --task` status, if one is set.
-        if let Some(t) = self.task() {
-            o.insert("task".into(), json!(t));
-        }
         Ok(Value::Object(o))
-    }
-
-    /// Every active slot's diagnostic value, for poll responses: what
-    /// `status.views` reports minus the inputs/selection detail. Reads only
-    /// the `views` and `published` maps — never the build gate.
-    fn builds_json(&self) -> Value {
-        Value::Array(
-            self.views()
-                .into_iter()
-                .map(|(slot, view)| {
-                    let mut o = Map::new();
-                    o.insert("slot".into(), json!(slot));
-                    o.insert("path".into(), json!(view.path));
-                    build_fields(&self.published(&slot), &mut o);
-                    Value::Object(o)
-                })
-                .collect(),
-        )
     }
 
     /// The health sweep's failing files — failures only; a file's absence
@@ -292,7 +262,7 @@ impl EngineState {
                     let mut o = Map::new();
                     o.insert("path".into(), json!(path));
                     o.insert("error".into(), json!(error));
-                    // The value shown is the last evaluated one; a poll
+                    // The value shown is the last evaluated one; a status
                     // right after an edit must not present it as current.
                     if current.is_some_and(|c| c != generation) {
                         o.insert("stale".into(), json!(true));
@@ -979,113 +949,6 @@ impl EngineState {
         Ok(response)
     }
 
-    /// Block until the user sends something. Exiting is the delivery
-    /// mechanism: agent harnesses only look at a background command once it
-    /// has ended, so poll takes the whole queue in one go and returns.
-    ///
-    /// What it takes stays *in flight* — the messages are only retired when
-    /// the client acknowledges them (`Ack`, sent by the CLI once it has
-    /// printed them). Kill the CLI at any point and the connection dies with
-    /// unacknowledged messages, which puts them back in the queue.
-    ///
-    /// Every response also carries the current `builds`/`health` snapshot;
-    /// with `events` (what `--follow` sets), a blocked poll additionally
-    /// returns — possibly with empty `messages` — whenever that diagnostic
-    /// value differs from what this connection last reported.
-    fn cmd_poll(&self, timeout: Option<f64>, events: bool, conn: &mut Conn) -> Result<Value, CmdError> {
-        // try_from rejects negative, NaN, infinite *and* too-large-for-Duration
-        // in one go; the from_ variant panics on the last two.
-        let timeout = match timeout.map(std::time::Duration::try_from_secs_f64).transpose() {
-            Ok(t) => t,
-            Err(_) => {
-                let what = "timeout must be a non-negative number of seconds";
-                return Err(CmdError::bad_request(what));
-            }
-        };
-        let baseline = events.then(|| conn.events_baseline().clone());
-        let taken = match self.poll_messages(timeout, conn.peer(), baseline.as_ref()) {
-            PollOutcome::Messages(taken) => taken,
-            PollOutcome::TimedOut | PollOutcome::Changed => Vec::new(),
-            // Both leave nothing in flight, and both want the poll to end
-            // rather than sit on a queue nobody is coming back for.
-            PollOutcome::Disconnected => {
-                return Err(CmdError::new("disconnected", "client went away"));
-            }
-            PollOutcome::Stopped => {
-                return Err(CmdError::new("stopped", "engine is shutting down"));
-            }
-        };
-        // Baseline before the snapshot below: a value change landing in
-        // between is then re-reported next time (idempotent) instead of
-        // silently swallowed.
-        conn.set_events_baseline(self.diagnostic_map());
-        // Each message carries the snapshot of what the user was looking at
-        // *when they sent it* (tab path + inputs, selection, camera) —
-        // "make this longer" arrives with "this" attached, stamped at send
-        // time because a poll can collect long after the send. Engine host
-        // warnings ride the same queue, marked `"from": "engine"` (absence
-        // = the user).
-        let messages: Vec<Value> = taken
-            .iter()
-            .map(|m| {
-                let mut o = Map::new();
-                o.insert("text".into(), json!(m.text));
-                if m.who == crate::state::Who::Engine {
-                    o.insert("from".into(), json!("engine"));
-                }
-                if let Some(v) = &m.view {
-                    o.insert("view".into(), v.clone());
-                }
-                Value::Object(o)
-            })
-            .collect();
-        conn.hold(taken.into_iter().map(|m| m.index));
-        let mut o = Map::new();
-        o.insert("messages".into(), json!(messages));
-        o.insert("builds".into(), self.builds_json());
-        o.insert("health".into(), self.health_json(self.last_generation()));
-        // The standing working status, so an agent picking the project up
-        // (or one that forgot to clear it) sees it in-band.
-        if let Some(t) = self.task() {
-            o.insert("task".into(), json!(t));
-        }
-        Ok(Value::Object(o))
-    }
-
-    /// `say`'s three shapes: a message (`text`), set the working status
-    /// (`task`), or clear it (`done`, optionally with a message). A message
-    /// response echoes any standing task — that echo, not a timeout, is what
-    /// corrects a forgotten one: the agent (or a successor picking up the
-    /// project) sees it in-band and clears or replaces it.
-    fn cmd_say(&self, req: &SayReq) -> Result<Value, CmdError> {
-        let text = req.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
-        let task = req.task.as_deref().map(str::trim).filter(|t| !t.is_empty());
-        if req.task.is_some() && task.is_none() {
-            return Err(CmdError::bad_request("task needs text: what are you working on?"));
-        }
-        if task.is_some() && (text.is_some() || req.done) {
-            return Err(CmdError::bad_request("task is its own request — no text or done with it"));
-        }
-        if let Some(t) = task {
-            self.set_task(t.to_owned());
-            return Ok(json!({"task": t}));
-        }
-        if text.is_none() && !req.done {
-            return Err(CmdError::bad_request("say needs a message"));
-        }
-        if let Some(t) = text {
-            self.say(t.to_owned());
-        }
-        if req.done {
-            self.clear_task();
-        }
-        let mut o = Map::new();
-        if let Some(t) = self.task() {
-            o.insert("task".into(), json!(t));
-        }
-        Ok(Value::Object(o))
-    }
-
     /// File a report. It goes to a file under `.odm/feedback/` and no
     /// further: a human reviews it in the viewer and decides whether it is
     /// sent. The agent is told where it landed and nothing else — sent or
@@ -1160,7 +1023,7 @@ fn brief(message: &str) -> String {
     out
 }
 
-/// One slot's diagnostic value, shared by `status.views` and poll `builds`:
+/// One slot's diagnostic value, as `status.views` reports it:
 /// `build` is the last-published *value* (ok / error / pending — an error
 /// keeps `error` next to it), and `stale` says a newer generation's answer
 /// is queued or building. The value is never masked by a "building" state:
@@ -1363,7 +1226,7 @@ fn camera_from(req: &RenderReq) -> Result<Camera, CmdError> {
 }
 
 /// A camera in the render request's explicit spelling — the render echo and
-/// the poll snapshot speak it identically, so numbers paste straight back
+/// a user message's state snapshot speak it identically, so numbers paste straight back
 /// into `odm render`. f32-shortest rounding: fitted values come out of
 /// normalization/trig with 17-digit decimals nobody wants to paste.
 pub(crate) fn camera_json(
@@ -1438,7 +1301,6 @@ fn logs_json(logs: &[(String, LogLine)]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{Delivery, Who};
 
     /// `feedback` writes the report and says where; everything else about it
     /// — sending, deleting — is the human's, and the agent hears nothing.
@@ -1446,8 +1308,7 @@ mod tests {
     fn feedback_writes_an_item_and_logs_it() {
         let dir = tempfile::tempdir().unwrap();
         let state =
-            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
-        let mut conn = Conn::new(state.clone());
+            crate::state::tests::engine_at(dir.path().to_path_buf());
         // A viewer, so the transcript line and the notice are kept.
         state.set_wake(Arc::new(|| {}));
         let generation = state.last_generation();
@@ -1455,7 +1316,6 @@ mod tests {
         let v = state.handle(
             json!({"cmd": "feedback", "title": "raycast misses instances",
                    "body": "  steps to reproduce  ", "harness": "Claude Code", "model": "opus"}),
-            &mut conn,
         );
         assert_eq!(v["ok"], json!(true), "{v}");
         let id = v["id"].as_str().expect("an id").to_owned();
@@ -1469,11 +1329,7 @@ mod tests {
         assert!(!items[0].build.is_empty() && !items[0].platform.is_empty());
 
         // One transcript line, and one notice for the viewer to show.
-        state.with_transcript(|t| {
-            assert_eq!(t.len(), 1);
-            assert_eq!(t[0].who, Who::Action);
-            assert_eq!(t[0].text, "feedback: raycast misses instances");
-        });
+        assert_eq!(state.agent().actions(), ["feedback: raycast misses instances"]);
         assert_eq!(state.take_feedback_notices(), ["raycast misses instances"]);
         assert!(state.take_feedback_notices().is_empty(), "taken once");
         // Filing a report is not a project change: nothing synced, nothing built.
@@ -1482,7 +1338,6 @@ mod tests {
         // An empty field is refused, by name.
         let v = state.handle(
             json!({"cmd": "feedback", "title": " ", "body": "b", "harness": "h", "model": "m"}),
-            &mut conn,
         );
         assert_eq!(v["ok"], json!(false));
         assert!(v["error"]["message"].as_str().unwrap().contains("title"), "{v}");
@@ -1500,16 +1355,15 @@ mod tests {
         )
         .unwrap();
         let state =
-            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
-        let mut conn = Conn::new(state.clone());
+            crate::state::tests::engine_at(dir.path().to_path_buf());
 
         // Headless: no viewer, no events.
-        let v = state.handle(json!({"cmd": "inspect"}), &mut conn);
+        let v = state.handle(json!({"cmd": "inspect"}));
         assert_eq!(v["ok"], json!(true), "{v}");
         assert!(state.take_activity().is_empty(), "headless pushes nothing");
 
         state.set_wake(Arc::new(|| {}));
-        let v = state.handle(json!({"cmd": "inspect"}), &mut conn);
+        let v = state.handle(json!({"cmd": "inspect"}));
         assert_eq!(v["ok"], json!(true), "{v}");
         let events = state.take_activity();
         assert_eq!(events.len(), 1);
@@ -1528,7 +1382,6 @@ mod tests {
                 {"origin": [0.25, 0.25, 10.0], "dir": [0, 0, -1]},
                 {"origin": [100.0, 100.0, 10.0], "dir": [0, 0, -1]},
             ]}),
-            &mut conn,
         );
         assert_eq!(v["ok"], json!(true), "{v}");
         let events = state.take_activity();
@@ -1544,7 +1397,7 @@ mod tests {
         assert_eq!(hits, [true, false], "hit position rides the event");
 
         // Render events need a GPU adapter; skip quietly without one.
-        let v = state.handle(json!({"cmd": "render", "width": 64, "height": 48}), &mut conn);
+        let v = state.handle(json!({"cmd": "render", "width": 64, "height": 48}));
         if v["ok"] == json!(true) {
             let events = state.take_activity();
             assert_eq!(events.len(), 1);
@@ -1571,11 +1424,10 @@ mod tests {
         )
         .unwrap();
         let state =
-            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
-        let mut conn = Conn::new(state.clone());
+            crate::state::tests::engine_at(dir.path().to_path_buf());
 
         let v = state
-            .handle(json!({"cmd": "inspect", "full": true, "fields": ["tris"]}), &mut conn);
+            .handle(json!({"cmd": "inspect", "full": true, "fields": ["tris"]}));
         assert_eq!(v["ok"], json!(true), "{v}");
         let node = v["node"].as_object().unwrap();
         assert!(node.contains_key("tris"), "{v}");
@@ -1596,29 +1448,21 @@ mod tests {
         )
         .unwrap();
         let state =
-            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
-        let mut conn = Conn::new(state.clone());
+            crate::state::tests::engine_at(dir.path().to_path_buf());
 
         // Headless logs nothing: the lines exist for the viewer's user.
-        state.handle(json!({"cmd": "inspect"}), &mut conn);
-        state.with_transcript(|t| assert!(t.is_empty(), "headless keeps no log"));
+        state.handle(json!({"cmd": "inspect"}));
+        assert!(state.agent().actions().is_empty(), "headless keeps no log");
 
         state.set_wake(Arc::new(|| {}));
-        state.handle(json!({"cmd": "inspect"}), &mut conn);
-        state.handle(json!({"cmd": "status"}), &mut conn);
-        state.handle(json!({"cmd": "say", "text": "hi"}), &mut conn);
-        state.handle(json!({"cmd": "inspect", "path": "nope.js"}), &mut conn);
-        state.with_transcript(|t| {
-            let log: Vec<(Who, &str)> = t.iter().map(|e| (e.who, e.text.as_str())).collect();
-            assert_eq!(log[0], (Who::Action, "inspect root.js"));
-            assert_eq!(log[1], (Who::Action, "status"), "no view of its own to name");
-            assert_eq!(log[2], (Who::Agent, "hi"), "saying is not doing");
-            assert_eq!(log[3].0, Who::Action);
-            assert!(log[3].1.starts_with("inspect failed:"), "{}", log[3].1);
-            assert_eq!(log.len(), 4);
-            // Log lines are never queued for the agent — it did them.
-            assert!(t.iter().all(|e| e.who != Who::Action || e.delivery == Delivery::Done));
-        });
+        state.handle(json!({"cmd": "inspect"}));
+        state.handle(json!({"cmd": "status"}));
+        state.handle(json!({"cmd": "inspect", "path": "nope.js"}));
+        let log = state.agent().actions();
+        assert_eq!(log[0], "inspect root.js");
+        assert_eq!(log[1], "status", "no view of its own to name");
+        assert!(log[2].starts_with("inspect failed:"), "{}", log[2]);
+        assert_eq!(log.len(), 3);
     }
 
     /// What the agent edits shows up in the log too — the diff between one
@@ -1630,26 +1474,22 @@ mod tests {
         std::fs::write(&root, "export default function build(ctx) { return odm.box([1, 1, 1]); }")
             .unwrap();
         let state =
-            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
-        let mut conn = Conn::new(state.clone());
+            crate::state::tests::engine_at(dir.path().to_path_buf());
         state.set_wake(Arc::new(|| {}));
 
         // The first sync is the project as found, not an edit.
-        state.handle(json!({"cmd": "status"}), &mut conn);
-        state.with_transcript(|t| assert_eq!(t.len(), 1, "opening a project edits nothing"));
+        state.handle(json!({"cmd": "status"}));
+        assert_eq!(state.agent().actions().len(), 1, "opening a project edits nothing");
 
         std::fs::write(&root, "export default function build(ctx) { return odm.box([2, 2, 2]); }")
             .unwrap();
         std::fs::write(dir.path().join("part.js"), "export default function build() {}").unwrap();
-        state.handle(json!({"cmd": "status"}), &mut conn);
-        state.with_transcript(|t| {
-            let log: Vec<&str> = t.iter().map(|e| e.text.as_str()).collect();
-            assert_eq!(log, ["status", "new part.js", "edit root.js", "status"]);
-        });
+        state.handle(json!({"cmd": "status"}));
+        assert_eq!(state.agent().actions(), ["status", "new part.js", "edit root.js", "status"]);
 
         std::fs::remove_file(dir.path().join("part.js")).unwrap();
-        state.handle(json!({"cmd": "status"}), &mut conn);
-        state.with_transcript(|t| assert_eq!(t[4].text, "deleted part.js"));
+        state.handle(json!({"cmd": "status"}));
+        assert_eq!(state.agent().actions()[4], "deleted part.js");
     }
 
     fn cam(body: &str) -> Result<Camera, String> {

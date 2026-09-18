@@ -8,7 +8,6 @@
 //! diffs docs/cli.md against the parser), so nothing here pins prose.
 
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -229,58 +228,10 @@ fn renaming_a_part_breaks_and_unbreaks_the_next_query() {
 }
 
 // ------------------------------------------------------------- 3. the watcher
-
-/// `odm poll --follow` never syncs, so a line can only arrive via
-/// watcher → rebuild → event. This is the only test that exercises the
-/// inotify watcher at all.
-#[test]
-fn the_watcher_rebuilds_without_any_query() {
-    let dir = project(&[("root.js", BOX10)]);
-    let _engine = Engine::start(dir.path());
-
-    let mut follower = Command::new(BIN)
-        .arg("--project")
-        .arg(dir.path())
-        .args(["poll", "--follow"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn poll --follow");
-    let (tx, lines) = std::sync::mpsc::channel();
-    let stdout = follower.stdout.take().unwrap();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if tx.send(line).is_err() {
-                return;
-            }
-        }
-    });
-
-    // Give the follower time to connect and park before touching anything.
-    std::thread::sleep(Duration::from_millis(300));
-    write(dir.path(), "root.js", "//! ODM API unstable\nthis is not javascript(((\n");
-    await_build_state(&lines, "error");
-    write(dir.path(), "root.js", BOX20);
-    await_build_state(&lines, "ok");
-
-    let _ = follower.kill();
-    let _ = follower.wait();
-}
-
-/// Drain follow lines until one reports the default slot in `want`.
-fn await_build_state(lines: &std::sync::mpsc::Receiver<String>, want: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut seen = vec![];
-    while let Some(rest) = deadline.checked_duration_since(Instant::now()) {
-        let Ok(line) = lines.recv_timeout(rest) else { break };
-        let v: Value = serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}: {line}"));
-        if v["builds"].as_array().is_some_and(|b| b.iter().any(|s| s["build"] == want)) {
-            return;
-        }
-        seen.push(line);
-    }
-    panic!("no follow line reported build {want:?}; saw: {seen:#?}");
-}
+//
+// Every CLI command syncs, so nothing here can tell the inotify watcher from
+// the query that asked: `the_watcher_rebuilds_without_any_query` lives in
+// odm-engine's state.rs, where a published slot can be watched directly.
 
 // ------------------------------------------------------- 4. failure/recovery
 
@@ -346,21 +297,17 @@ fn decode(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
 
 // ------------------------------------------------------------------ 6. chat
 
-/// User messages only enter through the viewer, so the queue/ack semantics
-/// are `state.rs`/`server.rs`'s to test. This proves the commands reach a
-/// real engine and that a bounded poll comes back promptly.
+/// The chat loop went with the managed agent panel. An agent that still
+/// types the old commands must be told why, engine or no engine — not get a
+/// JSON-grammar error about its flags.
 #[test]
-fn say_and_poll_reach_the_engine() {
+fn poll_and_say_say_where_they_went() {
     let dir = project(&[("root.js", BOX10)]);
-    let _engine = Engine::start(dir.path());
-
-    odm(dir.path(), &["say", "hello"]).ok_json();
-    let started = Instant::now();
-    let v = odm(dir.path(), &["poll", "--timeout", "0.2"]).ok_json();
-    assert!(started.elapsed() < Duration::from_secs(5), "a bounded poll must not hang");
-    assert_eq!(v["ok"], Value::Bool(true));
-    assert_eq!(v["messages"], serde_json::json!([]), "nobody typed anything");
-    assert!(v["builds"].is_array(), "every poll answer carries build state: {v}");
+    for args in [&["poll", "--follow"][..], &["say", "hello", "there"]] {
+        let out = odm(dir.path(), args);
+        assert_ne!(out.code, 0);
+        assert!(out.stderr.contains("runs the agent itself"), "{}", out.stderr);
+    }
 }
 
 // ----------------------------------------------------------------- 7. errors

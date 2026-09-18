@@ -282,6 +282,7 @@ impl Agent {
             }
             Phase::Ready if state.info.steering => {
                 let session = state.session.clone();
+                let blocks = state.adapt(blocks);
                 vec![state.request(
                     "_session/steering",
                     json!({
@@ -383,6 +384,22 @@ impl Drop for Agent {
 }
 
 impl State {
+    /// Embedded resources, for an agent that did not say it takes them, as
+    /// the text the adapters themselves turn them into.
+    fn adapt(&self, blocks: Vec<Value>) -> Vec<Value> {
+        if self.info.embedded_context {
+            return blocks;
+        }
+        let as_text = |block: Value| match block.pointer("/resource/uri").and_then(Value::as_str) {
+            Some(uri) if block.get("type").and_then(Value::as_str) == Some("resource") => {
+                let body = block.pointer("/resource/text").and_then(Value::as_str).unwrap_or("");
+                json!({"type": "text", "text": format!("<context ref=\"{uri}\">\n{body}\n</context>")})
+            }
+            _ => block,
+        };
+        blocks.into_iter().map(as_text).collect()
+    }
+
     fn request(&mut self, method: &str, params: Value, pending: Pending) -> Value {
         let id = self.next_id;
         self.next_id += 1;
@@ -464,7 +481,8 @@ impl Shared {
         if state.phase != Phase::Ready || state.turn_running || state.queued.is_empty() {
             return Vec::new();
         }
-        let blocks = std::mem::take(&mut state.queued);
+        let queued = std::mem::take(&mut state.queued);
+        let blocks = state.adapt(queued);
         state.turn_running = true;
         state.turn_serial += 1;
         let session = state.session.clone();

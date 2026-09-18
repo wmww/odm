@@ -13,12 +13,15 @@ mod idle;
 mod menu;
 mod new;
 mod open;
+mod panel;
 mod pick;
+mod settings;
 mod tabs;
 
 use crate::scene;
 use crate::session::{AgentQuestion, Sessions};
-use crate::state::{Delivery, EngineState, Who};
+use crate::agent::Lamp;
+use crate::state::EngineState;
 use crate::theme;
 use eframe::egui;
 use odm_render::{Instance, Renderer};
@@ -28,15 +31,10 @@ use std::sync::Arc;
 
 use activity::ActivityView;
 use feedback::{FeedbackDialog, FeedbackPage};
+use settings::SettingsPage;
 use idle::Quit;
 
 pub use idle::run_viewer;
-
-/// Rows the chat input grows to hold before it stops growing and scrolls —
-/// and, in a short dock, the share of the chat it may take, so the transcript
-/// is never squeezed down to nothing by a long message being typed.
-const INPUT_MAX_ROWS: usize = 8;
-const INPUT_MAX_SHARE: f32 = 0.5;
 
 /// Height the bottom dock (chat/console) starts at, and the least it can be
 /// dragged to — a tab strip plus, at the minimum, the chat input and a line
@@ -50,9 +48,10 @@ const SIDEBAR_WIDTH: f32 = 240.0;
 const TREE_HEIGHT: f32 = 280.0;
 const TREE_MIN: f32 = 60.0;
 
-/// The lamp on the Agent tab: nothing listening, listening, and the dim half
-/// of the blink while it works — plus how long each half of that blink lasts.
-const LAMP_OFF: egui::Color32 = egui::Color32::from_rgb(0x8c, 0x2c, 0x2c);
+/// The lamp on the Agent tab: no agent running, an idle session, and the dim
+/// half of the blink while it works — plus how long each half of that blink
+/// lasts.
+const LAMP_OFF: egui::Color32 = egui::Color32::from_rgb(0x30, 0x30, 0x30);
 const LAMP_ON: egui::Color32 = egui::Color32::from_rgb(0x4c, 0xd0, 0x60);
 const LAMP_DIM: egui::Color32 = egui::Color32::from_rgb(0x1e, 0x50, 0x28);
 const BLINK: f64 = 0.45;
@@ -113,6 +112,7 @@ enum Dialog {
     ExportStl(export_stl::StlDialog),
     AgentFiles(agent::AgentDialog),
     Feedback(FeedbackDialog),
+    Install(settings::InstallDialog),
 }
 
 /// One thing in the tab strip. Nearly always a view — one doohickey, its
@@ -123,20 +123,21 @@ enum Dialog {
 enum Item {
     View(Tab),
     Feedback(FeedbackPage),
+    Settings(SettingsPage),
 }
 
 impl Item {
     fn view(&self) -> Option<&Tab> {
         match self {
             Item::View(tab) => Some(tab),
-            Item::Feedback(_) => None,
+            Item::Feedback(_) | Item::Settings(_) => None,
         }
     }
 
     fn view_mut(&mut self) -> Option<&mut Tab> {
         match self {
             Item::View(tab) => Some(tab),
-            Item::Feedback(_) => None,
+            Item::Feedback(_) | Item::Settings(_) => None,
         }
     }
 
@@ -144,6 +145,7 @@ impl Item {
         match self {
             Item::View(tab) => tab.label(),
             Item::Feedback(_) => feedback::LABEL,
+            Item::Settings(_) => settings::LABEL,
         }
     }
 }
@@ -164,11 +166,9 @@ pub struct ViewerApp {
     tab_counter: u64,
     /// Agent CLI actions visualized behind the chat transcript.
     activity: ActivityView,
-    /// The chat input line. The transcript itself lives in `EngineState`.
-    chat_input: String,
-    /// Edit ▸ Message Agent (Ctrl+Enter) asked for the caret; the chat box
-    /// takes it when it next draws, and clears this.
-    focus_chat: bool,
+    /// The Agent panel: the message box, and what is folded open. The
+    /// transcript itself lives in the engine's `AgentHost`.
+    panel: panel::AgentPanel,
     /// Which tab of the bottom dock is showing. One dock for the window, not
     /// one per view: the console it shows is the active tab's.
     dock: Dock,
@@ -205,8 +205,7 @@ impl ViewerApp {
             active: 0,
             tab_counter: 0,
             activity: ActivityView::default(),
-            chat_input: String::new(),
-            focus_chat: false,
+            panel: panel::AgentPanel::default(),
             dock: Dock::Chat,
             dialog: None,
             stl_prefs: export_stl::Prefs::default(),
@@ -305,9 +304,9 @@ impl ViewerApp {
         self.items.clear();
         self.tab_counter = 0;
         self.init_tabs();
-        // The new session has its own (empty) transcript; the half-typed line
-        // was meant for the old one.
-        self.chat_input.clear();
+        // The new session has its own transcript; the half-typed line was
+        // meant for the old one.
+        self.panel.clear();
         self.stl_prefs = export_stl::Prefs::default();
         self.state().set_selection(Vec::new());
         // Nothing of the old project should still be resident, or on screen.
@@ -383,6 +382,21 @@ impl ViewerApp {
         self.core.needs_render = true;
     }
 
+    /// Open the Agent Settings page, or bring it forward — the panel's
+    /// header button and context menu, and Edit ▸ Agent Settings.
+    fn open_agent_settings(&mut self) {
+        match self.items.iter().position(|i| matches!(i, Item::Settings(_))) {
+            Some(index) => self.switch_tab(index),
+            None => {
+                self.items.push(Item::Settings(SettingsPage::new()));
+                self.active = self.items.len() - 1;
+                self.sync_active();
+                self.save_tabs();
+            }
+        }
+        self.core.needs_render = true;
+    }
+
     fn frame_scene(&mut self) {
         let Self { core, items, active, .. } = self;
         if let Some(tab) = items.get_mut(*active).and_then(Item::view_mut) {
@@ -413,8 +427,10 @@ impl ViewerApp {
         }
         self.active = index;
         // A page someone else may have written to since it was last read.
-        if let Some(Item::Feedback(page)) = self.items.get_mut(index) {
-            page.refresh();
+        match self.items.get_mut(index) {
+            Some(Item::Feedback(page)) => page.refresh(),
+            Some(Item::Settings(page)) => page.refresh(),
+            _ => {}
         }
         self.core.needs_render = true;
         // The CLI's `status` selection and `"view": true` follow the tab the
@@ -494,6 +510,7 @@ impl ViewerApp {
             .map(|item| match item {
                 Item::View(tab) => state.build_failed(&tab.slot),
                 Item::Feedback(page) => page.failed(),
+                Item::Settings(page) => page.failed(),
             })
             .collect();
         let labels: Vec<_> = self
@@ -593,6 +610,8 @@ impl ViewerApp {
                 (Item::View(tab), false) => hit.on_hover_text(&tab.path),
                 (Item::Feedback(_), true) => hit.on_hover_text("a report could not be sent"),
                 (Item::Feedback(_), false) => hit.on_hover_text("bug reports and requests"),
+                (Item::Settings(_), true) => hit.on_hover_text("the install failed"),
+                (Item::Settings(_), false) => hit.on_hover_text("which agent ODM runs, and how"),
             };
             if hit.clicked() {
                 switch = Some(i);
@@ -666,78 +685,15 @@ impl ViewerApp {
                     activity.panel_ui(ui, frame, renderer);
                 });
         }
-        // The input box grows with what is typed into it; the transcript
-        // takes whatever the panel's edge has been dragged to, less the box
-        // and the gap above it. Exactly, so the panel is never asked to hold
-        // more than it is.
-        let input_width = ui.available_width() - 4.0;
-        let row = ui.text_style_height(&egui::TextStyle::Body);
-        let one_row = row + theme::TEXT_PAD * 2.0;
-        let input_max = (row * INPUT_MAX_ROWS as f32 + theme::TEXT_PAD * 2.0)
-            .min((ui.available_height() * INPUT_MAX_SHARE).max(one_row));
-        let input_height = theme::text_area_height(ui, &self.chat_input, input_width).min(input_max);
-        let height = (ui.available_height() - input_height - ui.spacing().item_spacing.y).max(one_row);
-        let size = egui::vec2(ui.available_width(), height);
-        let state = self.state();
-        let task = state.task();
-        state.with_transcript(|transcript| {
-            theme::tail_box(ui, "chat", size, |ui| {
-                for entry in transcript {
-                    let undelivered = entry.delivery != Delivery::Done;
-                    // A message can now hold newlines; its later lines are
-                    // indented under the one the `>` opened.
-                    let quoted = || format!("> {}", entry.text.replace('\n', "\n  "));
-                    let (text, color) = match entry.who {
-                        // Dimmed until the agent has actually acknowledged it,
-                        // so a message that never got through still looks like
-                        // one.
-                        Who::User if undelivered => {
-                            (quoted(), theme::USER_TEXT.gamma_multiply(0.6))
-                        }
-                        Who::User => (quoted(), theme::USER_TEXT),
-                        Who::Agent => (entry.text.clone(), theme::TEXT),
-                        // What the agent did, as against what it said: one
-                        // compact line per command it ran or file it changed.
-                        Who::Action => (entry.text.clone(), theme::ACTION_TEXT),
-                        // Host warnings, where the user already looks.
-                        Who::Engine => (format!("engine: {}", entry.text), theme::WARN),
-                    };
-                    ui.label(egui::RichText::new(text).color(color));
-                }
-                // The agent's working status (`odm say --task`, or
-                // "Processing" from the moment the user hits Enter): a live
-                // tail line in the era's busy-dots idiom (Searching...). The
-                // one exception to "no animation anywhere" — it exists to
-                // show work in progress, which a still frame can't. Never
-                // times out: a wrong task is corrected by the agent (it's
-                // echoed in every say/poll/status response), not guessed away.
-                if let Some(task) = &task {
-                    let dots = 1 + (ui.input(|i| i.time) / 0.4) as usize % 3;
-                    ui.label(
-                        egui::RichText::new(format!("{task}{}", ".".repeat(dots)))
-                            .color(theme::TASK_TEXT),
-                    );
-                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
-                }
-            })
-        });
-        let input =
-            theme::text_area(ui, "chat-input", &mut self.chat_input, input_width, input_max, "");
-        if std::mem::take(&mut self.focus_chat) {
-            input.response.request_focus();
-        }
-        if input.submitted {
-            let text = self.chat_input.trim().to_owned();
-            if !text.is_empty() {
-                // Stamped now: the snapshot must be what the user sees as
-                // they hit Enter, not whatever a later poll happens to find.
-                // No tab open, nothing to attach.
-                let snapshot = self.view_snapshot();
-                self.state().send_message(text, snapshot);
-            }
-            self.chat_input.clear();
-            // Enter sends *and* keeps the caret, so a reply can follow.
-            input.response.request_focus();
+        let host = self.state().agent().clone();
+        let Self { panel, items, active, .. } = &mut *self;
+        let tab = items.get(*active).and_then(Item::view);
+        // Stamped as they hit Enter: what the user sees now, not whatever
+        // they have moved on to by the time the agent reads it. No tab
+        // open, nothing to attach.
+        let request = panel.ui(ui, &host, || tab.and_then(view_snapshot));
+        if request == Some(panel::Request::OpenSettings) {
+            self.open_agent_settings();
         }
     }
 
@@ -745,39 +701,22 @@ impl ViewerApp {
     /// the tab's view (path + set inputs), their selection, and the camera —
     /// in the render request's explicit spelling, so the agent replays this
     /// exact view by pasting the numbers into `odm render`.
-    fn view_snapshot(&self) -> Option<Value> {
-        let tab = self.tab()?;
-        let mut inputs = tab.set_args.clone();
-        inputs.extend(tab.set_cascade.clone());
-        let orbit = &tab.orbit;
-        Some(serde_json::json!({
-            "slot": tab.slot,
-            "path": tab.path,
-            "inputs": inputs,
-            "selection": crate::commands::selection_json(&tab.selected),
-            "camera": crate::commands::camera_json(
-                orbit.eye(),
-                orbit.target,
-                [0.0, 0.0, 1.0],
-                &odm_render::Projection::Perspective { fov_y_deg: FOV_Y_DEG },
-            ),
-        }))
-    }
-
-    /// The agent's state, as the lamp on its tab: dark red when nothing is
-    /// listening (the user's cue to go prod the agent in its own terminal),
-    /// green when an `odm poll` is waiting, and blinking while the agent has
-    /// a task in hand. The blink is the same exception the busy dots are —
-    /// work in progress is the one thing a still frame can't show.
+    /// The agent's state, as the lamp on its tab: dark when no agent is
+    /// running (or none is configured), green for an idle session, blinking
+    /// while a turn runs — and steady amber when that turn is waiting on
+    /// the user, since a blocked turn otherwise looks like a busy one. The
+    /// blink is the same exception the busy dots are: work in progress is
+    /// the one thing a still frame can't show.
     fn agent_lamp(&self, ui: &egui::Ui) -> egui::Color32 {
-        if self.state().listeners() == 0 {
-            return LAMP_OFF;
+        match self.state().agent().lamp() {
+            Lamp::Off => LAMP_OFF,
+            Lamp::Idle => LAMP_ON,
+            Lamp::Waiting => theme::WARN,
+            Lamp::Working => {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+                if (ui.input(|i| i.time) / BLINK) as u64 % 2 == 0 { LAMP_ON } else { LAMP_DIM }
+            }
         }
-        if self.state().task().is_none() {
-            return LAMP_ON;
-        }
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
-        if (ui.input(|i| i.time) / BLINK) as u64 % 2 == 0 { LAMP_ON } else { LAMP_DIM }
     }
 
     /// The bottom dock: chat and console as two tabs of one panel, sitting
@@ -895,6 +834,17 @@ impl ViewerApp {
                 feedback::Outcome::Dismissed => {}
                 feedback::Outcome::View => self.open_feedback(),
             },
+            Some(Dialog::Install(mut dialog)) => match dialog.ui(ctx) {
+                settings::Outcome::Idle => self.dialog = Some(Dialog::Install(dialog)),
+                settings::Outcome::No => {}
+                settings::Outcome::Yes(id) => {
+                    for item in &mut self.items {
+                        if let Item::Settings(page) = item {
+                            page.start_install(ctx, id);
+                        }
+                    }
+                }
+            },
             Some(Dialog::AgentFiles(mut dialog)) => match dialog.ui(ctx) {
                 agent::Outcome::Idle => self.dialog = Some(Dialog::AgentFiles(dialog)),
                 // Nothing is recorded either way: no is just this open's no.
@@ -1009,6 +959,8 @@ impl eframe::App for ViewerApp {
             .show(ui, |ui| {
                 let shortcuts = self.dialog.is_none() && self.pick.is_none();
                 let project = state.project().to_path_buf();
+                let host = state.agent().clone();
+                let mut install = None;
                 let Self { core, items, active, renderer, .. } = &mut *self;
                 match items.get_mut(*active) {
                     Some(Item::View(tab)) => {
@@ -1017,8 +969,12 @@ impl eframe::App for ViewerApp {
                     // The page takes the viewport's place; the panels around
                     // it are already empty, there being no view in front.
                     Some(Item::Feedback(page)) => page.ui(ui, &project),
+                    Some(Item::Settings(page)) => install = page.ui(ui, &host),
                     // Nothing open: an empty well, not the last tab's render.
                     None => odm_viewer_core::blank_viewport(ui),
+                }
+                if let (Some(install), None) = (install, &self.dialog) {
+                    self.dialog = Some(Dialog::Install(install));
                 }
             });
 
@@ -1050,4 +1006,26 @@ fn window_title(state: Option<&EngineState>) -> String {
             project.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
         });
     format!("ODM — {name}")
+}
+
+/// What the user is looking at, attached to each message they send: the
+/// tab's view (path + set inputs), their selection, and the camera — in the
+/// render request's explicit spelling, so the agent replays this exact view
+/// by pasting the numbers into `odm render`.
+fn view_snapshot(tab: &Tab) -> Option<Value> {
+    let mut inputs = tab.set_args.clone();
+    inputs.extend(tab.set_cascade.clone());
+    let orbit = &tab.orbit;
+    Some(serde_json::json!({
+        "slot": tab.slot,
+        "path": tab.path,
+        "inputs": inputs,
+        "selection": crate::commands::selection_json(&tab.selected),
+        "camera": crate::commands::camera_json(
+            orbit.eye(),
+            orbit.target,
+            [0.0, 0.0, 1.0],
+            &odm_render::Projection::Perspective { fov_y_deg: FOV_Y_DEG },
+        ),
+    }))
 }

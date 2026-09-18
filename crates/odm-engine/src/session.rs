@@ -97,7 +97,6 @@ impl Sessions {
         let scan = sync_on_open(&project);
         let state = EngineState::new(project, self.env.clone()).map_err(|e| e.to_string())?;
         state.set_agent_questions(scan.questions);
-        // The transcript persists, so the agent's first poll collects these.
         for warning in scan.warnings {
             state.engine_warning(warning);
         }
@@ -128,7 +127,7 @@ pub enum AgentQuestion {
 /// What the open-time scan produced: questions the viewer must ask, and
 /// warnings for the transcript. The warnings fire before an `EngineState`
 /// exists, so they travel back to be queued right after construction —
-/// the transcript persists, and the agent's first poll collects them.
+/// the transcript shows them, and a live agent is told.
 pub struct OpenScan {
     pub questions: Vec<AgentQuestion>,
     pub warnings: Vec<String>,
@@ -194,4 +193,10 @@ fn spawn_threads(state: &Arc<EngineState>, listener: std::os::unix::net::UnixLis
         });
     }
     spawn_background(state);
+    // Only a viewer session has an agent to push build diagnostics to:
+    // headless never spawns one.
+    {
+        let state = state.clone();
+        std::thread::spawn(move || state.agent().run_pusher(&state));
+    }
 }
