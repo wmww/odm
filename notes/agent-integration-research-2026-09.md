@@ -30,3 +30,27 @@ running agent ODM manages, staying agent-agnostic. Nothing decided or built.
 Sources: agentclientprotocol.com/get-started/agents,
 zed.dev/blog/anthropic-subscription-changes,
 thenewstack.io/anthropic-pauses-claude-agent-sdk-subscription-change/
+
+## Follow-up: features and packaging (same day)
+
+- **Mid-turn messages**: not in ACP v1 (only `session/cancel` mid-turn; a
+  second `session/prompt` is unspecified, adapters queue it). v2 draft
+  decouples prompt-ack from turn end but explicitly leaves steering/queueing
+  out. In practice both official adapters ship a non-schema extension:
+  `_session/steering {sessionId, prompt}`, advertised at
+  `InitializeResponse._meta.steering.supported` (claude-agent-acp ≥0.66,
+  codex-acp ≥1.2); outcomes injected/startedNewTurn/failed/promptRequired.
+  Claude reacts in ~2s, Codex at its next step boundary. Open bug
+  claude-agent-acp#1114: a steered turn's `session/prompt` may never
+  resolve — client needs its own turn-end watchdog. Agents without the
+  extension: queue client-side, or cancel + re-prompt.
+- **Packaging**: registry (cdn.agentclientprotocol.com/registry/v1/latest/
+  registry.json, 41 agents: 22 npx, 19 binary, 2 uvx). claude-acp and
+  codex-acp are **npx-only** (`@agentclientprotocol/claude-agent-acp` 0.79,
+  node ≥22; `@agentclientprotocol/codex-acp` 1.12); gemini is npx
+  `--acp`; opencode is a native binary. The adapters pull their own agent
+  runtime (claude-agent-sdk's per-platform native binary; `@openai/codex`),
+  so versions drift from the user's installed CLI; login state is shared.
+- ODM side is pure Rust: `agent-client-protocol` crate (2.2.0, actively
+  released). Nothing Node ships in ODM; Node is a user-machine runtime
+  prerequisite for Claude/Codex/Gemini, not for opencode.
