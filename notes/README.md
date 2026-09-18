@@ -35,4 +35,6 @@
 - `agent-integration-research-2026-09.md` — ACP as the agent-agnostic
   protocol for an ODM-managed agent panel, which agents speak it and how,
   and the (paused) Anthropic Agent SDK billing change that makes the
-  risk we accepted. Evidence base for plans/agent-panel.md; nothing built.
+  risk we accepted, plus live spike results against claude-agent-acp and
+  codex-acp (steering, permissions, replay, embedded context). Evidence
+  base for plans/agent-panel.md; nothing built.

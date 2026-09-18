@@ -58,8 +58,62 @@ thenewstack.io/anthropic-pauses-claude-agent-sdk-subscription-change/
   released). Nothing Node ships in ODM; Node is a user-machine runtime
   prerequisite for Claude/Codex/Gemini, not for opencode.
 
+## Spike results (same day, live adapters)
+
+A ~110-line Python ndjson JSON-RPC probe against claude-agent-acp 0.79.0 and
+codex-acp 1.12.0 (npm `--prefix` installs; user logged in to both), plus
+`opencode acp` 2.0.6 for `initialize` only. Not yet tried: logged-out auth
+flows, gemini, cancel.
+
+- **Steering works on both.** `_session/steering` → `{"outcome":
+  "injected"}` at once; Claude acted on it at its next step (<1s), Codex
+  after the running command finished. The original `session/prompt`
+  resolved `end_turn` both times — #1114 did not reproduce. opencode does
+  not advertise it (queue client-side).
+- **Permissions are the first-run UX problem.** Claude starts in mode
+  `default` ("Manual"): *every* `odm …` shell command and file write raises
+  `session/request_permission` (options allow_once / allow_always "don't
+  ask again for `odm status *` commands" — per subcommand / reject). Codex
+  starts in `agent` ("Approve for me") and asked nothing. Mode ids are
+  per-agent; each mode carries `_meta.kind`: standard / plan / auto_review
+  / full_access.
+- **Config options**: `session/new` returns `configOptions` (select lists
+  with `category`: mode, model, thought_level, model_config). Model names
+  are display-grade ("Opus 5", "5.6 Terra (high)"; opencode's are
+  "provider/Model"); Claude's `default` value reads "Default
+  (recommended)". Codex also returns the older `models`/`modes` objects.
+- `agentInfo.title` is "Claude Agent" / "Codex"; opencode sends only
+  `name`. `_auth/status_update` notifications carry an account label
+  ("Claude Max", "ChatGPT Free") + email. `usage_update` carries context
+  used/size (+ cost on Claude); `session_info_update` a session title.
+- **Login and agent files are shared with the installed CLI**: both came
+  up authenticated with no `authenticate` call, and both read the cwd's
+  `CLAUDE.md` / `AGENTS.md`. `authMethods`: Claude `[]` when logged in,
+  Codex api-key + chat-gpt, opencode "run `opencode auth login` in the
+  terminal".
+- **`session/load` replays across an adapter restart** as ordinary
+  `session/update`s (user_message_chunk, agent chunks, tool calls) before
+  the response. A steered message replays as a user message, ordered
+  before the tool calls it interrupted.
+- **Embedded context works and is recognizable on replay**: a `resource`
+  block (`uri: odm://user-state`, JSON text) was read correctly by both;
+  it replays as extra user_message_chunks under the *same messageId* as
+  the typed text — the bare uri, then `<context ref="odm://…">…</context>`.
+- Tool calls: `title` is the command ("odm status"), `rawInput.command`
+  on Claude, `kind: execute`; edits carry `diff` content + `locations`.
+- Both adapters exit 0 on stdin close. Installs are big: 275 MB (claude),
+  341 MB (codex). The registry's opencode (1.18.31) is far behind the
+  installed CLI (2.0.6) — registry binaries are not worth downloading
+  when the agent is itself a CLI the user has.
+- **Rust crate**: `agent-client-protocol` 2.2.0 is a smol-family async
+  stack (async-io, async-process, blocking, futures-concurrency). The
+  types live separately in `agent-client-protocol-schema` (serde +
+  schemars). The wire is one JSON object per line, so a threaded
+  transport over the schema crate is small, and extension methods
+  (`_session/steering`, `_auth/status_update`) are just more strings.
+
 ## Design direction
 
 Moved to plans/agent-panel.md (agent always user-picked, no unasked npm
 downloads, TOML config in `~/.config/odm/config.toml` + `.odm/config.toml`,
-header-as-first-transcript-item, settings tab).
+header-as-first-transcript-item, settings tab), revised after the spike.
