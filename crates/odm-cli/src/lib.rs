@@ -133,12 +133,22 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         return follow_poll(&sock, &request, &mut std::io::stdout());
     }
 
-    let mut stream = UnixStream::connect(&sock).with_context(|| {
-        format!(
-            "no engine at {} — start one with: odm run {} --headless",
-            sock.display(),
-            project.display()
-        )
+    let mut stream = UnixStream::connect(&sock).map_err(|e| {
+        // A sandboxed agent shell (Codex's, say) denies the connect; telling
+        // it "no engine" sends it off to start a second one.
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            anyhow::anyhow!(
+                "connecting to the engine at {} was denied ({e}) — a sandbox is \
+                 blocking the socket; rerun this command outside it",
+                sock.display()
+            )
+        } else {
+            anyhow::anyhow!(
+                "no engine at {} — start one with: odm run {} --headless",
+                sock.display(),
+                project.display()
+            )
+        }
     })?;
 
     let mut reader = BufReader::new(stream.try_clone()?);

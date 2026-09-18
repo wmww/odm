@@ -105,6 +105,23 @@ flows, gemini, cancel.
   341 MB (codex). The registry's opencode (1.18.31) is far behind the
   installed CLI (2.0.6) — registry binaries are not worth downloading
   when the agent is itself a CLI the user has.
+- **Allow rules can be handed to Claude per session**: `session/new`
+  `_meta.claudeCode.options` is spread into the Agent SDK options.
+  `allowedTools: ["Bash(odm:*)", "Edit(./**)"]` → `odm status` and an
+  in-project Write ran unasked; `odm status; touch x` and a Write outside
+  cwd still asked (Claude does the shell parsing). `settingSources` is
+  user+project+local, so `.claude/settings*.json` rules apply too, and
+  `CLAUDE_CODE_EXECUTABLE` points the adapter at another `claude` binary.
+- **Codex's sandbox blocks the engine socket.** In modes `agent` (default,
+  "Approve for me": a model "Guardian Review" decides escalations — it let
+  an explicitly requested write to `~` through unasked) and `read-only`
+  ("Ask for approval": in-project edits *do* ask), `odm status` fails to
+  connect with the engine up; `agent-full-access` works. Also: a reject
+  option of kind `reject_once` named "No, and tell Codex what to do
+  differently" ends the turn `cancelled`.
+- Unix socket paths cap at ~108 bytes (`SUN_LEN`): the engine refuses to
+  start in a deeply nested project dir ("path must be shorter than
+  SUN_LEN").
 - **Rust crate**: `agent-client-protocol` 2.2.0 is a smol-family async
   stack (async-io, async-process, blocking, futures-concurrency). The
   types live separately in `agent-client-protocol-schema` (serde +

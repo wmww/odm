@@ -26,7 +26,7 @@ changed is marked **(review)**.
 - Config is TOML, general-purpose (agent is just the first section):
   - `~/.config/odm/config.toml` (XDG) — system. `[agent] default = "<id>"`,
     `[agent.custom.<id>] command = [...]`, `env = {…}`,
-    `[agent.mode] <id> = "<mode id>"` (below).
+    `[agent.mode] <id> = "<mode id>"` and `quiet_odm` (below).
   - `.odm/config.toml` — project-local. `[agent] use = "<id>"` **and
     nothing else (review)**: `.odm/` travels with a copied or zipped
     project, so a custom `command` there *is* a project file choosing a
@@ -39,15 +39,44 @@ changed is marked **(review)**.
     error: the system file outlives any one ODM version, and an older ODM
     must still start against a newer file. Project-authored files
     (`odm.toml`) keep the hard error.
-- **(review) Permission mode is a persisted setting.** Claude starts every
-  session in "Manual", where each `odm inspect` is a permission prompt;
-  left alone, the panel is unusable on first run. Mode ids are per-agent,
-  so: `[agent.mode] claude-acp = "acceptEdits"`, re-applied with
-  `session/set_config_option` after every session new/load. Changing the
-  mode in the panel writes it. No ODM-chosen default: unset = the agent's
-  own. The permission question shows all the agent's options including
-  allow_always (Claude: "don't ask again for `odm status *`"), which is
-  the agent's to persist. ODM never auto-answers a permission request.
+- **Permissions: `odm` commands and in-project edits run unasked;
+  everything else asks** (user, 2026-09-18). ODM never parses a shell
+  string and never answers a permission request itself — it hands the
+  *agent* allow rules and the agent's own parser applies them. Each
+  built-in table entry carries a "quiet ODM work" recipe; agents without
+  one just ask (Custom: whatever the user configured).
+  - **claude-acp — verified.** `session/new`
+    `_meta.claudeCode.options.allowedTools = ["Bash(odm:*)",
+    "Edit(./**)"]` (the adapter spreads `options` into the Agent SDK's).
+    Observed: `odm status` and an in-project Write ran with no request;
+    `odm status; touch pwned.txt` and a Write outside cwd both asked.
+    Nothing is written to the project or to `~/.claude`. Mode stays the
+    agent's default ("Manual").
+  - **codex-acp — not solved, and worse than a prompt problem.** Its
+    sandboxed modes (`agent`, the default, and `read-only`) **block the
+    CLI's connect to `.odm/engine.sock`**: `odm status` fails inside the
+    sandbox with the engine up; only `agent-full-access` works. In-project
+    edits are already unasked in `agent`. Candidates, to try in phase 2's
+    real-adapter lane: a Codex exec-policy rule allowing the `odm` prefix
+    to run unsandboxed (passed per session if codex-acp takes config
+    overrides, else the settings tab offers to write `~/.codex/rules/` —
+    a user-level file, with a question box); failing both, the entry says
+    "needs Full access" in the settings tab. The CLI now says "a sandbox
+    is blocking the socket; rerun outside it" instead of "no engine"
+    (verified: Codex reads it and reports the real cause — but it did not
+    ask to escalate by itself, so this alone is not the fix).
+  - opencode, gemini: recipes unknown; look when wiring them.
+  - The settings tab shows the recipe as one check box, "Run odm commands
+    and project edits without asking" (on by default; `[agent]
+    quiet_odm = false` in the system file turns it off).
+- **Mode is a persisted setting too**, for users who want more or less
+  than that: mode ids are per-agent, so `[agent.mode] claude-acp =
+  "acceptEdits"`, re-applied with `session/set_config_option` after every
+  session new/load. Changing the mode in the panel writes it. Unset = the
+  agent's own default.
+- **A pending permission request is visible from anywhere**: lamp and
+  status line read "Waiting for you" (not the working blink), since a
+  blocked turn otherwise looks like a busy one.
 - State is JSON in `.odm/` (`agent.json`): last session id, last-known
   agent title/version/model (for the header and placeholder before spawn).
 - **(review) Only the two npm adapters are installed by ODM**
@@ -90,6 +119,7 @@ Left, fold into phase 2's real-adapter lane rather than gate on:
 2. `session/cancel` mid-tool-call: does the prompt resolve `cancelled`,
    how fast, are child processes left behind.
 3. gemini `--acp` (not installed here): initialize + one prompt.
+4. Codex: a way to let `odm` through its sandbox (permissions decision).
 
 ## Phase 1 — config
 
@@ -233,10 +263,9 @@ conclusion); fold this plan + the research note into them.
 
 ## Open questions
 
-- Is per-command permission prompting tolerable once the mode setting
-  exists? If users sit in Manual and drown, the candidates are a
-  New-Project-authored agent allow rule for `odm` (agent-specific files)
-  or a first-run hint pointing at the mode selector. Judge in use.
+- Codex + the engine socket (see the permissions decision). If no
+  per-session rule works, is "Codex needs Full access" acceptable, or
+  does the CLI need a transport a sandbox lets through?
 - Context meter: `usage_update` gives used/size (and cost on Claude) —
   cheap to show in the header; not planned until wanted.
 - Transcript persistence for agents without `session/load`: none (fresh
