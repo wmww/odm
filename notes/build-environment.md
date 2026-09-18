@@ -1,7 +1,7 @@
 # Build environment
 
-Machine facts: 24 cores, Radeon GPU (no lavapipe installed — golden PNG
-diffs would be CI-only), cmake 4.4 + ninja, node 26.4, rustc 1.93
+Machine facts: 24 cores, Radeon GPU (no lavapipe installed), cmake 4.4 +
+ninja, node 26.4, rustc 1.93
 (edition 2024), network available. Clean Manifold (clone + cmake) build ~37s.
 
 ## Disk: where debug-build bytes actually go

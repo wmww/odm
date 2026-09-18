@@ -1010,15 +1010,17 @@ notes/spike-findings.md "Snapshot count/concurrency".
   Solid) — exact, but costs a mesh copy per distinct transform.
 - IR-hash goldens (`odm-build/tests/examples.rs`): regenerate on V8/three/
   Manifold upgrades (run the test, copy printed values).
-- Golden PNGs: only meaningful per-adapter; plan was lavapipe+pinned-Mesa in
-  CI — CI deferred by user, so none exist yet.
+- Golden PNGs: only meaningful per-adapter (would need lavapipe + pinned
+  Mesa on one dedicated machine); none exist.
 - Version pins that move together: egui/eframe + wgpu (egui pins a wgpu
   major); deno_core + deno_error + v8. manifold-csg pinned =0.3.3.
 
 ## Testing
 
-`cargo test --workspace` before every commit is the gate; there is no CI,
-by decision. It must stay fast (a few seconds) and honest.
+`cargo test --workspace` before every commit is the gate. There is no CI
+and none is planned (user decision, reaffirmed 2026-09-17): releases are
+cut by a script on the dev machine (`plans/release.md`). The suite must
+stay fast (a few seconds) and honest.
 
 ### What earns a test here
 
@@ -1046,7 +1048,7 @@ arithmetic), never copied from engine output.
 the `odm` binary or the JS API tests what people observe; a unit test of a
 helper tests that the code does what it does.
 
-Deliberately not tested: CI itself, pixel and hash goldens (renders differ
+Deliberately not tested: pixel and hash goldens (renders differ
 across drivers, Manifold upgrades change triangulation, and a golden's
 failure never points at a fix — the analytic render assertions are the
 right level), UI placement/layout, exact CLI or error wording beyond the

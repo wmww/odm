@@ -58,8 +58,9 @@ Design notes and decisions live in `notes/`; known issues in `issues/`.
 
 ## Notes
 
-- First build clones the Manifold C++ sources (network needed once); see
-  `issues/hermetic-manifold-build.md`.
+- First build clones the Manifold C++ sources (network needed once;
+  `MANIFOLD_CSG_LIB_DIR` points manifold-csg-sys at a prebuilt library
+  instead).
 - Determinism: builds are bit-reproducible within a process and across
   engines on the same platform (frozen Date, seeded Math.random, always-on
   Manifold determinism, content-addressed everything).

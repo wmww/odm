@@ -35,17 +35,18 @@ unless marked otherwise.
 - CLI must offer structured inspection (tree, bounds, measurements, raycasts)
   — renders alone are weak feedback for LLMs (bad at pixel-precise reading).
 - API design iterates after things are built; no freeze soon.
-- License constraint: MIT-or-similar permissive only.
+- Dependency license constraint: MIT-or-similar permissive only (ODM's own
+  release license is a separate decision — see Licensing below).
 - Memoization: lookup by (code hash, args hash) + Salsa-style validation of
   recorded deps — deps can't be part of the key since they're only known
   after running. Engine queries are pure functions of content-addressed
   inputs, so recorded input hashes suffice for validation (no query replay).
 - Golden PNGs are lavapipe-only artifacts with pinned Mesa — pixel identity
   is per-adapter (real-GPU vs lavapipe or across Mesa versions differs).
-  CI itself deferred by user, so none exist yet.
+  None exist; no CI exists or is planned (see Testing in architecture.md).
 - User→agent channel post-MVP, except the viewer-selection CLI query.
-- Manifold's build-time network clone accepted
-  (issues/hermetic-manifold-build.md).
+- Manifold's build-time network clone accepted (manifold-csg-sys clones a
+  pinned tag; `MANIFOLD_CSG_LIB_DIR` is the offline escape hatch).
 
 ## User state: sent, not sampled (user directive, 2026-08-17)
 
@@ -140,12 +141,22 @@ pixel-identical for free.
   from-scratch build of its generation; coarse invalidation is always legal.
   Efficiency comes from content-addressed early cutoff, not cleverness.
 
-## Licensing (checked 2026-07)
+## Licensing
 
-Whole stack is permissive, MIT-product-compatible: egui/eframe, wgpu, tokio,
-winit, three.js, rusty_v8, deno_core, V8, Manifold + manifold-csg. Flags:
-fidget is MPL-2.0 (file-level copyleft — usable as a dep, note if adopted);
-OCCT is LGPL-2.1 (another reason it stays out).
+Dependencies (checked 2026-07): whole stack is permissive: egui/eframe,
+wgpu, tokio, winit, three.js, rusty_v8, deno_core, V8, Manifold +
+manifold-csg. Flags: fidget is MPL-2.0 (file-level copyleft — usable as a
+dep, note if adopted); OCCT is LGPL-2.1 (another reason it stays out).
+Nearly all of them require their notices to ship with binaries.
+
+ODM's own release (user, 2026-09-17, probable): the repo goes public under
+a **copyleft** license at first release, with rights retained by not
+accepting PRs, or via a basic CLA. So release = one repo made public +
+GitHub Releases on it; no separate distribution channel. The `license =
+"MIT"` in the Cargo manifests predates this and is wrong until changed
+(`plans/release.md`). Open question there: exports embed ODM's web
+runtime, so copyleft needs an output exception or a permissive license on
+the exported parts.
 
 ## egui text/i18n limits (checked 2026-07)
 
