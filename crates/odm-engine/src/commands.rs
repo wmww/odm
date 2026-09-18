@@ -3,11 +3,12 @@
 
 use crate::feedback::Item;
 use crate::requests::{
-    self, FeedbackReq, Look, Ray, RenderFrame, RenderReq, Request, SayReq, ViewSel,
+    self, ExportReq, FeedbackReq, Look, Ray, RenderFrame, RenderReq, Request, SayReq, ViewSel,
 };
 use crate::scene;
 use crate::server::Conn;
 use crate::state::{ActivityKind, EngineState, PollOutcome, Published};
+use crate::stl::{StlOptions, export_stl};
 use odm_build::{
     BuildFailure, FailureKind, InputReport, PassResult, SyncResult, View, check_input_names,
 };
@@ -149,6 +150,7 @@ impl EngineState {
             Request::Render(..) => Some("render"),
             Request::Raycast(_) => Some("raycast"),
             Request::Clearance(_) => Some("clearance"),
+            Request::Export(_) => Some("export"),
         };
         let out = self.dispatch_inner(req, conn);
         if let Some(verb) = verb {
@@ -205,6 +207,7 @@ impl EngineState {
                 };
                 self.cmd_clearance(view, &r.pairs, r.stats)
             }
+            Request::Export(r) => self.cmd_export(r),
         }
     }
 
@@ -240,6 +243,7 @@ impl EngineState {
         let mut o = Map::new();
         o.insert("project".into(), json!(self.project().display().to_string()));
         o.insert("name".into(), json!(sync.snapshot.marker.as_ref().map(|m| m.name.clone())));
+        o.insert("units".into(), json!(project_units(&sync).as_str()));
         o.insert("generation".into(), json!(sync.generation.0));
         o.insert("files".into(), json!(files));
         // The default view target (`root.js`) is a convention, not a
@@ -931,6 +935,50 @@ impl EngineState {
         Ok(view_response(&view, &result, &report, stats, o))
     }
 
+    /// Write the view's solids to `out` for printing. The format is the
+    /// extension's; STL is the only one so far.
+    fn cmd_export(&self, r: ExportReq) -> Result<Value, CmdError> {
+        let out = PathBuf::from(&r.out);
+        self.check_out_path(&out)?;
+        let ext = out.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
+        if ext.as_deref() != Some("stl") {
+            return Err(CmdError::bad_request(format!(
+                "cannot tell what format to export from {:?}; supported: .stl",
+                r.out
+            )));
+        }
+        let req = ViewReq { path: r.path, inputs: r.inputs, preset: r.preset, view: r.view };
+        let (sync, view, result, report, _pin) = self.query_view(&req)?;
+        let root = self.root_node(&result)?;
+        let opts = StlOptions {
+            units: r.units.unwrap_or_else(|| project_units(&sync)),
+            union: r.union.unwrap_or(true),
+        };
+        let engine = self.build_engine();
+        let label = stl_label(self.project(), sync.snapshot.marker.as_ref(), &view.path);
+        let stl = export_stl(&engine.store, &engine.kernel, &root, &label, &out, &opts, None)
+            .map_err(|e| CmdError::new("export", e))?;
+        let mut o = Map::new();
+        o.insert("path".into(), json!(stl.path.display().to_string()));
+        o.insert("units".into(), json!(stl.units.as_str()));
+        o.insert("union".into(), json!(stl.union));
+        o.insert("size_mm".into(), json!(stl.size_mm));
+        o.insert("volume_mm3".into(), json!(stl.volume_mm3));
+        o.insert("tris".into(), json!(stl.tris));
+        o.insert("bodies".into(), json!(stl.bodies));
+        let mut response = view_response(&view, &result, &report, r.stats, o);
+        // The export's warnings join the view's (input lints).
+        if !stl.warnings.is_empty() {
+            let all = response
+                .as_object_mut()
+                .unwrap()
+                .entry("warnings")
+                .or_insert_with(|| json!([]));
+            all.as_array_mut().unwrap().extend(stl.warnings.into_iter().map(Value::String));
+        }
+        Ok(response)
+    }
+
     /// Block until the user sends something. Exiting is the delivery
     /// mechanism: agent harnesses only look at a background command once it
     /// has ended, so poll takes the whole queue in one go and returns.
@@ -1067,6 +1115,24 @@ impl EngineState {
             _ => Err(CmdError::new("internal", "scene root missing from store")),
         }
     }
+}
+
+/// The project's declared unit; mm when it has no marker.
+pub(crate) fn project_units(sync: &SyncResult) -> odm_build::Units {
+    sync.snapshot.marker.as_ref().map(|m| m.units).unwrap_or_default()
+}
+
+/// What an STL's header says it is: `<project> <view path>`.
+pub(crate) fn stl_label(
+    project: &Path,
+    marker: Option<&odm_build::ProjectMarker>,
+    path: &str,
+) -> String {
+    let name = match marker {
+        Some(m) => m.name.clone(),
+        None => project.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+    };
+    format!("{name} {path}")
 }
 
 /// One log line for a finished command (see `dispatch`).

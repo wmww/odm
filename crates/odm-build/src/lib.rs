@@ -32,6 +32,6 @@ pub use scheduler::{
     SyncResult, View,
 };
 pub use sources::{
-    ENGINE_VERSION, EXPORT_MARKER, ProjectMarker, ProjectSnapshot, ScanError, Source,
+    ENGINE_VERSION, EXPORT_MARKER, ProjectMarker, ProjectSnapshot, ScanError, Source, Units,
     create_project, is_project, read_marker, scan_project, sync_marker, sync_marker_as,
 };

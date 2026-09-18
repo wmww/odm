@@ -4,8 +4,10 @@
 
 - **Z-up, right-handed.** The ground grid is the XY plane; "up" is +Z.
 - **Radians everywhere** (like three.js); `odm.deg(90)` converts.
-- **Units are yours**: pick one (mm, m, …) and stay consistent; the
-  engine doesn't care.
+- **The project declares its unit**: `units` in `odm.toml` — `mm`
+  (the default when absent), `m`, `in` or `ft`; `odm status` reports
+  it. Model every length in it. Builds never read it, but exports for
+  printing rely on it (`odm docs cli`, "Exporting for printing").
 - **Everything is immutable**: transforms, `color`, `name`, and CSG all
   return new values.
 - Geometry lives engine-side, content-addressed; JS holds opaque

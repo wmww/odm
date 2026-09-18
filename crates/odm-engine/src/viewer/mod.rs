@@ -856,8 +856,8 @@ impl ViewerApp {
                 new::Outcome::Cancelled => {}
                 // Author it, then serve it: a new project is only worth
                 // making if we can go straight into it.
-                new::Outcome::Create { path, name } => {
-                    if let Err(e) = odm_build::create_project(&path, &name) {
+                new::Outcome::Create { path, name, units } => {
+                    if let Err(e) = odm_build::create_project(&path, &name, units) {
                         dialog.report(e.to_string());
                         self.dialog = Some(Dialog::New(dialog));
                     } else if let Err(e) = self.open_project(&path, ctx) {

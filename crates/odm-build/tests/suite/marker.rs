@@ -44,6 +44,15 @@ fn marker_parses_and_rejects_unknown_keys() {
     std::fs::write(dir.path().join("odm.toml"), "name = \"widget\"\nengine = 0\n").unwrap();
     let m = read_marker(dir.path()).unwrap().unwrap();
     assert_eq!((m.name.as_str(), m.engine), ("widget", 0));
+    // No `units` key = millimetres.
+    assert_eq!(m.units, odm_build::Units::Mm);
+
+    std::fs::write(dir.path().join("odm.toml"), "name = \"w\"\nengine = 0\nunits = \"ft\"\n").unwrap();
+    assert_eq!(read_marker(dir.path()).unwrap().unwrap().units, odm_build::Units::Ft);
+
+    std::fs::write(dir.path().join("odm.toml"), "name = \"w\"\nengine = 0\nunits = \"cm\"\n").unwrap();
+    let err = read_marker(dir.path()).unwrap_err().to_string();
+    assert!(["`mm`", "`m`", "`in`", "`ft`"].iter().all(|u| err.contains(u)), "{err}");
 
     std::fs::write(dir.path().join("odm.toml"), "name = \"w\"\nengine = 0\nfancy = 1\n").unwrap();
     let err = read_marker(dir.path()).unwrap_err().to_string();

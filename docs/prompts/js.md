@@ -143,6 +143,8 @@ Three's generators are Y-up; ODM's primitives are Z-up.
 
 - **Z-up**, right-handed. The ground grid is the XY plane.
 - **Radians** everywhere (like three.js). `odm.deg(90)` converts.
+- **Lengths are in the project's unit**: `units` in `odm.toml` (`mm`
+  when absent; `odm status` reports it). Exports for printing rely on it.
 - Solids are **immutable**: every method returns a new value.
 - Geometry lives engine-side; JS holds opaque handles. Don't try to read
   vertex data — use queries.

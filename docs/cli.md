@@ -61,7 +61,7 @@ they never change what the viewer shows.
 ## Commands
 
 <!--- BEGIN GENERATED COMMAND REFERENCE --->
-Request fields every view-targeting command (inspect, render, raycast, clearance) shares:
+Request fields every view-targeting command (inspect, render, raycast, clearance, export) shares:
 
 - `path` (string) — the doohickey to build (default `root.js`)
 - `inputs` (object) — input values by name, e.g. `{"t": 1.5}`; plain inputs of the target become view args, everything else a view-level cascade value — a name nothing reads is an error listing the settable inputs
@@ -123,6 +123,14 @@ assembly check: per pair of nodes, the signed distance between them (positive = 
 
 JS twin: `a.clearance(b)` on Solids — same query; the numeric fields only (in JS you hold the two solids, so there is nothing to name), points as Vector3s; the CLI addresses nodes and maps over `pairs`.
 
+### export
+
+write the view's solids to a file for 3D printing — binary STL, in millimetres, world coordinates as modeled (Z-up, no recentering). Answers the file's `size_mm`, `volume_mm3`, `tris`, `bodies`, and `warnings` worth reading (loose bodies, a size that suggests the wrong unit).
+
+- `out` (string) — required: the file to write, replaced atomically; the extension picks the format — `.stl` is the only one today
+- `units` (string) — what one model unit is — `mm`, `m`, `in` or `ft`; default the project's (`units` in odm.toml, itself default `mm`; `status` reports it). The file is always millimetres
+- `union` (bool) — default true: fuse every solid into one valid manifold — overlaps merge, disjoint parts stay separate bodies. `false` writes each solid as-is (exact, but overlapping parts self-intersect)
+
 ### poll
 
 wait for messages the user typed in the viewer; every response also carries `builds` (per-slot build state) and `health` (per-file failures from the background sweep).
@@ -169,7 +177,8 @@ The one command that never builds: it reports each view slot's
 error message), so it still answers when the project is broken.
 `stale: true` on a slot means a newer generation's answer is queued or
 building — the value shown is the last one published, never masked by
-an in-progress build. Also there: the project path and name, the
+an in-progress build. Also there: the project path, name and `units`
+(what one model unit is, from `odm.toml`; `mm` when it doesn't say), the
 doohickey file list, whether `root.js` exists, each slot's path and
 inputs, which tab is the user's active one, their current `selection`
 (on the active slot), the `generation` — an internal counter that ticks
@@ -393,6 +402,35 @@ apart just to make the sign stable.
 
 One command checks a whole assembly's contact pairs after an edit, and
 `inputs` lets you check at animation extremes.
+
+## Exporting for printing
+
+```
+odm export '{"out": "bracket.stl"}'
+odm export '{"out": "arm.stl", "path": "parts/arm.js", "inputs": {"t": 0.5}}'
+```
+
+`export` writes every solid of the view — the whole scene, translucent
+parts included; color is ignored — as one binary STL. To print one part
+of an assembly, export that part's doohickey (`path`). The extension of
+`out` picks the format; `.stl` is the only one today.
+
+- **Millimetres.** STL carries no unit and slicers assume mm, so the
+  file is converted from the project's unit (`units` in `odm.toml`: `mm`
+  — the default —, `m`, `in` or `ft`). `"units"` in the request overrides
+  it for one export. Coordinates are otherwise exactly as modeled: Z-up,
+  no recentering, so parts exported separately stay registered.
+- **`union`** (default `true`) fuses all solids into one valid manifold:
+  overlapping parts merge, disjoint ones stay separate bodies. `false`
+  writes each solid as-is — exact, but overlapping parts self-intersect,
+  which some slicers mishandle.
+
+The response reports what was written: `path`, the resolved `units` and
+`union`, `size_mm`, `volume_mm3`, `tris`, `bodies`. Read the `warnings`:
+more than one body means loose parts on the print bed, and a longest
+side under 1 mm or over 2000 mm almost always means the wrong unit.
+The file is replaced atomically, and the same view and options always
+produce the same bytes.
 
 ## Talking with the user
 

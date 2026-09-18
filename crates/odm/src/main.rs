@@ -62,7 +62,11 @@ fn dispatch(args: &[String]) -> anyhow::Result<i32> {
             Ok(2)
         }
         Some("run") => run_engine(&args[1..]),
-        Some("export") => export_site(&args[1..]),
+        // Two exports share the word: `--web` (flags) is the standalone site
+        // export; a JSON body is the engine's `export` command (STL).
+        Some("export") if args.get(1).is_none_or(|a| a.starts_with("--")) => {
+            export_site(&args[1..])
+        }
         // The same string every feedback report records about the build it
         // was filed from, so a report and a terminal agree.
         Some("--version" | "-V" | "version") => {
@@ -119,7 +123,10 @@ fn export_site(args: &[String]) -> anyhow::Result<i32> {
         }
     }
     if !web {
-        bail!("export needs --web <out-dir> (the only export target so far)");
+        bail!(
+            "export needs --web <out-dir> (a static web viewer), or a JSON request for a \
+             running engine: odm export '{{\"out\": \"part.stl\"}}' (see `odm docs cli`)"
+        );
     }
     let out = out.expect("set with --web");
     // Same resolution as `run`: the dir named, or cwd — never an ancestor.

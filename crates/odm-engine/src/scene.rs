@@ -615,6 +615,15 @@ fn collect_meshes(
     Some(())
 }
 
+/// Every solid under `root`, with its world transform — what an export
+/// writes. Color and opacity play no part: translucent parts are solids too.
+pub fn scene_solids(store: &Store, root: &Node) -> Result<Vec<(Hash, Transform)>, String> {
+    let mut out = Vec::new();
+    collect_meshes(store, root, "", &odm_render::math::IDENTITY, None, &mut out)
+        .ok_or("scene references a node missing from the store")?;
+    Ok(out.into_iter().map(|(h, t, _)| (h, t)).collect())
+}
+
 /// One `clearance` pair, with kernel operand indices mapped back to labels.
 #[derive(Debug)]
 pub struct Clearance {

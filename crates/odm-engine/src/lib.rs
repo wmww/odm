@@ -12,6 +12,7 @@ mod scene;
 mod server;
 mod session;
 mod state;
+mod stl;
 mod viewer;
 mod watcher;
 

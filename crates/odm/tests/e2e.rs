@@ -7,7 +7,7 @@
 //! a fix command. Wording is guarded elsewhere (`cli_reference_is_current`
 //! diffs docs/cli.md against the parser), so nothing here pins prose.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -387,6 +387,50 @@ fn a_second_engine_refuses_and_leaves_the_first_serving() {
     assert!(stderr.contains("already running"), "{stderr}");
 
     odm(dir.path(), &["status"]).ok_json();
+}
+
+/// `odm export '{…}'` is the engine's STL export; `odm export --web` stays
+/// the standalone site export. Without `--project`, as a user types it.
+#[test]
+fn export_writes_an_stl_in_the_projects_units() {
+    let dir = project(&[("root.js", BOX10)]);
+    write(dir.path(), "odm.toml", "name = \"e2e\"\nengine = 0\nunits = \"in\"\n");
+    let _engine = Engine::start(dir.path());
+    let run = |args: &[&str]| {
+        let out = Command::new(BIN).args(args).current_dir(dir.path()).output().expect("run odm");
+        Out {
+            code: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    };
+
+    assert_eq!(odm(dir.path(), &["status"]).ok_json()["units"], "in");
+    // `out` is relative to the CLI's cwd; the unit is the project's.
+    let v = run(&["export", r#"{"out": "part.stl"}"#]).ok_json();
+    assert_eq!((&v["units"], &v["union"], &v["bodies"], &v["tris"]), (&json!("in"), &json!(true), &json!(1), &json!(12)));
+    assert_eq!(v["size_mm"], json!([254.0, 254.0, 254.0]));
+    let file = std::fs::read(dir.path().join("part.stl")).unwrap();
+    assert_eq!(file.len(), 84 + 12 * 50);
+    assert!(file.starts_with(b"ODM e2e root.js\0"));
+
+    // A request's `units` beats the project's.
+    let v = run(&["export", r#"{"out": "part.stl", "units": "mm", "union": false}"#]).ok_json();
+    assert_eq!((&v["units"], &v["union"]), (&json!("mm"), &json!(false)));
+    assert_eq!(v["size_mm"], json!([10.0, 10.0, 10.0]));
+
+    let err = run(&["export", r#"{"out": "part.obj"}"#]);
+    assert_ne!(err.code, 0);
+    assert!(err.stdout.contains(".stl"), "{}", err.stdout);
+    let err = run(&["export", r#"{"out": "root.js"}"#]);
+    assert_ne!(err.code, 0);
+    assert_eq!(std::fs::read_to_string(dir.path().join("root.js")).unwrap(), BOX10);
+
+    // Flags still mean the web export, which has its own usage error.
+    let web = run(&["export", "--nonsense"]);
+    assert!(web.stderr.contains("unknown option --nonsense for export"), "{}", web.stderr);
+    let bare = run(&["export"]);
+    assert!(bare.stderr.contains("--web") && bare.stderr.contains("part.stl"), "{}", bare.stderr);
 }
 
 #[test]

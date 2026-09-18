@@ -9,6 +9,7 @@ use super::browse::Browser;
 use crate::session::is_project;
 use crate::theme;
 use eframe::egui;
+use odm_build::Units;
 use std::path::{Path, PathBuf};
 
 /// Fixed dialog size — see `theme::dialog` on why the width is fixed.
@@ -18,26 +19,28 @@ pub enum Outcome {
     /// Still open.
     Idle,
     Cancelled,
-    /// Create a project at `path` named `name`. The folder may already
-    /// exist; nothing in it is written over.
-    Create { path: PathBuf, name: String },
+    /// Create a project at `path` named `name`, modeled in `units`. The
+    /// folder may already exist; nothing in it is written over.
+    Create { path: PathBuf, name: String, units: Units },
 }
 
 pub struct NewDialog {
     browser: Browser,
     /// The "Name:" field: the folder to create in the browsed directory.
     name: String,
+    /// What one model unit is — recorded in odm.toml, used by exports.
+    units: Units,
 }
 
 impl NewDialog {
     /// Offer to make the new project a sibling of `current`, the one open.
     pub fn beside(current: &Path) -> NewDialog {
-        NewDialog { browser: Browser::beside(current), name: String::new() }
+        NewDialog { browser: Browser::beside(current), name: String::new(), units: Units::default() }
     }
 
     /// Offer to make it here, for when there is no project to sit beside.
     pub fn browse(dir: &Path) -> NewDialog {
-        NewDialog { browser: Browser::at(dir), name: String::new() }
+        NewDialog { browser: Browser::at(dir), name: String::new(), units: Units::default() }
     }
 
     /// Show why the engine turned the last pick down.
@@ -63,6 +66,13 @@ impl NewDialog {
             let width = ui.available_width() - 4.0;
             theme::text_edit(ui, "new-name", &mut self.name, width, "empty: use this folder");
         });
+        ui.add_space(3.0);
+        ui.horizontal(|ui| {
+            ui.label("Units:");
+            if let Some(units) = units_ui(ui, "new-units", self.units, None) {
+                self.units = units;
+            }
+        });
         self.browser.error_ui(ui);
 
         ui.add_space(5.0);
@@ -72,7 +82,7 @@ impl NewDialog {
             ui.add_space(ui.available_width() - 130.0);
             if theme::button(ui, "Create").clicked() || confirm {
                 match self.resolve() {
-                    Ok((path, name)) => outcome = Outcome::Create { path, name },
+                    Ok((path, name)) => outcome = Outcome::Create { path, name, units: self.units },
                     Err(e) => self.browser.report(e),
                 }
             }
@@ -132,6 +142,32 @@ impl NewDialog {
     }
 }
 
+/// The four units as a row of radios; the one clicked, if any. `project`
+/// marks the unit the open project declares (the export dialog's default).
+pub fn units_ui(
+    ui: &mut egui::Ui,
+    id: &str,
+    current: Units,
+    project: Option<Units>,
+) -> Option<Units> {
+    let mut picked = None;
+    for units in Units::ALL {
+        let text = match project == Some(units) {
+            true => format!("{units} (project)"),
+            false => units.to_string(),
+        };
+        let font = egui::FontId::proportional(theme::UI_SIZE);
+        let label = ui.painter().layout_no_wrap(text.clone(), font, theme::TEXT);
+        let width = theme::RADIO + 9.0 + label.size().x;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 18.0), egui::Sense::hover());
+        if theme::radio(ui, (id, units.as_str()), rect, units == current, &text).clicked() {
+            picked = Some(units);
+        }
+        ui.add_space(6.0);
+    }
+    picked
+}
+
 fn nested() -> String {
     "a project cannot live inside another project".to_owned()
 }
@@ -150,6 +186,13 @@ mod tests {
 
     fn mark_project(dir: &Path) {
         std::fs::write(dir.join("odm.toml"), "name = \"t\"\nengine = 0\n").unwrap();
+    }
+
+    /// Millimetres unless the user says otherwise.
+    #[test]
+    fn units_default_to_mm() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(dialog(dir.path(), "widget").units, odm_build::Units::Mm);
     }
 
     #[test]

@@ -118,6 +118,16 @@ pub struct Clearance {
     pub overlapping: Vec<(usize, usize)>,
 }
 
+/// One solid of an export (`Kernel::export_solids`), in the operands'
+/// transformed space.
+#[derive(Clone, Debug)]
+pub struct ExportSolid {
+    pub mesh: Mesh,
+    pub volume: f64,
+    /// Disconnected bodies in the solid.
+    pub bodies: usize,
+}
+
 pub struct Kernel {
     store: Arc<Store>,
     cache: Mutex<HashMap<Hash, Arc<Manifold>>>,
@@ -281,6 +291,43 @@ impl Kernel {
         self.intern(composed.hull(), cancel)
     }
 
+    /// The (transformed) operands as meshes for a file export: fused into one
+    /// solid when `union`, else one per operand, in order. Nothing is put in
+    /// the store — the meshes are returned — so this needs no gc quiescence
+    /// and leaves no garbage; the caller keeps the operands alive.
+    pub fn export_solids(
+        &self,
+        operands: &[(Hash, Transform)],
+        union: bool,
+        cancel: Option<&CancelToken>,
+    ) -> Result<Vec<ExportSolid>> {
+        let mut solids = Vec::with_capacity(operands.len());
+        for (h, t) in operands {
+            solids.push(self.transformed_manifold(*h, *t)?);
+        }
+        if union && !solids.is_empty() {
+            let mut iter = solids.into_iter();
+            let mut acc = iter.next().unwrap();
+            for next in iter {
+                acc = acc.boolean(&next, OpType::Add);
+            }
+            solids = vec![acc];
+        }
+        solids
+            .into_iter()
+            .map(|m| {
+                let m = self.evaluated(m, cancel)?;
+                let mesh = mesh_of(&m)?;
+                let (volume, bodies) = (m.volume(), m.decompose().len());
+                // A cancel landing mid-extraction may truncate the mesh.
+                if cancel.is_some_and(|t| t.is_cancelled()) {
+                    return Err(KernelError::Cancelled);
+                }
+                Ok(ExportSolid { mesh, volume, bodies })
+            })
+            .collect()
+    }
+
     // --- queries (pure functions of the input hash) ---
 
     pub fn bounds(&self, h: Hash) -> Result<Option<Bounds>> {
@@ -405,18 +452,12 @@ impl Kernel {
         let evaluated = self.evaluated(m, cancel)?;
         // The f64 extraction: Manifold computes in f64, and the store must
         // keep those bits (a f32 round-trip re-welds every op boundary).
-        let gl = evaluated.to_meshgl64();
+        let mesh = mesh_of(&evaluated)?;
         // A cancel landing between status() and to_meshgl64() may truncate
         // the mesh; don't intern junk into the content store.
         if cancel.is_some_and(|t| t.is_cancelled()) {
             return Err(KernelError::Cancelled);
         }
-        let indices = gl
-            .tri_verts()
-            .into_iter()
-            .map(|i| u32::try_from(i).map_err(|_| KernelError::Other(format!("vertex index {i} exceeds u32"))))
-            .collect::<Result<Vec<u32>>>()?;
-        let mesh = Mesh { positions: gl.vert_properties(), indices };
         let hash = self.store.put(Object::Mesh(Arc::new(mesh)));
         self.cache.lock().unwrap().insert(hash, Arc::new(evaluated));
         Ok(hash)
@@ -478,6 +519,17 @@ impl Kernel {
         let mut bvhs = self.bvhs.lock().unwrap();
         bvhs.retain(|h, _| self.store.contains(*h));
     }
+}
+
+/// An evaluated Manifold's mesh, f64 positions kept.
+fn mesh_of(m: &Manifold) -> Result<Mesh> {
+    let gl = m.to_meshgl64();
+    let indices = gl
+        .tri_verts()
+        .into_iter()
+        .map(|i| u32::try_from(i).map_err(|_| KernelError::Other(format!("vertex index {i} exceeds u32"))))
+        .collect::<Result<Vec<u32>>>()?;
+    Ok(Mesh { positions: gl.vert_properties(), indices })
 }
 
 /// AABB of a transformed AABB (all 8 corners through the affine matrix;

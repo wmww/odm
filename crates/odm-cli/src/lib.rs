@@ -25,6 +25,7 @@ pub const USAGE: &str = "  status                     project, files, view slots
   render  ['{…}']            render a PNG; prints its path
   raycast '{…}'              geometry query: nearest surface hit along rays
   clearance '{…}'            geometry query: signed distance per node pair (gap/penetration)
+  export  '{…}'              write the view's solids as an STL for 3D printing
   poll    [--timeout <sec>] [--follow]
                              wait for messages the user typed in the viewer
                              (--follow: never exit, one JSON line per batch,
@@ -38,7 +39,7 @@ pub const USAGE: &str = "  status                     project, files, view slots
   docs    search <pattern>   grep the reference, whole sections out
   docs    changes <from> <to>  API migration guides, concatenated
 
-View-targeting commands (inspect, render, raycast, clearance) take one optional JSON
+View-targeting commands (inspect, render, raycast, clearance, export) take one optional JSON
 object — the whole request; bare means defaults (`odm inspect` = root view,
 summary tree; `odm render '{\"inputs\": {\"t\": 1.5}}'` = one animation moment).
 The per-command fields are in `odm docs cli`.

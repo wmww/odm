@@ -43,6 +43,54 @@ pub struct ProjectMarker {
     pub name: String,
     /// The newest engine version that has opened the project.
     pub engine: i64,
+    /// What one model unit is. Never affects a build; export converts by it.
+    #[serde(default)]
+    pub units: Units,
+}
+
+/// The length one model unit stands for. A project without the key (or
+/// without a marker) is in millimetres.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum Units {
+    #[default]
+    #[serde(rename = "mm")]
+    Mm,
+    #[serde(rename = "m")]
+    M,
+    #[serde(rename = "in")]
+    In,
+    #[serde(rename = "ft")]
+    Ft,
+}
+
+impl Units {
+    pub const ALL: [Units; 4] = [Units::Mm, Units::M, Units::In, Units::Ft];
+
+    /// Millimetres per unit (exact: the inch is defined as 25.4 mm).
+    pub fn to_mm(self) -> f64 {
+        match self {
+            Units::Mm => 1.0,
+            Units::M => 1000.0,
+            Units::In => 25.4,
+            Units::Ft => 304.8,
+        }
+    }
+
+    /// The spelling in `odm.toml` and on the wire.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Units::Mm => "mm",
+            Units::M => "m",
+            Units::In => "in",
+            Units::Ft => "ft",
+        }
+    }
+}
+
+impl std::fmt::Display for Units {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -168,13 +216,13 @@ pub fn sync_marker_as(dir: &Path, engine: i64) -> Result<Option<String>, ScanErr
 /// The other places the engine writes project files are `sync_marker` and the
 /// agent-file block (`odm_prompt`). This one only ever writes files that do
 /// not exist yet, so nothing authored can be lost to it.
-pub fn create_project(dir: &Path, name: &str) -> Result<(), ScanError> {
+pub fn create_project(dir: &Path, name: &str, units: Units) -> Result<(), ScanError> {
     std::fs::create_dir_all(dir)
         .map_err(|e| ScanError::Io { path: dir.display().to_string(), err: e.to_string() })?;
-    let marker = ProjectMarker { name: name.to_owned(), engine: ENGINE_VERSION };
+    let marker = ProjectMarker { name: name.to_owned(), engine: ENGINE_VERSION, units };
     let marker = toml::to_string(&marker).map_err(|e| ScanError::BadMarker(e.to_string()))?;
     write_new(&dir.join("odm.toml"), &marker)?;
-    match write_new(&dir.join("root.js"), &starter(name)) {
+    match write_new(&dir.join("root.js"), &starter(name, units)) {
         Err(ScanError::Exists(_)) => {} // theirs, and the root now
         other => other?,
     }
@@ -197,12 +245,20 @@ fn write_new(path: &Path, contents: &str) -> Result<(), ScanError> {
 }
 
 /// The doohickey a new project opens with: the smallest thing worth seeing.
-fn starter(name: &str) -> String {
+/// The block is about 40 × 30 × 20 mm whatever the project's unit.
+fn starter(name: &str, units: Units) -> String {
+    let size = match units {
+        Units::Mm => "[40, 30, 20]",
+        Units::M => "[0.04, 0.03, 0.02]",
+        Units::In => "[1.5, 1.25, 0.75]",
+        Units::Ft => "[0.15, 0.1, 0.06]",
+    };
     format!(
         "//! ODM API unstable\n\
          //! {name}: a new project — start here.\n\
          export default function build(ctx) {{\n  \
-           return odm.box([40, 30, 20]).color('#4682b4').name('block');\n\
+           // units: {units} (odm.toml)\n  \
+           return odm.box({size}).color('#4682b4').name('block');\n\
          }}\n"
     )
 }

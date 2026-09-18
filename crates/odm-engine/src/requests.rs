@@ -22,6 +22,7 @@ pub(crate) enum Request {
     Render(RenderReq, Option<Vec<RenderFrame>>),
     Raycast(RaycastReq),
     Clearance(ClearanceReq),
+    Export(ExportReq),
     Poll(PollReq),
     Say(SayReq),
     Feedback(FeedbackReq),
@@ -163,6 +164,24 @@ pub(crate) struct ClearanceReq {
     pub view: Option<ViewSel>,
     /// Node pairs, addressed the way `inspect` addresses nodes.
     pub pairs: Vec<[String; 2]>,
+    #[serde(default)]
+    pub stats: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExportReq {
+    pub path: Option<String>,
+    #[serde(default)]
+    pub inputs: Map<String, Value>,
+    pub preset: Option<String>,
+    pub view: Option<ViewSel>,
+    /// The file to write; its extension picks the format.
+    pub out: String,
+    /// Default: the project's (`units` in odm.toml).
+    pub units: Option<odm_build::Units>,
+    /// Default true.
+    pub union: Option<bool>,
     #[serde(default)]
     pub stats: bool,
 }
@@ -429,6 +448,38 @@ const SPECS: &[CommandSpec] = &[
         hidden: false,
     },
     CommandSpec {
+        name: "export",
+        summary: "write the view's solids to a file for 3D printing — binary STL, in \
+                  millimetres, world coordinates as modeled (Z-up, no recentering). Answers \
+                  the file's `size_mm`, `volume_mm3`, `tris`, `bodies`, and `warnings` worth \
+                  reading (loose bodies, a size that suggests the wrong unit)",
+        view: true,
+        fields: &[
+            f(
+                "out",
+                "string",
+                "required: the file to write, replaced atomically; the extension picks the \
+                 format — `.stl` is the only one today",
+            ),
+            f(
+                "units",
+                "string",
+                "what one model unit is — `mm`, `m`, `in` or `ft`; default the project's \
+                 (`units` in odm.toml, itself default `mm`; `status` reports it). The file \
+                 is always millimetres",
+            ),
+            f(
+                "union",
+                "bool",
+                "default true: fuse every solid into one valid manifold — overlaps merge, \
+                 disjoint parts stay separate bodies. `false` writes each solid as-is \
+                 (exact, but overlapping parts self-intersect)",
+            ),
+        ],
+        js_twin: None,
+        hidden: false,
+    },
+    CommandSpec {
         name: "poll",
         summary: "wait for messages the user typed in the viewer; every response also \
                   carries `builds` (per-slot build state) and `health` (per-file \
@@ -664,6 +715,7 @@ pub(crate) fn parse(req: Value) -> Result<Request, CmdError> {
         }
         "raycast" => Request::Raycast(de(cmd, obj)?),
         "clearance" => Request::Clearance(de(cmd, obj)?),
+        "export" => Request::Export(de(cmd, obj)?),
         "poll" => Request::Poll(de(cmd, obj)?),
         "say" => Request::Say(de(cmd, obj)?),
         "feedback" => Request::Feedback(de(cmd, obj)?),
@@ -939,6 +991,20 @@ mod tests {
     /// A report nobody can act on is worse than none: every field is
     /// required, and the error names the one that is missing.
     #[test]
+    fn export_needs_out_and_knows_its_units() {
+        match parse_str(r#"{"cmd":"export","out":"a.stl","units":"ft","union":false}"#) {
+            Ok(Request::Export(r)) => {
+                assert_eq!((r.units, r.union), (Some(odm_build::Units::Ft), Some(false)));
+            }
+            _ => panic!("export should parse"),
+        }
+        let e = parse_str(r#"{"cmd":"export"}"#).err().unwrap();
+        assert!(e.contains("out"), "{e}");
+        let e = parse_str(r#"{"cmd":"export","out":"a.stl","units":"cm"}"#).err().unwrap();
+        assert!(e.contains("`mm`") && e.contains("`ft`"), "{e}");
+    }
+
+    #[test]
     fn feedback_needs_all_four_fields() {
         let ok = r#"{"cmd":"feedback","title":"t","body":"b","harness":"Claude Code","model":"o"}"#;
         assert!(matches!(parse_str(ok), Ok(Request::Feedback(f)) if f.harness == "Claude Code"));
@@ -961,6 +1027,7 @@ mod tests {
                 "fields" => json!(["name", "bounds"]),
                 "frames" => json!([{"inputs": {"t": 0.0}}, {}]),
                 "look" => json!("top"),
+                "units" => json!("in"),
                 _ if f.ty == "number" => json!(32.0),
                 _ if f.ty == "bool" => json!(true),
                 _ if f.ty == "[x,y,z]" => json!([1.0, 2.0, 3.0]),
