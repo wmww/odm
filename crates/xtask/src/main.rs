@@ -1,5 +1,6 @@
 //! `cargo xtask build-web-template` — build the project-independent half of
-//! a web export into ONE file, `target/web-template.bin`: the odm-web wasm
+//! a web export into ONE file, `target/web-template.bin`, which odm-export's
+//! build script embeds into the next odm build: the odm-web wasm
 //! module (wasm-bindgen'd) + the page files, packed with the stamp the
 //! exporter checks (odm-export's `template` module owns the format).
 //!
@@ -130,7 +131,7 @@ fn build_web_template() -> anyhow::Result<()> {
         .with_context(|| format!("write {}", out.display()))?;
 
     eprintln!(
-        "web template ready at {} (wasm: {:.1} MB, stamp {})",
+        "web template ready at {} (wasm: {:.1} MB, stamp {}); rebuild odm to embed it",
         out.display(),
         wasm_size as f64 / 1e6,
         &odm_export::TEMPLATE_STAMP[..12],

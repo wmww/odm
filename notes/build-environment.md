@@ -70,6 +70,12 @@ Cargo compares a build script's output mtime against its consumers', so a
 gratuitous rewrite marks every crate with a build script stale — that turned a
 6 s build into 1m20 until it was fixed.
 
+Second trap: a `rerun-if-changed` path that does not exist is always dirty,
+so the crate and everything above it recompile on every build (`cargo build
+-v` says "Dirty <crate>: the file X is missing"). odm-export's build.rs
+listed a nonexistent shaders dir for months; it now asserts its inputs
+exist and creates a placeholder for the optional web template.
+
 ### Why not one shared dir
 
 That's what this used to do (`shared-target.sh`, `build.target-dir` pointed at

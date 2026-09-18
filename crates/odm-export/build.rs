@@ -1,7 +1,11 @@
-//! Bakes ODM_TEMPLATE_STAMP: a content hash over everything the web export
-//! template and the exporter must agree on — the framework JS, the wasm-side
-//! crates, and odm-export itself (the bundle format). The template records
-//! the stamp it was built from; `odm export --web` refuses on mismatch.
+//! Two jobs. Bakes ODM_TEMPLATE_STAMP: a content hash over everything the
+//! web export template and the exporter must agree on — the framework JS,
+//! the wasm-side crates, and odm-export itself (the bundle format). The
+//! template records the stamp it was built from; `odm export --web` refuses
+//! on mismatch. And embeds the template itself: `cargo xtask
+//! build-web-template` writes `target/web-template.bin`, this script copies
+//! it into OUT_DIR for `include_bytes!` (an empty file when none is built,
+//! which the exporter reports as "built without a template").
 
 use std::path::{Path, PathBuf};
 
@@ -14,7 +18,6 @@ const INPUTS: &[&str] = &[
     "crates/odm-kernel/src",
     "crates/odm-build/src",
     "crates/odm-render/src",
-    "crates/odm-render/shaders",
     "crates/odm-viewer-core/src",
     "crates/odm-viewer-core/assets",
     "crates/odm-web",
@@ -27,12 +30,10 @@ fn main() {
     let mut files: Vec<PathBuf> = Vec::new();
     for dir in INPUTS {
         let dir = root.join(dir);
+        // A missing path counts as always-changed to cargo (this crate and
+        // everything above it would rebuild every time), so it is a bug.
+        assert!(dir.is_dir(), "stamp input {} is missing", dir.display());
         println!("cargo:rerun-if-changed={}", dir.display());
-        if !dir.exists() {
-            // odm-render/shaders may not exist etc. — hash what is there,
-            // but a missing crate dir is a wiring bug.
-            continue;
-        }
         walk(&dir, &mut files);
     }
     files.sort();
@@ -45,6 +46,20 @@ fn main() {
         hasher.update(&data);
     }
     println!("cargo:rustc-env=ODM_TEMPLATE_STAMP={}", hasher.finalize().to_hex());
+
+    // The template lives at a fixed path xtask owns, next to (not inside)
+    // cargo's per-profile dirs. It must exist for rerun-if-changed to be
+    // stable: cargo treats a missing path as always changed, which would
+    // rebuild this crate and everything above it on every build. So a
+    // checkout without a built template gets an empty placeholder once.
+    let template = root.join("target").join("web-template.bin");
+    if !template.exists() {
+        let _ = std::fs::create_dir_all(template.parent().unwrap());
+        std::fs::write(&template, b"").expect("write template placeholder");
+    }
+    println!("cargo:rerun-if-changed={}", template.display());
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("web-template.bin");
+    std::fs::copy(&template, &out).expect("copy web template into OUT_DIR");
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {

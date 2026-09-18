@@ -1,12 +1,14 @@
 //! `odm export --web`: turn a project into a static interactive-viewer site
-//! (plans/web-export.md). Native code only — the browser-side half lives in
-//! the *web export template* (the odm-web wasm module + page glue), built
-//! separately by `cargo xtask build-web-template` and looked up here.
+//! (notes/web-export.md). Native code only — the browser-side half is the
+//! *web export template* (the odm-web wasm module + page glue), built
+//! separately by `cargo xtask build-web-template` and embedded in this crate
+//! by its build script.
 //!
 //! The bundle splits by lifecycle: this crate produces the project-specific
-//! half (`bundle.js`, `manifest.json`) and copies the project-independent
+//! half (`bundle.js`, `manifest.json`) and writes the project-independent
 //! template beside it. The template must match this binary's build/framework
-//! semantics, checked by a content-hash stamp over the shared inputs.
+//! semantics, checked by a content-hash stamp over the shared inputs (the
+//! embedded copy can be stale in a dev checkout).
 
 mod bundle;
 pub mod template;
@@ -23,16 +25,18 @@ use std::path::{Path, PathBuf};
 /// the stamp it was built from and export refuses on mismatch.
 pub const TEMPLATE_STAMP: &str = env!("ODM_TEMPLATE_STAMP");
 
-/// The template's one file name, everywhere it lives: `target/` in a dev
-/// checkout, `~/.local/share/odm/` installed. A static name — installing
-/// replaces the old one instead of accumulating stamped copies; the stamp
-/// travels inside and gates use, not lookup.
+/// The template file xtask writes and the build script embeds:
+/// `target/web-template.bin`. Empty until xtask has run in this checkout.
 pub const TEMPLATE_NAME: &str = "web-template.bin";
+
+/// The template this binary carries (see build.rs); empty if none was
+/// built. Release binaries always carry one.
+static EMBEDDED_TEMPLATE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/web-template.bin"));
 
 pub struct ExportOptions {
     /// The view the page opens with; default `root.js` with no inputs.
     pub view: Option<View>,
-    /// Explicit template file (`--template`); overrides the lookup.
+    /// Explicit template file (`--template`); overrides the embedded one.
     pub template: Option<PathBuf>,
     /// Skip the stamp check (`--force`).
     pub force: bool,
@@ -71,8 +75,7 @@ pub fn export_web_with_env(
 ) -> Result<ExportReport, String> {
     check_destination(project, out)?;
     let snapshot = odm_build::scan_project(project).map_err(|e| format!("scan: {e}"))?;
-    let template_path = find_template(opts)?;
-    let template = load_template(&template_path, opts.force)?;
+    let template = load_template(opts)?;
 
     let mut warnings = Vec::new();
     let view = opts.view.clone().unwrap_or_else(|| View::of(odm_build::DEFAULT_ROOT));
@@ -233,6 +236,11 @@ WebGPU-capable browser (the .wasm file must be served with the
 
 Everything builds client-side from the bundled sources on load; no server
 logic is involved.
+
+`bundle.js` and `manifest.json` are your project. The rest (the viewer:
+`index.html`, `runtime.js`, `odm_web.js`, `odm_web_bg.wasm`) is part of
+ODM, MIT licensed; the license text is included in ODM's distribution and
+repository.
 ";
 
 /// The API versions the exporter can bundle. Kept here so the CLI can say so.
@@ -247,52 +255,32 @@ pub fn bundle_for_tests(snapshot: &odm_build::ProjectSnapshot) -> Result<String,
     bundle::bundle(snapshot).map(|b| b.js)
 }
 
-fn find_template(opts: &ExportOptions) -> Result<PathBuf, String> {
-    let mut tried = Vec::new();
-    let candidates: Vec<PathBuf> = if let Some(file) = &opts.template {
-        vec![file.clone()]
-    } else if let Some(file) =
-        std::env::var("ODM_WEB_TEMPLATE").ok().filter(|f| !f.is_empty())
-    {
-        vec![PathBuf::from(file)]
-    } else {
-        let mut v = Vec::new();
-        // Dev checkout: target/<profile>/odm → target/web-template.bin.
-        if let Ok(exe) = std::env::current_exe()
-            && let Some(profile_dir) = exe.parent()
-            && let Some(target) = profile_dir.parent()
-        {
-            v.push(target.join(TEMPLATE_NAME));
+/// `--template` / `ODM_WEB_TEMPLATE` name a file (dev iteration on the
+/// wasm without rebuilding odm); otherwise the embedded copy.
+fn load_template(opts: &ExportOptions) -> Result<template::Template, String> {
+    let file = opts
+        .template
+        .clone()
+        .or_else(|| std::env::var_os("ODM_WEB_TEMPLATE").filter(|f| !f.is_empty()).map(PathBuf::from));
+    let (data, what) = match &file {
+        Some(f) => {
+            let data = std::fs::read(f).map_err(|e| format!("{}: {e}", f.display()))?;
+            (std::borrow::Cow::Owned(data), f.display().to_string())
         }
-        if let Some(home) = std::env::var_os("HOME") {
-            v.push(PathBuf::from(home).join(".local/share/odm").join(TEMPLATE_NAME));
+        None if EMBEDDED_TEMPLATE.is_empty() => {
+            return Err("this odm was built without the web export template. In a dev \
+                        checkout run `cargo xtask build-web-template`, then rebuild odm; \
+                        or point --template / ODM_WEB_TEMPLATE at one."
+                .into());
         }
-        v
+        None => (std::borrow::Cow::Borrowed(EMBEDDED_TEMPLATE), "the embedded template".to_string()),
     };
-    for file in candidates {
-        if file.is_file() {
-            return Ok(file);
-        }
-        tried.push(file.display().to_string());
-    }
-    Err(format!(
-        "web export template not found (tried: {}).\n\
-         Build it with `cargo xtask build-web-template` in a dev checkout \
-         (scripts/install.sh installs it), or point --template / \
-         ODM_WEB_TEMPLATE at one.",
-        tried.join(", ")
-    ))
-}
-
-fn load_template(path: &Path, force: bool) -> Result<template::Template, String> {
-    let data = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let t = template::unpack(&data).map_err(|e| format!("{}: {e}", path.display()))?;
-    if t.stamp != TEMPLATE_STAMP && !force {
+    let t = template::unpack(&data).map_err(|e| format!("{what}: {e}"))?;
+    if t.stamp != TEMPLATE_STAMP && !opts.force {
         return Err(format!(
-            "template at {} was built from different sources (its stamp {} != this build's {}).\n\
-             Rebuild it with `cargo xtask build-web-template` (or rerun \
-             scripts/install.sh), or pass --force.",
-            path.display(),
+            "{what} was built from different sources (its stamp {} != this build's {}).\n\
+             Rebuild it with `cargo xtask build-web-template` and then rebuild odm \
+             (scripts/install.sh does both), or pass --force.",
             &t.stamp[..t.stamp.len().min(12)],
             &TEMPLATE_STAMP[..12],
         ));

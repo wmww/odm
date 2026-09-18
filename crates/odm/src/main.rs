@@ -71,8 +71,8 @@ fn dispatch(args: &[String]) -> anyhow::Result<i32> {
 }
 
 /// `odm export --web <out-dir> [<project-dir>] [--view <path>] [--template
-/// <dir>] [--force]` — standalone (no engine needed): sources + framework +
-/// the prebuilt web template are all it reads.
+/// <file>] [--force]` — standalone (no engine needed): sources + framework +
+/// the embedded web template are all it reads.
 fn export_site(args: &[String]) -> anyhow::Result<i32> {
     let mut out: Option<PathBuf> = None;
     let mut project: Option<PathBuf> = None;
@@ -94,7 +94,7 @@ fn export_site(args: &[String]) -> anyhow::Result<i32> {
             }
             "--template" => {
                 opts.template = Some(PathBuf::from(
-                    it.next().ok_or_else(|| anyhow::anyhow!("--template takes a directory"))?,
+                    it.next().ok_or_else(|| anyhow::anyhow!("--template takes a file"))?,
                 ));
             }
             "--force" => opts.force = true,

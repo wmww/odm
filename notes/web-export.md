@@ -92,15 +92,18 @@ Two halves with different lifecycles:
   `odm_web_bg.wasm` (wasm-bindgen output of odm-web) behind a JSON header
   carrying the stamp (format: odm-export's `template` module, shared with
   xtask). Built ONLY by `cargo xtask build-web-template` into
-  `target/web-template.bin` — never as part of a normal build. The name is
-  static everywhere it lives, so installing replaces rather than
-  accumulates; the stamp inside gates *use*, not lookup. Lookup at export:
-  `--template`/`ODM_WEB_TEMPLATE` (a file) →
-  `<exe>/../../web-template.bin` (dev checkout) →
-  `~/.local/share/odm/web-template.bin` — which is where
-  `scripts/install.sh` puts it (it runs the xtask and installs the file;
-  a stamp mismatch fails the export naming the rebuild commands,
-  `--force` overrides).
+  `target/web-template.bin` — never as part of a normal build — and
+  **embedded** into odm by odm-export's build.rs (`include_bytes!` via
+  OUT_DIR, rerun-if-changed on that file; a checkout with no template gets
+  an empty placeholder there, because cargo treats a *missing*
+  rerun-if-changed path as always-dirty and would rebuild the world each
+  time). So: xtask, then rebuild odm, and the installed binary is
+  self-contained (`scripts/install.sh` does both in that order). An empty
+  embed fails the export with "built without the web export template".
+  `--template`/`ODM_WEB_TEMPLATE` (a file) override the embedded copy — for
+  iterating on the wasm without relinking odm, and what the web lane test
+  uses. A stamp mismatch fails the export naming the rebuild commands,
+  `--force` overrides.
 
 **Stamp**: `odm_export::TEMPLATE_STAMP`, a blake3 over framework/ + the
 wasm-side crate sources + odm-export itself (the bundle format couples

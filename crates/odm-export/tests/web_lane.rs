@@ -40,7 +40,7 @@ fn env() -> &'static std::sync::Arc<odm_js::JsEnv> {
 fn both_lanes_boot_build_and_draw() {
     let template = repo_root().join("target").join(odm_export::TEMPLATE_NAME);
     assert!(
-        template.is_file(),
+        std::fs::metadata(&template).map(|m| m.len() > 0).unwrap_or(false),
         "no web template at {} — build it with `cargo xtask build-web-template` \
          (or run the whole lane with `cargo xtask test-web`)",
         template.display()
@@ -50,8 +50,8 @@ fn both_lanes_boot_build_and_draw() {
     let want = native_root_hash();
     let dir = tempfile::Builder::new().prefix("odm-web-lane-").tempdir_in("/tmp").unwrap();
     let site = dir.path().join("site");
-    // Named outright: the lookup would otherwise prefer an installed
-    // template, which is not the one xtask just built from these sources.
+    // Named outright: this test binary's embedded copy is whatever was in
+    // target/ when it compiled, not necessarily the one xtask just built.
     export(&site, &template);
 
     // The GL lane is the same site with navigator.gpu hidden before any

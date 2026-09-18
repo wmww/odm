@@ -19,9 +19,8 @@ Edit any `.js` file and re-run a command — every CLI call syncs and rebuilds
 what changed.
 
 `scripts/install.sh` builds and drops the binary in `~/.local/bin` (override
-with `BINDIR=`) and builds + installs the web-export template into
-`~/.local/share/odm` (override with `DATADIR=`); the template build needs
-the wasm toolchain — see `notes/web-export.md`.
+with `BINDIR=`). It first builds the web-export template, which the binary
+embeds; that build needs the wasm toolchain — see `notes/web-export.md`.
 
 An agent gets the instructions ODM ships with from the project's own
 `AGENTS.md`/`CLAUDE.md`: a new project is created with them, and every project
