@@ -32,3 +32,7 @@
   behind design-decisions.
 - `build-environment.md` — machine facts; per-checkout target dirs (seeding,
   why sharing corrupts), sweeping stale artifacts, why mold/sccache stay off.
+- `agent-integration-research-2026-09.md` — ACP as the agent-agnostic
+  protocol for an ODM-managed agent panel, which agents speak it and how,
+  and the (paused) Anthropic Agent SDK billing change that makes the
+  terminal path the fallback tier. Research only; nothing built.
