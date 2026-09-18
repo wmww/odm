@@ -21,10 +21,10 @@ pub const DIR: &str = ".odm/feedback";
 pub struct Item {
     pub title: String,
     pub body: String,
-    /// The agent harness that filed it ("Claude Code"); empty when the user
-    /// filed it themselves.
+    /// The agent harness that filed it ("Claude Code"), or [`NO_HARNESS`]
+    /// when the user filed it themselves.
     pub harness: String,
-    /// The model that filed it, or `human`.
+    /// The model that filed it, or [`HUMAN`].
     pub model: String,
     pub platform: String,
     pub build: String,
@@ -34,8 +34,10 @@ pub struct Item {
     pub id: String,
 }
 
-/// What the user's own reports say instead of a model name.
-pub const HUMAN: &str = "human";
+/// What the user's own reports say instead of a model name, and instead of
+/// a harness — a person is neither, and a blank field reads as forgotten.
+pub const HUMAN: &str = "Human";
+pub const NO_HARNESS: &str = "N/A";
 
 impl Item {
     /// A report as the `feedback` command files it: the agent's four fields,
@@ -46,7 +48,7 @@ impl Item {
 
     /// A blank report for the user to fill in (the page's **New** button).
     pub fn blank() -> Item {
-        Item::new(String::new(), String::new(), String::new(), HUMAN.to_owned())
+        Item::new(String::new(), String::new(), NO_HARNESS.to_owned(), HUMAN.to_owned())
     }
 
     pub fn path(project: &Path, id: &str) -> PathBuf {
@@ -173,13 +175,17 @@ mod tests {
         let project = dir.path();
         let mut first = Item::new("older".into(), "b".into(), "Claude Code".into(), "opus".into());
         first.id = "20260101-120000-aaaa".into();
-        let mut second = Item::new("newer".into(), "b2".into(), String::new(), HUMAN.into());
+        let mut second = Item::blank();
+        second.title = "newer".into();
+        second.body = "b2".into();
         second.id = "20260102-090000-bbbb".into();
         first.save(project).unwrap();
         second.save(project).unwrap();
 
         let items = Item::list(project);
         assert_eq!(items.iter().map(|i| &*i.title).collect::<Vec<_>>(), ["newer", "older"]);
+        // A report the user made themselves: neither field is left blank.
+        assert_eq!((&*items[0].harness, &*items[0].model), (NO_HARNESS, HUMAN));
         let back = &items[1];
         assert_eq!((&*back.body, &*back.harness, &*back.model), ("b", "Claude Code", "opus"));
         // Stamped at creation, and carried through the file.

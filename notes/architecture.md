@@ -703,8 +703,9 @@ the machine until a human presses Send.**
   `ODM_TARGET`/`ODM_GIT` stamp, also what `odm --version` prints. Both
   are fixed at creation, so a report names the build that hit the bug,
   not the one that got round to sending it. The user's own reports (the
-  page's **New**) carry `model: "human"` and an empty `harness`; there
-  is deliberately no `source` field and no creation timestamp.
+  page's **New**) carry `model: "Human"` and `harness: "N/A"` — a person
+  is neither, and a blank field reads as forgotten; there is
+  deliberately no `source` field and no creation timestamp.
 - **The page** (`viewer/feedback.rs`) is a strip item, so putting it in
   front *is* the existing "no view" state — blank viewport, empty
   panels, `set_active_slot(None)`. One card per report: title, body,
