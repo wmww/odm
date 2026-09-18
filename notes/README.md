@@ -1,8 +1,8 @@
 # Notes index
 
 - `architecture.md` — the system as built: project format, crate map with
-  per-crate gotchas, viewer fonts/icons/tree, user↔agent chat, invariants,
-  testing (what earns a test here, the suites, the opt-in lanes), seeing
+  per-crate gotchas, viewer fonts/icons/tree, user↔agent chat, feedback,
+  invariants, testing (what earns a test here, the suites, the opt-in lanes), seeing
   the viewer. Start here.
 - `api-stability-and-docs.md` — JS API versioning: the rationale behind
   `docs/versioning.md` and the implementation map (pragma, one-snapshot
@@ -10,8 +10,8 @@
   2026-07-29; no stable version cut yet). Read before touching the API
   surface.
 - `agent-surface.md` — the prompt-vs-docs policy for the agent-facing
-  surface (prompt = core loop only, depth in `odm docs`), the one-JSON-
-  grammar CLI, the geometry-query parity rules, the render camera
+  surface (prompt = core loop only, depth in `odm docs`, and `feedback`'s
+  deliberate exception to it), the one-JSON-grammar CLI, the geometry-query parity rules, the render camera
   parameter set, and the standing CLI cuts. Read before adding
   commands, request fields, or response fields.
 - `design-decisions.md` — why the stack/architecture is what it is: decisions

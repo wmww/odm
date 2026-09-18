@@ -261,6 +261,21 @@ writing the values costs tokens ~nothing vs reading tiles.
   the agent), relaunched per batch. No grep filter recommended:
   `--follow` already emits only actionable lines.
 
+## `feedback` is in the prompt (2026-09-17)
+
+The one deliberate exception to "new features default to docs-only": an
+agent cannot consult the docs about a command it doesn't know exists,
+and the whole point of `odm feedback` is that agents use it. So the
+prompt's command list carries one line plus one sentence on when; the
+depth (what belongs in a body, no attachments, no reply) is
+docs/cli.md's "Reporting problems". Everything else about it follows
+the standing rules: engine-routed, one JSON grammar, four required
+fields, response of id + path and nothing more.
+
+Deliberately nothing agent-visible about what happens next — no "sent"
+state, no queue length, no reply channel. A report is a write into the
+project, and the human is the only reader that matters.
+
 ## Standing cuts (don't reintroduce)
 
 - No standalone `sync` command: every command syncs first; `status` is the

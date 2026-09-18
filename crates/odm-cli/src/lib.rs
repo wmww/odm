@@ -32,6 +32,8 @@ pub const USAGE: &str = "  status                     project, files, view slots
   say     <text>             send a message to the user
   say     --task <text>      set the live working status the viewer shows
   say     --done [<text>]    clear it; <text> is sent as a normal message
+  feedback '{…}'             report an ODM bug or missing feature (a human
+                             reviews it before anything is sent)
   docs    [<topic>]          the reference, markdown, no engine (bare: topics)
   docs    search <pattern>   grep the reference, whole sections out
   docs    changes <from> <to>  API migration guides, concatenated

@@ -77,8 +77,11 @@ All decided (see Decisions). Remaining paperwork:
 - [ ] One workspace version: `version.workspace = true` in all fifteen
       crates (the excluded `odm-dylib` keeps an explicit copy, as its
       edition/license do), so the release script bumps one line.
-- [ ] `odm --version`: engine version, git sha (baked via a build script
-      or `env!`), supported JS API versions, project format version.
+- [ ] `odm --version` reports more: it exists and prints
+      `odm <version> (<git sha>, <target>)` (odm-engine's `build.rs` +
+      `build_string()`, built 2026-09-17 for feedback reports); still
+      missing the supported JS API versions and the project format
+      version.
 - [ ] CLI ↔ engine version handshake. After an upgrade, the old engine may
       still hold the socket. Each request carries the client's build id;
       a mismatch gets a clear error ("engine is 0.3.1, this odm is 0.4.0;

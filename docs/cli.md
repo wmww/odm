@@ -464,3 +464,36 @@ When the user refers to a part ("make *this* one longer"), the
 message's `view.selection` has it — clicked parts appear as
 `{id, name}`, in pick order (shift-click selects several). On demand,
 `odm status` shows the current list on the active view slot.
+
+## Reporting problems
+
+`odm feedback` is how an ODM bug or a missing capability gets back to
+the people who build ODM. It is for **ODM itself** — the engine, the
+CLI, the JS API, the viewer — not for bugs in the project you are
+working on, which are yours to fix. Check `odm docs` first: a
+capability that exists and is documented is not a missing one.
+
+```
+odm feedback '{"title": "clearance errors on nested nodes",
+               "body": "…", "harness": "Claude Code", "model": "…"}'
+```
+
+All four fields are required. `harness` and `model` are yours to fill
+in — you know them; they are what makes a pattern of reports readable.
+
+What belongs in `body`:
+
+- the smallest reproduction you have, as code — paste the doohickey
+  source (or the few lines that matter) into the body,
+- the exact request you ran and the exact response you got back,
+- what you expected instead.
+
+There is **no attachment mechanism**: a file path or a render is no use
+to someone reading this on another machine, so paste the text. The
+platform and the exact build are recorded for you.
+
+The report is written into the project (`.odm/feedback/<id>.json`) and
+goes no further on its own: **a human reads it in the viewer and
+decides whether to send it**, and may edit it first. You will not hear
+back — the response is a future release, and there is nothing to poll.
+So file it and move on with the work.

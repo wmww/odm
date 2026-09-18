@@ -40,7 +40,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - The `//!` comment block doubles as prose description (summary line +
   body), parsed at sync time without evaluating the module.
 - `.odm/` is engine-owned (socket `.odm/engine.sock`, `renders/`,
-  `viewer.json` tab persistence). Excluded from generation hashing.
+  `viewer.json` tab persistence, `feedback/` pending reports — see
+  "Feedback" below). Excluded from generation hashing.
 - **Project resolution** (`odm-cli`, reused by `run`): an explicitly named
   dir — `odm run <dir>`, `--project <dir>` — is taken exactly as given and
   must hold `odm.toml` (`project_dir`); **nothing ever walks up from a path
@@ -272,8 +273,10 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   UI — the engine keeps its slots' published values current, a viewer is
   just eyes on them; `status`/poll are truthful headless and the memo
   cache stays warm. Default: + eframe
-  viewer (menu bar, tab strip — one view per tab, persisted in
-  `.odm/viewer.json`; classic notebook tabs, each with its own close box, a
+  viewer (menu bar, tab strip — a `viewer::Item` per tab: a view, or the
+  one Feedback page (below) —, persisted in
+  `.odm/viewer.json` (a `kind` key, absent = view); classic notebook tabs,
+  each with its own close box, a
   red label when that tab's last build failed, and a magnifier at the end
   opening the doohickey picker. The *last* tab closes too (Ctrl+W, or its
   box): no tab is a real state — empty panels, a blank viewport well
@@ -339,8 +342,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   prune keeps activity-card scenes alive too. View ▸ Agent Activity toggles
   it (session-local; off = drain-and-drop, no column). Burst coalescing (N
   rays → one card) deliberately out of scope, the caps bound bursts.
-  Commands: status/inspect/render/raycast/clearance, and poll/say/ack (see
-  "Talking to the agent"); every command except those three syncs first
+  Commands: status/inspect/render/raycast/clearance, poll/say/ack (see
+  "Talking to the agent") and `feedback` (see "Feedback"); every command except those three syncs first
   (no standalone `sync` — folded into `status` 2026-08). Commands run
   concurrently (one thread per connection, no global command lock since
   2026-08-17): the one global lock is `EngineState::build_gate`, an RwLock
@@ -388,7 +391,9 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   chat, dialogs, and the `impl odm_viewer_core::Engine for EngineState`;
   `idle.rs` event loop, `menu.rs` menu bar + its accelerators, `browse.rs`
   folder list with `open.rs`/`new.rs` on top of it, `pick.rs` doohickey
-  picker, `tabs.rs` tab persistence, `agent.rs` agent-file question, `activity.rs` — see "Agent activity view" above).
+  picker, `tabs.rs` tab persistence, `agent.rs` agent-file question,
+  `feedback.rs` the Feedback page + its notice dialog, `activity.rs` — see
+  "Agent activity view" above).
   odm-viewer-core's `theme/` holds the viewer's dark Windows 95
   look (classic bevel structure, inverted luminance, white text):
   a `Style`/`Visuals` preset plus widget wrappers (`button`,
@@ -674,7 +679,48 @@ opening is left.
 
 The two are one `Option<Dialog>` on `ViewerApp`: only one is ever up, both are
 drawn last (their backdrop covers everything above), and both keep themselves
-up with the reason when the engine turns a pick down.
+up with the reason when the engine turns a pick down. `Dialog` also holds the
+export dialog, the agent-file question and the feedback notice; the last
+queues behind whatever is up (`next_feedback_notice`, tried every frame),
+and agent-file questions go first.
+
+### Feedback
+
+Bug reports and feature requests about ODM itself, from the agent or the
+user (2026-09-17, was plans/feedback.md). The one rule: **nothing leaves
+the machine until a human presses Send.**
+
+- `odm feedback '{title, body, harness, model}'` writes
+  `.odm/feedback/<id>.json` (`feedback/item.rs`; id = UTC
+  `YYYYMMDD-HHMMSS` + 4 hex, which is also the page's newest-first sort)
+  and answers id + path. Nothing else is ever reported back — sent or
+  deleted is the human's business, and there is no reply to poll for.
+  It writes a `Who::Action` transcript line and queues a viewer notice;
+  headless does neither (`viewer_attached()`), the file being the whole
+  effect until a viewer next opens the project.
+- The item also records `platform` (os/arch + distro/kernel on Linux)
+  and `build` — `odm_engine::build_string()`, from `build.rs`'s
+  `ODM_TARGET`/`ODM_GIT` stamp, also what `odm --version` prints. Both
+  are fixed at creation, so a report names the build that hit the bug,
+  not the one that got round to sending it. The user's own reports (the
+  page's **New**) carry `model: "human"` and an empty `harness`; there
+  is deliberately no `source` field and no creation timestamp.
+- **The page** (`viewer/feedback.rs`) is a strip item, so putting it in
+  front *is* the existing "no view" state — blank viewport, empty
+  panels, `set_active_slot(None)`. One card per report: title, body,
+  harness and model editable (every keystroke rewrites the file — a few
+  hundred bytes, and an edit that survives the window closing is worth
+  more), platform and build read-only, Send and Delete. Delete has no
+  confirm on purpose; the common case is throwing away agent noise. A
+  failed send leaves the card with the reason on it and reddens the tab
+  label, like a failed build.
+- **The sink** (`feedback/sink.rs`) is one form-encoded POST to a Google
+  Form's `formResponse` (free, no infrastructure; entry ids are
+  constants). 2xx = recorded, then the file is deleted. It runs on a
+  spawned thread with the result collected through a channel, like the
+  export dialog. `ODM_FEEDBACK_URL` points it elsewhere — how the test
+  posts to a local `TcpListener`, and how to dry-run. Swapping in a
+  Worker → GitHub Issues bridge later is this one function.
 
 ### Talking to the agent
 

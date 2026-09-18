@@ -22,6 +22,7 @@ odm poll [--timeout <sec>]    # one-shot fallback: wait for messages, exit
 odm say <text>                # send a message to the user
 odm say --task <text>         # set the live "working on..." status
 odm say --done [<text>]       # clear it (+ optionally send a message)
+odm feedback '{…}'            # report an ODM bug or missing feature (human-reviewed)
 odm docs [<topic>]            # full reference (list topics when bare)
 odm docs search <pattern>     # grep the reference, whole sections out
 ```
@@ -30,6 +31,13 @@ This page is the short version; `odm docs cli` is the full one — every
 request field of every command, explicit camera placement, viewer view
 slots, index paths, `--project`. (`poll` and `say` are the exceptions
 to the JSON grammar: a wait bound and free text.)
+
+Hit a bug in ODM itself, or a wall `odm docs` has no answer for? File
+it — `odm feedback '{"title": …, "body": …, "harness": …, "model": …}'`
+— with a minimal reproduction pasted into the body. It is written into
+the project for the user to review and send; there is no reply to wait
+for, so file it and carry on. (Bugs in the project you are building are
+yours to fix, not to report.)
 
 Every scene query targets a **view**: a doohickey (default `root.js`,
 or `"path"` names another file) built with its declared input defaults.
