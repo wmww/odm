@@ -1,7 +1,8 @@
 # Managed-agent integration research (2026-09-18)
 
 Question: replace `odm poll`/`odm say` with an agent panel that fronts a
-running agent ODM manages, staying agent-agnostic. Nothing decided or built.
+running agent ODM manages, staying agent-agnostic. Evidence base for
+plans/agent-panel.md; nothing built.
 
 - **ACP (Agent Client Protocol)**, agentclientprotocol.com — the one
   off-the-shelf abstraction. JSON-RPC 2.0 over the stdio of an agent
@@ -23,9 +24,11 @@ running agent ODM manages, staying agent-agnostic. Nothing decided or built.
   news since as of this date. Claude-over-ACP is squarely in scope;
   interactive `claude` in a terminal never was. Zed's stated fallback is
   exactly that: run the CLI in a terminal.
-- Consequence: plans/terminal.md is the pricing-proof tier, not a
-  marginal one, and some user→agent side channel (poll/say or a successor)
-  stays for it.
+- Decision (user, same day): accept the risk. No terminal fallback tier —
+  the embedded-terminal plan (PTY tab via alacritty_terminal +
+  portable-pty) was deleted unbuilt. If the billing change lands, the
+  fallback is the user running their CLI agent in their own terminal
+  against the unchanged `odm` CLI.
 
 Sources: agentclientprotocol.com/get-started/agents,
 zed.dev/blog/anthropic-subscription-changes,
@@ -55,16 +58,8 @@ thenewstack.io/anthropic-pauses-claude-agent-sdk-subscription-change/
   released). Nothing Node ships in ODM; Node is a user-machine runtime
   prerequisite for Claude/Codex/Gemini, not for opencode.
 
-## Design direction from the user (2026-09-18, not yet a plan)
+## Design direction
 
-- If ACP holds up (steering spike first): drop `odm poll`, make `odm say` a
-  plain message to the user, delete plans/terminal.md unbuilt.
-- The user always picks the agent explicitly — never inferred from what is
-  installed. Nothing is fetched from npm without asking.
-- Selection is never committed. Leaning: system-wide setting (new — ODM has
-  no system config yet) + per-project value in `.odm/`, choosing in a
-  project also updating the system default.
-- Agent panel: input placeholder "Message <model>" (blank if unconfigured);
-  a session header (harness, version, model, …) with a settings button is
-  the first transcript item and scrolls with it; settings open as a main
-  tab (like the Feedback page), also from the context menu.
+Moved to plans/agent-panel.md (agent always user-picked, no unasked npm
+downloads, TOML config in `~/.config/odm/config.toml` + `.odm/config.toml`,
+header-as-first-transcript-item, settings tab).

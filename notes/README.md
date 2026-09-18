@@ -35,4 +35,4 @@
 - `agent-integration-research-2026-09.md` — ACP as the agent-agnostic
   protocol for an ODM-managed agent panel, which agents speak it and how,
   and the (paused) Anthropic Agent SDK billing change that makes the
-  terminal path the fallback tier. Research only; nothing built.
+  risk we accepted. Evidence base for plans/agent-panel.md; nothing built.
