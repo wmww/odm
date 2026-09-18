@@ -27,3 +27,6 @@ Fix shape: `scene::raycast` (crates/odm-engine/src/scene.rs) reports the
 instance's own `name`; the flattener could carry the nearest *named*
 ancestor instead when the hit node is unnamed, or report the whole name
 path. Decide, document in docs/api/queries.md, then pin it.
+
+Plan: `plans/raycast-name-inherits.md` (nearest named ancestor, resolved
+in the flattener).
