@@ -4,6 +4,7 @@
 //! so CLI results always reflect the files on disk.
 
 mod commands;
+mod feedback;
 mod requests;
 #[cfg(test)]
 mod conformance;
@@ -17,6 +18,10 @@ mod watcher;
 // The theme and icons moved to the viewer core with the rest of the read
 // side; aliased so the desktop chrome keeps its `crate::theme` spelling.
 pub(crate) use odm_viewer_core::{icons, theme};
+
+/// `odm <version> (<commit>, <target>)` — what `odm --version` prints, and
+/// what every feedback item records about the build that filed it.
+pub use feedback::build_string;
 
 use std::path::PathBuf;
 use std::sync::Arc;

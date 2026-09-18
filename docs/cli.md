@@ -138,6 +138,15 @@ send a message to the user, or set/clear the live working status the viewer show
 - `task` (string) — instead of a message: set/replace the working status (`odm say --task <text>` — a few words, present progressive); there is one at a time
 - `done` (bool) — clear the working status (`odm say --done [<text>]`); `text` alongside it is posted as a normal message
 
+### feedback
+
+report an ODM bug or missing feature. Writes the report into the project for the user to review; they send it, or throw it away. Nothing is reported back either way.
+
+- `title` (string) — one line: what is wrong, or what is missing
+- `body` (string) — the report itself: what you did, what happened, what you expected — with the exact request and response, and any source, pasted in (there is no attachment mechanism)
+- `harness` (string) — the agent harness you are running in, e.g. `Claude Code`
+- `model` (string) — your model name, as exactly as you know it
+
 <!--- END GENERATED COMMAND REFERENCE --->
 
 ## Errors

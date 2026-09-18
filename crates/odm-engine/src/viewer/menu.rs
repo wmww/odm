@@ -17,6 +17,7 @@ pub enum Action {
     CloseDoohickey,
     ExportWeb,
     FocusAgent,
+    Feedback,
     Quit,
     Frame,
     Wireframe,
@@ -38,9 +39,12 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
             // different subject from which project the window is on.
             file.push(MenuEntry::separator());
             file.push(MenuEntry::item(Action::OpenDoohickey, "Open Doohickey…").shortcut("Ctrl+O"));
-            file.push(
-                MenuEntry::item(Action::CloseDoohickey, "Close Doohickey").shortcut("Ctrl+W"),
-            );
+            // Ctrl+W closes whatever is in front; the label says which.
+            let closing = match app.items.get(app.active) {
+                Some(super::Item::Feedback(_)) => "Close Feedback",
+                _ => "Close Doohickey",
+            };
+            file.push(MenuEntry::item(Action::CloseDoohickey, closing).shortcut("Ctrl+W"));
             file.push(MenuEntry::separator());
             file.push(MenuEntry::item(Action::ExportWeb, "Export Web…"));
         }
@@ -55,7 +59,7 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
                 &[MenuEntry::item(Action::FocusAgent, "Message Agent").shortcut("Ctrl+Enter")],
             ));
             // F does both jobs; the label says which one it will do now.
-            let framing = match app.tabs.get(app.active) {
+            let framing = match app.tab() {
                 Some(tab) if !tab.selected.is_empty() => "Frame Selection",
                 _ => "Frame Scene",
             };
@@ -70,6 +74,11 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
                     MenuEntry::check(Action::Grid, "Grid", app.core.grid),
                     MenuEntry::check(Action::Activity, "Agent Activity", app.activity.enabled),
                 ],
+            ));
+            action = action.or(theme::menu(
+                ui,
+                "Help",
+                &[MenuEntry::item(Action::Feedback, "Feedback…")],
             ));
         }
     });
@@ -136,7 +145,7 @@ fn apply(app: &mut ViewerApp, action: Action) {
         // The site opens on what the viewer is showing: the active tab's view.
         Action::ExportWeb => {
             if let Some(state) = &app.session {
-                let view = match app.tabs.get(app.active) {
+                let view = match app.tab() {
                     Some(tab) => tab.view(),
                     None => odm_build::View::of(odm_build::DEFAULT_ROOT),
                 };
@@ -152,6 +161,12 @@ fn apply(app: &mut ViewerApp, action: Action) {
         Action::FocusAgent => {
             app.dock = super::Dock::Chat;
             app.focus_chat = true;
+        }
+        // The page of pending reports — opened, or brought forward.
+        Action::Feedback => {
+            if app.session.is_some() {
+                app.open_feedback();
+            }
         }
         Action::Quit => app.quit.request(),
         Action::Frame => app.frame_scene(),

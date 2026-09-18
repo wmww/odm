@@ -1130,11 +1130,35 @@ pub fn text_area(
     max_height: f32,
     hint: &str,
 ) -> TextArea {
-    let id = egui::Id::new(id);
+    area(ui, egui::Id::new(id), text, width, max_height, hint, true)
+}
+
+/// The same box for text that is *written* rather than sent: Enter inserts a
+/// newline like any editor, and nothing is submitted.
+pub fn text_block(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    text: &mut String,
+    width: f32,
+    max_height: f32,
+    hint: &str,
+) -> Response {
+    area(ui, egui::Id::new(id), text, width, max_height, hint, false).response
+}
+
+fn area(
+    ui: &mut Ui,
+    id: egui::Id,
+    text: &mut String,
+    width: f32,
+    max_height: f32,
+    hint: &str,
+    submit: bool,
+) -> TextArea {
     let focused = ui.memory(|m| m.has_focus(id));
     // ctrl+J arrives as the newline key the box already knows: egui's own
     // handler then inserts it at the caret, over the selection, undoably.
-    if focused {
+    if focused && submit {
         ui.input_mut(|i| {
             for ev in &mut i.events {
                 if let egui::Event::Key { key: egui::Key::J, pressed, modifiers, .. } = *ev
@@ -1153,7 +1177,8 @@ pub fn text_area(
     }
     // Read off the events rather than `key_pressed` + the current modifiers:
     // a rewritten ctrl+J is an Enter press with ctrl still physically down.
-    let submitted = focused
+    let submitted = submit
+        && focused
         && ui.input(|i| {
             i.events.iter().any(|e| {
                 matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. }
@@ -1179,12 +1204,19 @@ pub fn text_area(
                             .desired_rows(1)
                             .margin(Margin::same(TEXT_PAD as i8))
                             .hint_text(hint)
-                            // Enter is the caller's to act on, so only the
-                            // newline chord reaches egui as the return key.
-                            .return_key(egui::KeyboardShortcut::new(
-                                egui::Modifiers::SHIFT,
-                                egui::Key::Enter,
-                            ))
+                            // When Enter is the caller's to act on, only the
+                            // newline chord reaches egui as the return key;
+                            // a written block keeps egui's plain Enter.
+                            .return_key(match submit {
+                                true => egui::KeyboardShortcut::new(
+                                    egui::Modifiers::SHIFT,
+                                    egui::Key::Enter,
+                                ),
+                                false => egui::KeyboardShortcut::new(
+                                    egui::Modifiers::NONE,
+                                    egui::Key::Enter,
+                                ),
+                            })
                             .background_color(WINDOW),
                     )
                 })

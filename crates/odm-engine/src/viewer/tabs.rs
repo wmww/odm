@@ -2,6 +2,7 @@
 //! selection and tree state are ephemeral. The tabs themselves are the viewer
 //! core's [`Tab`]; owning the strip and this file is desktop chrome.
 
+use super::{FeedbackPage, Item};
 use odm_viewer_core::{Orbit, Tab};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -15,8 +16,15 @@ struct SavedCamera {
     pitch: f64,
 }
 
+/// What kind of strip item this entry is. Absent — every file written before
+/// the feedback page existed — is a view.
+const FEEDBACK: &str = "feedback";
+
 #[derive(Serialize, Deserialize)]
 struct SavedTab {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(default)]
     path: String,
     #[serde(default)]
     args: Map<String, Value>,
@@ -25,7 +33,19 @@ struct SavedTab {
     camera: Option<SavedCamera>,
 }
 
-#[derive(Serialize, Deserialize)]
+impl Default for SavedTab {
+    fn default() -> SavedTab {
+        SavedTab {
+            kind: None,
+            path: String::new(),
+            args: Map::new(),
+            cascade: Map::new(),
+            camera: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default)]
 struct SavedTabs {
     active: usize,
     tabs: Vec<SavedTab>,
@@ -39,13 +59,16 @@ fn file_of(project: &Path) -> std::path::PathBuf {
 /// caller. Returns (tabs, active index); None when there is no readable file
 /// — an empty tab list is a state the user can leave the viewer in, and comes
 /// back as one.
-pub fn load(project: &Path, mut slot: impl FnMut() -> String) -> Option<(Vec<Tab>, usize)> {
+pub fn load(project: &Path, mut slot: impl FnMut() -> String) -> Option<(Vec<Item>, usize)> {
     let text = std::fs::read_to_string(file_of(project)).ok()?;
     let saved: SavedTabs = serde_json::from_str(&text).ok()?;
-    let tabs: Vec<Tab> = saved
+    let items: Vec<Item> = saved
         .tabs
         .into_iter()
         .map(|s| {
+            if s.kind.as_deref() == Some(FEEDBACK) {
+                return Item::Feedback(FeedbackPage::new());
+            }
             let mut tab = Tab::new(slot(), s.path);
             tab.set_args = s.args;
             tab.set_cascade = s.cascade;
@@ -54,29 +77,38 @@ pub fn load(project: &Path, mut slot: impl FnMut() -> String) -> Option<(Vec<Tab
                     Orbit { target: c.target, distance: c.distance, yaw: c.yaw, pitch: c.pitch };
                 tab.framed = true; // don't blow away the restored camera
             }
-            tab
+            Item::View(tab)
         })
         .collect();
-    let active = saved.active.min(tabs.len().saturating_sub(1));
-    Some((tabs, active))
+    let active = saved.active.min(items.len().saturating_sub(1));
+    Some((items, active))
 }
 
 /// Best-effort save; `.odm/` is engine-owned local state.
-pub fn save(project: &Path, tabs: &[Tab], active: usize) {
+pub fn save(project: &Path, items: &[Item], active: usize) {
     let saved = SavedTabs {
         active,
-        tabs: tabs
+        tabs: items
             .iter()
-            .map(|t| SavedTab {
-                path: t.path.clone(),
-                args: t.set_args.clone(),
-                cascade: t.set_cascade.clone(),
-                camera: Some(SavedCamera {
-                    target: t.orbit.target,
-                    distance: t.orbit.distance,
-                    yaw: t.orbit.yaw,
-                    pitch: t.orbit.pitch,
-                }),
+            .map(|item| match item {
+                // The page has no state worth keeping: what it shows is the
+                // directory, read when it is drawn.
+                Item::Feedback(_) => SavedTab {
+                    kind: Some(FEEDBACK.to_owned()),
+                    ..SavedTab::default()
+                },
+                Item::View(t) => SavedTab {
+                    kind: None,
+                    path: t.path.clone(),
+                    args: t.set_args.clone(),
+                    cascade: t.set_cascade.clone(),
+                    camera: Some(SavedCamera {
+                        target: t.orbit.target,
+                        distance: t.orbit.distance,
+                        yaw: t.orbit.yaw,
+                        pitch: t.orbit.pitch,
+                    }),
+                },
             })
             .collect(),
     };
@@ -91,9 +123,15 @@ pub fn save(project: &Path, tabs: &[Tab], active: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::{load, save};
+    use super::{Item, load, save};
     use odm_viewer_core::Tab;
     use serde_json::json;
+
+    /// Only views carry state worth asserting on; a test that wants one out
+    /// of a loaded strip says so here.
+    fn view(item: &Item) -> &Tab {
+        item.view().expect("a view")
+    }
 
     fn slots() -> impl FnMut() -> String {
         let mut n = 0;
@@ -118,20 +156,54 @@ mod tests {
         let mut second = Tab::new("tab-2".into(), "parts/wheel.js".into());
         second.set_cascade.insert("t".into(), json!(1.5));
 
-        save(dir.path(), &[first, second], 1);
-        let (tabs, active) = load(dir.path(), slots()).expect("the file just written");
+        save(dir.path(), &[Item::View(first), Item::View(second)], 1);
+        let (items, active) = load(dir.path(), slots()).expect("the file just written");
 
         assert_eq!(active, 1, "the active tab is part of the state");
-        assert_eq!(tabs.len(), 2);
-        assert_eq!(tabs[0].path, "root.js");
-        assert_eq!(tabs[0].set_args["width"], json!(30));
-        assert_eq!(tabs[0].orbit.target, [1.0, 2.0, 3.0]);
-        assert_eq!((tabs[0].orbit.distance, tabs[0].orbit.yaw), (42.0, 0.5));
-        assert!(tabs[0].framed, "a restored camera must not be re-framed away");
-        assert_eq!(tabs[1].path, "parts/wheel.js");
-        assert_eq!(tabs[1].set_cascade["t"], json!(1.5));
+        assert_eq!(items.len(), 2);
+        let (first, second) = (view(&items[0]), view(&items[1]));
+        assert_eq!(first.path, "root.js");
+        assert_eq!(first.set_args["width"], json!(30));
+        assert_eq!(first.orbit.target, [1.0, 2.0, 3.0]);
+        assert_eq!((first.orbit.distance, first.orbit.yaw), (42.0, 0.5));
+        assert!(first.framed, "a restored camera must not be re-framed away");
+        assert_eq!(second.path, "parts/wheel.js");
+        assert_eq!(second.set_cascade["t"], json!(1.5));
         // Slots are the caller's to assign, not the file's.
-        assert_eq!([&*tabs[0].slot, &*tabs[1].slot], ["tab-1", "tab-2"]);
+        assert_eq!([&*first.slot, &*second.slot], ["tab-1", "tab-2"]);
+    }
+
+    /// The feedback page is a strip item like any other: it comes back where
+    /// it was left, and it claims no slot (nothing builds behind it).
+    #[test]
+    fn the_feedback_page_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let items = vec![
+            Item::View(Tab::new("tab-1".into(), "root.js".into())),
+            Item::Feedback(Default::default()),
+        ];
+        save(dir.path(), &items, 1);
+        let (items, active) = load(dir.path(), slots()).expect("the file just written");
+        assert_eq!(active, 1);
+        assert_eq!(view(&items[0]).path, "root.js");
+        assert!(matches!(items[1], Item::Feedback(_)));
+        // One view, so one slot: the page must not eat the next tab's name.
+        assert_eq!(view(&items[0]).slot, "tab-1");
+    }
+
+    /// Files written before the page existed have no `kind`, and are all
+    /// views.
+    #[test]
+    fn a_file_without_kinds_is_all_views() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".odm")).unwrap();
+        std::fs::write(
+            dir.path().join(".odm/viewer.json"),
+            r#"{"active": 0, "tabs": [{"path": "root.js", "args": {}, "camera": null}]}"#,
+        )
+        .unwrap();
+        let (items, _) = load(dir.path(), slots()).unwrap();
+        assert_eq!(view(&items[0]).path, "root.js");
     }
 
     /// No tabs is a state the user can leave the viewer in, so it survives
@@ -140,8 +212,8 @@ mod tests {
     fn no_tabs_round_trips_as_no_tabs() {
         let dir = tempfile::tempdir().unwrap();
         save(dir.path(), &[], 0);
-        let (tabs, active) = load(dir.path(), slots()).expect("an empty tab list is a value");
-        assert!(tabs.is_empty());
+        let (items, active) = load(dir.path(), slots()).expect("an empty tab list is a value");
+        assert!(items.is_empty());
         assert_eq!(active, 0);
     }
 
@@ -169,7 +241,7 @@ mod tests {
             r#"{"active": 7, "tabs": [{"path": "root.js", "camera": null}]}"#,
         )
         .unwrap();
-        let (tabs, active) = load(dir.path(), slots()).unwrap();
-        assert_eq!((tabs.len(), active), (1, 0));
+        let (items, active) = load(dir.path(), slots()).unwrap();
+        assert_eq!((items.len(), active), (1, 0));
     }
 }

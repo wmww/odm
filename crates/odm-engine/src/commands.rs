@@ -1,7 +1,10 @@
 //! The agent-facing command handlers, and (with `requests.rs`) the only
 //! place that speaks `serde_json::Value`.
 
-use crate::requests::{self, Look, Ray, RenderFrame, RenderReq, Request, SayReq, ViewSel};
+use crate::feedback::Item;
+use crate::requests::{
+    self, FeedbackReq, Look, Ray, RenderFrame, RenderReq, Request, SayReq, ViewSel,
+};
 use crate::scene;
 use crate::server::Conn;
 use crate::state::{ActivityKind, EngineState, PollOutcome, Published};
@@ -138,7 +141,9 @@ impl EngineState {
         // Every command that looks at the project is one line in the
         // viewer's chat log — the chat commands are not, being the chat.
         let verb = match &req {
-            Request::Poll(_) | Request::Say(_) | Request::Ack => None,
+            // The chat commands are the chat, not actions; `feedback` logs
+            // its own line, with the report's title on it.
+            Request::Poll(_) | Request::Say(_) | Request::Ack | Request::Feedback(_) => None,
             Request::Status => Some("status"),
             Request::Inspect(_) => Some("inspect"),
             Request::Render(..) => Some("render"),
@@ -162,6 +167,7 @@ impl EngineState {
         match req {
             Request::Poll(p) => self.cmd_poll(p.timeout, p.events, conn),
             Request::Say(s) => self.cmd_say(&s),
+            Request::Feedback(f) => self.cmd_feedback(f),
             Request::Ack => Ok(json!({ "acked": conn.confirm() })),
             Request::Status => self.cmd_status(),
             Request::Inspect(r) => {
@@ -1032,6 +1038,29 @@ impl EngineState {
         Ok(Value::Object(o))
     }
 
+    /// File a report. It goes to a file under `.odm/feedback/` and no
+    /// further: a human reviews it in the viewer and decides whether it is
+    /// sent. The agent is told where it landed and nothing else — sent or
+    /// deleted is not its business, and there is no reply.
+    fn cmd_feedback(&self, req: FeedbackReq) -> Result<Value, CmdError> {
+        let field = |name: &str, value: &str| match value.trim().is_empty() {
+            true => Err(CmdError::bad_request(format!("feedback: `{name}` must not be empty"))),
+            false => Ok(value.trim().to_owned()),
+        };
+        let item = Item::new(
+            field("title", &req.title)?,
+            field("body", &req.body)?,
+            field("harness", &req.harness)?,
+            field("model", &req.model)?,
+        );
+        item.save(self.project()).map_err(|e| CmdError::new("io", e))?;
+        // The chat log is where the user sees what the agent has been doing,
+        // and filing a report is one of those things.
+        self.log_action(format!("feedback: {}", item.title));
+        self.note_feedback(item.title.clone());
+        Ok(json!({ "id": item.id, "path": item.rel_path() }))
+    }
+
     fn root_node(&self, result: &PassResult) -> Result<Node, CmdError> {
         match self.build_engine().store.get(result.root).as_deref() {
             Some(Object::Node(n)) => Ok(n.clone()),
@@ -1344,6 +1373,55 @@ fn logs_json(logs: &[(String, LogLine)]) -> Value {
 mod tests {
     use super::*;
     use crate::state::{Delivery, Who};
+
+    /// `feedback` writes the report and says where; everything else about it
+    /// — sending, deleting — is the human's, and the agent hears nothing.
+    #[test]
+    fn feedback_writes_an_item_and_logs_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let state =
+            EngineState::new(dir.path().to_path_buf(), crate::state::tests::env()).unwrap();
+        let mut conn = Conn::new(state.clone());
+        // A viewer, so the transcript line and the notice are kept.
+        state.set_wake(Arc::new(|| {}));
+        let generation = state.last_generation();
+
+        let v = state.handle(
+            json!({"cmd": "feedback", "title": "raycast misses instances",
+                   "body": "  steps to reproduce  ", "harness": "Claude Code", "model": "opus"}),
+            &mut conn,
+        );
+        assert_eq!(v["ok"], json!(true), "{v}");
+        let id = v["id"].as_str().expect("an id").to_owned();
+        assert_eq!(v["path"], json!(format!(".odm/feedback/{id}.json")));
+
+        let items = Item::list(dir.path());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "raycast misses instances");
+        assert_eq!(items[0].body, "steps to reproduce", "fields are trimmed");
+        assert_eq!(items[0].model, "opus");
+        assert!(!items[0].build.is_empty() && !items[0].platform.is_empty());
+
+        // One transcript line, and one notice for the viewer to show.
+        state.with_transcript(|t| {
+            assert_eq!(t.len(), 1);
+            assert_eq!(t[0].who, Who::Action);
+            assert_eq!(t[0].text, "feedback: raycast misses instances");
+        });
+        assert_eq!(state.take_feedback_notices(), ["raycast misses instances"]);
+        assert!(state.take_feedback_notices().is_empty(), "taken once");
+        // Filing a report is not a project change: nothing synced, nothing built.
+        assert_eq!(state.last_generation(), generation);
+
+        // An empty field is refused, by name.
+        let v = state.handle(
+            json!({"cmd": "feedback", "title": " ", "body": "b", "harness": "h", "model": "m"}),
+            &mut conn,
+        );
+        assert_eq!(v["ok"], json!(false));
+        assert!(v["error"]["message"].as_str().unwrap().contains("title"), "{v}");
+        assert_eq!(Item::list(dir.path()).len(), 1, "a refused report writes nothing");
+    }
 
     /// The agent-facing query commands feed the viewer's activity view —
     /// but only when a viewer is attached.

@@ -24,6 +24,7 @@ pub(crate) enum Request {
     Clearance(ClearanceReq),
     Poll(PollReq),
     Say(SayReq),
+    Feedback(FeedbackReq),
     /// "I have the messages the last poll on this connection gave me." Sent by
     /// the CLI after it prints them, and hidden from the reference because it
     /// is part of poll's delivery handshake, not something an agent types.
@@ -186,6 +187,18 @@ pub(crate) struct SayReq {
     /// any — as a normal message.
     #[serde(default)]
     pub done: bool,
+}
+
+/// A bug report or feature request about ODM itself. All four fields are
+/// required: a report nobody can act on is worse than none, and the agent
+/// knows its own harness and model.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FeedbackReq {
+    pub title: String,
+    pub body: String,
+    pub harness: String,
+    pub model: String,
 }
 
 // --- the spec table ------------------------------------------------------
@@ -463,6 +476,27 @@ const SPECS: &[CommandSpec] = &[
         hidden: false,
     },
     CommandSpec {
+        name: "feedback",
+        summary: "report an ODM bug or missing feature. Writes the report into the project for \
+                  the user to review; they send it, or throw it away. Nothing is reported back \
+                  either way",
+        view: false,
+        fields: &[
+            f("title", "string", "one line: what is wrong, or what is missing"),
+            f(
+                "body",
+                "string",
+                "the report itself: what you did, what happened, what you expected — with the \
+                 exact request and response, and any source, pasted in (there is no attachment \
+                 mechanism)",
+            ),
+            f("harness", "string", "the agent harness you are running in, e.g. `Claude Code`"),
+            f("model", "string", "your model name, as exactly as you know it"),
+        ],
+        js_twin: None,
+        hidden: false,
+    },
+    CommandSpec {
         name: "ack",
         summary: "poll's delivery handshake",
         view: false,
@@ -632,6 +666,7 @@ pub(crate) fn parse(req: Value) -> Result<Request, CmdError> {
         "clearance" => Request::Clearance(de(cmd, obj)?),
         "poll" => Request::Poll(de(cmd, obj)?),
         "say" => Request::Say(de(cmd, obj)?),
+        "feedback" => Request::Feedback(de(cmd, obj)?),
         "ack" => Request::Ack,
         _ => unreachable!("matched a spec above"),
     })
@@ -899,6 +934,16 @@ mod tests {
 
         let e = parse_str(r#"{"cmd":"poll","timout":1}"#).err().unwrap();
         assert!(e.contains("timout") && e.contains("timeout"), "{e}");
+    }
+
+    /// A report nobody can act on is worse than none: every field is
+    /// required, and the error names the one that is missing.
+    #[test]
+    fn feedback_needs_all_four_fields() {
+        let ok = r#"{"cmd":"feedback","title":"t","body":"b","harness":"Claude Code","model":"o"}"#;
+        assert!(matches!(parse_str(ok), Ok(Request::Feedback(f)) if f.harness == "Claude Code"));
+        let e = parse_str(r#"{"cmd":"feedback","title":"t","body":"b","model":"o"}"#).err().unwrap();
+        assert!(e.contains("harness"), "{e}");
     }
 
     /// The spec table and the serde structs describe the same grammar: a

@@ -7,6 +7,7 @@ mod activity;
 mod agent;
 mod browse;
 mod export;
+mod feedback;
 mod idle;
 mod menu;
 mod new;
@@ -25,6 +26,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use activity::ActivityView;
+use feedback::{FeedbackDialog, FeedbackPage};
 use idle::Quit;
 
 pub use idle::run_viewer;
@@ -101,12 +103,47 @@ impl Engine for EngineState {
 
 /// The modal that is up, if one is. Open and New are the same kind of thing —
 /// a browse over folders that ends in a project to serve — and the agent-file
-/// question follows an open, so only ever one of the three is up at a time.
+/// question follows an open, so only ever one of them is up at a time; a
+/// feedback notice queues behind whatever is.
 enum Dialog {
     Open(open::OpenDialog),
     New(new::NewDialog),
     Export(export::ExportDialog),
     AgentFiles(agent::AgentDialog),
+    Feedback(FeedbackDialog),
+}
+
+/// One thing in the tab strip. Nearly always a view — one doohickey, its
+/// inputs and its camera; the feedback page is the one other kind, and at
+/// most one of it is ever open. With it in front the viewport, side bar and
+/// console show the same "no tab" state as an empty strip, because there is
+/// no view in front.
+enum Item {
+    View(Tab),
+    Feedback(FeedbackPage),
+}
+
+impl Item {
+    fn view(&self) -> Option<&Tab> {
+        match self {
+            Item::View(tab) => Some(tab),
+            Item::Feedback(_) => None,
+        }
+    }
+
+    fn view_mut(&mut self) -> Option<&mut Tab> {
+        match self {
+            Item::View(tab) => Some(tab),
+            Item::Feedback(_) => None,
+        }
+    }
+
+    fn label(&self) -> &str {
+        match self {
+            Item::View(tab) => tab.label(),
+            Item::Feedback(_) => feedback::LABEL,
+        }
+    }
 }
 
 pub struct ViewerApp {
@@ -118,8 +155,9 @@ pub struct ViewerApp {
     renderer: Renderer,
     /// The shared read side: display toggles, viewport target.
     core: Viewer,
-    /// One view each; `active` is what the viewport shows.
-    tabs: Vec<Tab>,
+    /// The tab strip: a view each, plus at most one feedback page. `active`
+    /// is the one in front.
+    items: Vec<Item>,
     active: usize,
     tab_counter: u64,
     /// Agent CLI actions visualized behind the chat transcript.
@@ -137,6 +175,9 @@ pub struct ViewerApp {
     dialog: Option<Dialog>,
     /// Agent-file questions from the last open, asked one at a time.
     agent_questions: Vec<AgentQuestion>,
+    /// Feedback the user has yet to be told about, shown one dialog at a
+    /// time behind whatever else is up.
+    feedback_notices: Vec<feedback::Notice>,
     /// The new-tab doohickey picker, when it is up.
     pick: Option<pick::Picker>,
     /// File ▸ Quit; acted on by the event loop (see `idle.rs`).
@@ -156,7 +197,7 @@ impl ViewerApp {
             sessions,
             renderer,
             core: Viewer::default(),
-            tabs: Vec::new(),
+            items: Vec::new(),
             active: 0,
             tab_counter: 0,
             activity: ActivityView::default(),
@@ -165,6 +206,7 @@ impl ViewerApp {
             dock: Dock::Chat,
             dialog: None,
             agent_questions: Vec::new(),
+            feedback_notices: Vec::new(),
             pick: None,
             quit,
         };
@@ -173,6 +215,7 @@ impl ViewerApp {
             // The startup project was opened before this struct existed;
             // its questions have been waiting on the session since.
             app.ask_about_agent_files();
+            app.note_waiting_feedback();
         }
         // With no project there is nothing to put up: `no_project_ui` offers
         // Open and New, and the choice stays the user's to start.
@@ -196,26 +239,36 @@ impl ViewerApp {
             counter += 1;
             format!("tab-{counter}")
         };
-        let (tabs, active) = tabs::load(&project, &mut next_slot).unwrap_or_else(|| {
-            (vec![Tab::new(next_slot(), odm_build::DEFAULT_ROOT.to_string())], 0)
+        let (items, active) = tabs::load(&project, &mut next_slot).unwrap_or_else(|| {
+            (vec![Item::View(Tab::new(next_slot(), odm_build::DEFAULT_ROOT.to_string()))], 0)
         });
         drop(next_slot);
         self.tab_counter = counter;
-        self.tabs = tabs;
+        self.items = items;
         self.active = active;
         // The tabs are the active views now; the engine's own default slot
         // would just double-build tab 0.
         self.state().remove_view(crate::state::DEFAULT_SLOT);
-        for tab in &self.tabs {
+        for tab in self.views() {
             self.state().set_view(&tab.slot, tab.view());
         }
         self.sync_active();
     }
 
-    /// The tab in front, if any: closing the last one leaves the window open
-    /// on the project with nothing in it.
+    /// The *view* in front, if one is: closing the last tab leaves the window
+    /// open on the project with nothing in it, and so does putting the
+    /// feedback page in front — both are the same "no view" state.
     fn tab(&self) -> Option<&Tab> {
-        self.tabs.get(self.active)
+        self.items.get(self.active)?.view()
+    }
+
+    fn tab_mut(&mut self) -> Option<&mut Tab> {
+        self.items.get_mut(self.active)?.view_mut()
+    }
+
+    /// Every open view, in strip order.
+    fn views(&self) -> impl Iterator<Item = &Tab> {
+        self.items.iter().filter_map(Item::view)
     }
 
     /// Tell the engine which tab the user is on (and what is selected in it)
@@ -236,7 +289,7 @@ impl ViewerApp {
     }
 
     fn save_tabs(&self) {
-        tabs::save(self.state().project(), &self.tabs, self.active);
+        tabs::save(self.state().project(), &self.items, self.active);
     }
 
     /// Point the whole viewer at a project — the first one, or another in place
@@ -244,7 +297,7 @@ impl ViewerApp {
     /// build, as it does at startup.
     fn open_project(&mut self, project: &std::path::Path, ctx: &egui::Context) -> Result<(), String> {
         self.session = Some(self.sessions.open(project)?);
-        self.tabs.clear();
+        self.items.clear();
         self.tab_counter = 0;
         self.init_tabs();
         // The new session has its own (empty) transcript; the half-typed line
@@ -257,6 +310,7 @@ impl ViewerApp {
         self.core.needs_render = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title(self.session.as_deref())));
         self.ask_about_agent_files();
+        self.note_waiting_feedback();
         Ok(())
     }
 
@@ -276,9 +330,56 @@ impl ViewerApp {
             Some(Dialog::AgentFiles(agent::AgentDialog::new(self.agent_questions.remove(0))));
     }
 
+    /// Queue the open-time "reports are waiting" notice, if any are. Once per
+    /// project open — the headless case, and the "I dismissed it last time"
+    /// case.
+    fn note_waiting_feedback(&mut self) {
+        let project = self.state().project().to_path_buf();
+        self.feedback_notices.extend(feedback::Notice::waiting(&project));
+        self.next_feedback_notice();
+    }
+
+    /// Put the next feedback notice up, if the modal is free. Agent-file
+    /// questions come first: they are about the project the user just opened.
+    fn next_feedback_notice(&mut self) {
+        if self.dialog.is_some() || !self.agent_questions.is_empty() {
+            return;
+        }
+        if self.feedback_notices.is_empty() {
+            return;
+        }
+        let notice = self.feedback_notices.remove(0);
+        let project = self.state().project().to_path_buf();
+        self.dialog = Some(Dialog::Feedback(FeedbackDialog::new(notice, &project)));
+    }
+
+    /// Open the Feedback page, or bring it forward if it is already open —
+    /// Help ▸ Feedback, and the notice dialog's **View**.
+    fn open_feedback(&mut self) {
+        match self.items.iter().position(|i| matches!(i, Item::Feedback(_))) {
+            Some(index) => {
+                // switch_tab is a no-op on the tab already in front; refresh
+                // it either way, since View is "show me what is waiting".
+                self.switch_tab(index);
+                if let Some(Item::Feedback(page)) = self.items.get_mut(self.active) {
+                    page.refresh();
+                }
+            }
+            None => {
+                self.items.push(Item::Feedback(FeedbackPage::new()));
+                self.active = self.items.len() - 1;
+                // No view in front now: the panels and the CLI's `"view":
+                // true` say so, exactly as with an empty strip.
+                self.sync_active();
+                self.save_tabs();
+            }
+        }
+        self.core.needs_render = true;
+    }
+
     fn frame_scene(&mut self) {
-        let Self { core, tabs, active, .. } = self;
-        if let Some(tab) = tabs.get_mut(*active) {
+        let Self { core, items, active, .. } = self;
+        if let Some(tab) = items.get_mut(*active).and_then(Item::view_mut) {
             core.frame_scene(tab);
         }
     }
@@ -287,7 +388,7 @@ impl ViewerApp {
     /// engine (latest-wins per slot).
     fn apply_input_events(&mut self, events: Vec<inputs::Event>) {
         let state = self.state();
-        let Some(tab) = self.tabs.get_mut(self.active) else { return };
+        let Some(tab) = self.tab_mut() else { return };
         if tab.apply(&*state, events) {
             self.save_tabs();
         }
@@ -301,10 +402,14 @@ impl ViewerApp {
     }
 
     fn switch_tab(&mut self, index: usize) {
-        if index == self.active || index >= self.tabs.len() {
+        if index == self.active || index >= self.items.len() {
             return;
         }
         self.active = index;
+        // A page someone else may have written to since it was last read.
+        if let Some(Item::Feedback(page)) = self.items.get_mut(index) {
+            page.refresh();
+        }
         self.core.needs_render = true;
         // The CLI's `status` selection and `"view": true` follow the tab the
         // user is looking at.
@@ -316,8 +421,8 @@ impl ViewerApp {
         let slot = self.next_slot();
         let tab = Tab::new(slot.clone(), path);
         self.state().set_view(&slot, tab.view());
-        self.tabs.push(tab);
-        self.active = self.tabs.len() - 1;
+        self.items.push(Item::View(tab));
+        self.active = self.items.len() - 1;
         self.core.needs_render = true;
         self.sync_active();
         self.save_tabs();
@@ -326,17 +431,20 @@ impl ViewerApp {
     /// Close one tab — the last one included, which leaves the window on the
     /// project with empty panels (File ▸ Open Doohickey fills them again).
     fn close_tab(&mut self, index: usize) {
-        if index >= self.tabs.len() {
+        if index >= self.items.len() {
             return;
         }
-        let tab = self.tabs.remove(index);
-        self.state().remove_view(&tab.slot);
+        // The feedback page has no view behind it — only the files, which
+        // stay where they are.
+        if let Item::View(tab) = self.items.remove(index) {
+            self.state().remove_view(&tab.slot);
+        }
         // Stay on the tab the user was on: closing one to its left shifts it
         // down, closing the last one falls back onto the new end of the row.
         if index < self.active {
             self.active -= 1;
         }
-        self.active = self.active.min(self.tabs.len().saturating_sub(1));
+        self.active = self.active.min(self.items.len().saturating_sub(1));
         self.core.needs_render = true;
         self.sync_active();
         self.save_tabs();
@@ -370,18 +478,26 @@ impl ViewerApp {
         // Tabs take their natural width, squeezed to an even share of the strip
         // once the row no longer fits.
         let room = strip.width() - FIND.x - FIND_GAP;
-        let share = (room / self.tabs.len().max(1) as f32).max(MIN_TAB);
+        let share = (room / self.items.len().max(1) as f32).max(MIN_TAB);
         let state = self.state();
-        let failed: Vec<bool> =
-            self.tabs.iter().map(|tab| state.build_failed(&tab.slot)).collect();
+        // Red says "this one has something wrong with it": a failed build,
+        // or — on the feedback page — a send that did not go through.
+        let failed: Vec<bool> = self
+            .items
+            .iter()
+            .map(|item| match item {
+                Item::View(tab) => state.build_failed(&tab.slot),
+                Item::Feedback(page) => page.failed(),
+            })
+            .collect();
         let labels: Vec<_> = self
-            .tabs
+            .items
             .iter()
             .zip(&failed)
-            .map(|(tab, failed)| {
+            .map(|(item, failed)| {
                 let color = if *failed { theme::ERROR } else { theme::TEXT };
                 let font = egui::FontId::proportional(theme::UI_SIZE);
-                let text = tab.label().to_owned();
+                let text = item.label().to_owned();
                 let mut job = egui::text::LayoutJob::simple_singleline(text, font, color);
                 job.wrap = egui::text::TextWrapping::truncate_at_width(share - extra);
                 ui.painter().layout_job(job)
@@ -464,9 +580,13 @@ impl ViewerApp {
                 continue; // squeezed off the end of the strip
             }
             let hit = ui.interact(body, ui.id().with(("tab", i)), egui::Sense::click());
-            let hit = match failed[i] {
-                true => hit.on_hover_text(format!("{} — build error", self.tabs[i].path)),
-                false => hit.on_hover_text(&self.tabs[i].path),
+            let hit = match (&self.items[i], failed[i]) {
+                (Item::View(tab), true) => {
+                    hit.on_hover_text(format!("{} — build error", tab.path))
+                }
+                (Item::View(tab), false) => hit.on_hover_text(&tab.path),
+                (Item::Feedback(_), true) => hit.on_hover_text("a report could not be sent"),
+                (Item::Feedback(_), false) => hit.on_hover_text("bug reports and requests"),
             };
             if hit.clicked() {
                 switch = Some(i);
@@ -755,6 +875,12 @@ impl ViewerApp {
                 export::Outcome::Idle => self.dialog = Some(Dialog::Export(dialog)),
                 export::Outcome::Closed => {}
             },
+            Some(Dialog::Feedback(mut dialog)) => match dialog.ui(ctx) {
+                feedback::Outcome::Idle => self.dialog = Some(Dialog::Feedback(dialog)),
+                // Dismiss is not "no" to anything: the reports keep waiting.
+                feedback::Outcome::Dismissed => {}
+                feedback::Outcome::View => self.open_feedback(),
+            },
             Some(Dialog::AgentFiles(mut dialog)) => match dialog.ui(ctx) {
                 agent::Outcome::Idle => self.dialog = Some(Dialog::AgentFiles(dialog)),
                 // Nothing is recorded either way: no is just this open's no.
@@ -779,15 +905,28 @@ impl eframe::App for ViewerApp {
         }
         let state = self.state();
         {
-            let Self { core, tabs, active, renderer, activity, .. } = &mut *self;
-            if let Some(tab) = tabs.get_mut(*active) {
+            let Self { core, items, active, renderer, activity, .. } = &mut *self;
+            if let Some(tab) = items.get_mut(*active).and_then(Item::view_mut) {
                 let pruned =
                     core.poll_published(&*state, tab, ui.ctx(), renderer, &|h| activity.keeps(h));
                 if core.advance_transport(ui.ctx(), &*state, tab) || pruned {
-                    tabs::save(state.project(), tabs, *active);
+                    tabs::save(state.project(), items, *active);
                 }
             }
         }
+        // Reports the agent filed since the last frame: the page (if it is
+        // open) shows them, and the user is told one dialog at a time.
+        let filed = state.take_feedback_notices();
+        if !filed.is_empty() {
+            for item in &mut self.items {
+                if let Item::Feedback(page) = item {
+                    page.refresh();
+                }
+            }
+            self.feedback_notices
+                .extend(filed.into_iter().map(feedback::Notice::Filed));
+        }
+        self.next_feedback_notice();
         // Activity events are drained either way; the toggle drops them.
         let events = state.take_activity();
         if self.activity.enabled {
@@ -820,8 +959,8 @@ impl eframe::App for ViewerApp {
                     .show(ui, |ui| {
                         let size = ui.available_size();
                         theme::list_box(ui, "tree", size, egui::Vec2b::TRUE, |ui| {
-                            let Self { core, tabs, active, .. } = &mut *self;
-                            if let Some(tab) = tabs.get_mut(*active) {
+                            let Self { core, items, active, .. } = &mut *self;
+                            if let Some(tab) = items.get_mut(*active).and_then(Item::view_mut) {
                                 core.tree_ui(ui, &*state, tab);
                             }
                         });
@@ -832,7 +971,7 @@ impl eframe::App for ViewerApp {
                         let size = ui.available_size();
                         let mut events = Vec::new();
                         theme::sheet_box(ui, "inputs", size, egui::Vec2b::new(false, true), |ui| {
-                            if let Some(tab) = self.tabs.get_mut(self.active) {
+                            if let Some(tab) = self.tab_mut() {
                                 events = inputs::panel_ui(ui, tab);
                             }
                         });
@@ -855,9 +994,15 @@ impl eframe::App for ViewerApp {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 let shortcuts = self.dialog.is_none() && self.pick.is_none();
-                let Self { core, tabs, active, renderer, .. } = &mut *self;
-                match tabs.get_mut(*active) {
-                    Some(tab) => core.viewport_ui(ui, frame, renderer, &*state, tab, shortcuts),
+                let project = state.project().to_path_buf();
+                let Self { core, items, active, renderer, .. } = &mut *self;
+                match items.get_mut(*active) {
+                    Some(Item::View(tab)) => {
+                        core.viewport_ui(ui, frame, renderer, &*state, tab, shortcuts)
+                    }
+                    // The page takes the viewport's place; the panels around
+                    // it are already empty, there being no view in front.
+                    Some(Item::Feedback(page)) => page.ui(ui, &project),
                     // Nothing open: an empty well, not the last tab's render.
                     None => odm_viewer_core::blank_viewport(ui),
                 }

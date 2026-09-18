@@ -17,6 +17,7 @@ odm — CAD/3D modelling for agents
 usage: odm run [<project-dir>] [--headless]        serve a project
        odm export --web <out-dir> [<project-dir>]  export a static web viewer
        odm [--project <dir>] <command> [options]   query a running engine
+       odm --version                               this build
 
 A project is a directory with an `odm.toml` in it. Client commands take the
 nearest one at or above cwd (walking up, like git) and talk to its engine. `run`
@@ -62,6 +63,12 @@ fn dispatch(args: &[String]) -> anyhow::Result<i32> {
         }
         Some("run") => run_engine(&args[1..]),
         Some("export") => export_site(&args[1..]),
+        // The same string every feedback report records about the build it
+        // was filed from, so a report and a terminal agree.
+        Some("--version" | "-V" | "version") => {
+            println!("{}", odm_engine::build_string());
+            Ok(0)
+        }
         _ if odm_cli::is_help(args) => {
             print!("{}", usage());
             Ok(0)

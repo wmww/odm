@@ -260,6 +260,11 @@ pub struct EngineState {
     /// for the viewer to pick up (see `session::sync_on_open`). Headless
     /// never drains it — there is no one to ask.
     agent_questions: Mutex<Vec<AgentQuestion>>,
+    /// Titles of feedback the agent filed, for the viewer to tell the user
+    /// about. Like the questions above: the viewer drains it, headless never
+    /// does — and so nothing is queued when there is no viewer (the files
+    /// themselves are the headless record, found at the next project open).
+    feedback_notices: Mutex<Vec<String>>,
 }
 
 impl EngineState {
@@ -292,6 +297,7 @@ impl EngineState {
             stopping: AtomicBool::new(false),
             on_stop: Mutex::new(Vec::new()),
             agent_questions: Mutex::new(Vec::new()),
+            feedback_notices: Mutex::new(Vec::new()),
         }))
     }
 
@@ -338,6 +344,23 @@ impl EngineState {
     /// each one is asked at most once per open.
     pub(crate) fn take_agent_questions(&self) -> Vec<AgentQuestion> {
         std::mem::take(&mut *self.agent_questions.lock().unwrap())
+    }
+
+    /// Note a report the agent just filed. The title is the whole notice —
+    /// the report itself is on disk, and the page reads it from there. No-op
+    /// when headless: nobody is there to be told, and the queue would only
+    /// grow.
+    pub(crate) fn note_feedback(&self, title: String) {
+        if !self.viewer_attached() {
+            return;
+        }
+        self.feedback_notices.lock().unwrap().push(title);
+        self.wake();
+    }
+
+    /// Take the feedback notices the viewer has yet to show.
+    pub fn take_feedback_notices(&self) -> Vec<String> {
+        std::mem::take(&mut *self.feedback_notices.lock().unwrap())
     }
 
     pub fn project(&self) -> &Path {
@@ -1131,7 +1154,10 @@ pub(crate) mod tests {
 
     #[test]
     fn chat_commands_skip_the_build_gate() {
-        let state = engine();
+        // A real directory: `feedback` writes a file, and it neither syncs
+        // nor builds either.
+        let dir = tempfile::tempdir().unwrap();
+        let state = EngineState::new(dir.path().to_path_buf(), env()).unwrap();
         let mut conn = Conn::new(state.clone());
         // Whatever else the engine is doing — here, gc holding the gate
         // exclusively — chat answers. A regression hangs, hence `within`.
@@ -1141,7 +1167,13 @@ pub(crate) mod tests {
             let state = state.clone();
             move || {
                 let polled = state.handle(json!({"cmd": "poll"}), &mut conn);
-                (polled, state.handle(json!({"cmd": "say", "text": "ok"}), &mut conn))
+                let said = state.handle(json!({"cmd": "say", "text": "ok"}), &mut conn);
+                let filed = state.handle(
+                    json!({"cmd": "feedback", "title": "t", "body": "b",
+                           "harness": "h", "model": "m"}),
+                    &mut conn,
+                );
+                (polled, said, filed)
             }
         });
         assert_eq!(replies.0["messages"], json!([{"text": "hi"}]));
@@ -1151,6 +1183,7 @@ pub(crate) mod tests {
         assert_eq!(replies.0["health"], json!([]));
         // The say echoes the status the user's message put up.
         assert_eq!(replies.1, json!({"ok": true, "task": "Processing"}));
+        assert_eq!(replies.2["ok"], json!(true), "{}", replies.2);
         state.with_transcript(|t| assert_eq!(t.len(), 2));
     }
 
