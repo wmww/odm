@@ -2773,6 +2773,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "odm-agent"
+version = "1.0.0"
+dependencies = [
+ "libc",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "odm-build"
 version = "1.0.0"
 dependencies = [

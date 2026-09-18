@@ -1,0 +1,25 @@
+[package]
+name = "odm-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+# Tested through tests/ against the fake agent; flip if src/ grows unit tests.
+test = false
+
+# A scripted ACP agent: plays an ndjson scenario, or (`--chat`) answers every
+# prompt with a canned turn. For this crate's tests and for driving the
+# viewer's panel without a real agent.
+[[bin]]
+name = "odm-fake-agent"
+path = "src/bin/fake_agent.rs"
+test = false
+
+[dependencies]
+serde_json = "1"
+libc.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
