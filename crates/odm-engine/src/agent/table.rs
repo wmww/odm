@@ -8,7 +8,7 @@
 //! themselves a CLI speaking ACP (opencode, gemini) run the user's own
 //! binary from PATH: they need it for login anyway.
 
-use odm_config::AgentConfig;
+use odm_config::{AgentConfig, Permissions};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -20,6 +20,9 @@ pub struct BuiltIn {
     pub login: &'static str,
     /// Anything the user should know before picking it.
     pub note: Option<&'static str>,
+    /// The mode that is [`Permissions::Safe`] here: safe tools run, the
+    /// rest asks. None = whatever the agent starts in.
+    pub safe_mode: Option<&'static str>,
 }
 
 pub enum Source {
@@ -33,7 +36,7 @@ pub enum Source {
 pub const BUILT_IN: &[BuiltIn] = &[
     BuiltIn {
         id: "claude-acp",
-        title: "Claude",
+        title: "Claude Code",
         source: Source::Npm {
             package: "@agentclientprotocol/claude-agent-acp",
             version: "0.79.0",
@@ -42,6 +45,8 @@ pub const BUILT_IN: &[BuiltIn] = &[
         },
         login: "claude /login",
         note: None,
+        // "Manual" — plus the allow rules in `session_meta`.
+        safe_mode: Some("default"),
     },
     BuiltIn {
         id: "codex-acp",
@@ -58,13 +63,16 @@ pub const BUILT_IN: &[BuiltIn] = &[
             "Codex's sandbox blocks the engine's socket: odm commands only work in its \
              Full Access mode.",
         ),
+        // "Approve for me": asks only for what it judges unsafe.
+        safe_mode: Some("agent"),
     },
     BuiltIn {
         id: "opencode",
-        title: "opencode",
+        title: "OpenCode",
         source: Source::Path { program: "opencode", args: &["acp"] },
         login: "opencode auth login",
         note: None,
+        safe_mode: None,
     },
     BuiltIn {
         id: "gemini",
@@ -72,6 +80,7 @@ pub const BUILT_IN: &[BuiltIn] = &[
         source: Source::Path { program: "gemini", args: &["--acp"] },
         login: "gemini",
         note: None,
+        safe_mode: None,
     },
 ];
 
@@ -81,7 +90,20 @@ pub fn built_in(id: &str) -> Option<&'static BuiltIn> {
 
 /// The name to show for an agent before it has said its own.
 pub fn title(id: &str) -> String {
-    built_in(id).map(|a| a.title.to_owned()).unwrap_or_else(|| id.to_owned())
+    match built_in(id) {
+        Some(agent) => agent.title.to_owned(),
+        None if id == odm_config::CUSTOM => "Custom".to_owned(),
+        None => id.to_owned(),
+    }
+}
+
+/// The session mode a permissions setting means for an agent: a mode id, or
+/// the `_meta.kind` every adapter tags its no-questions mode with.
+pub fn mode_wish(id: &str, permissions: Permissions) -> Option<&'static str> {
+    match permissions {
+        Permissions::Yolo => Some("full_access"),
+        Permissions::Safe => built_in(id)?.safe_mode,
+    }
 }
 
 /// Where an npm adapter is (to be) installed.
@@ -107,7 +129,8 @@ pub enum Problem {
 impl std::fmt::Display for Problem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Problem::Unknown(id) => write!(f, "`{id}` is not an agent this ODM knows, nor a custom one"),
+            Problem::Unknown(id) if id == odm_config::CUSTOM => write!(f, "the custom agent has no command yet — see Agent Settings"),
+            Problem::Unknown(id) => write!(f, "`{id}` is not an agent this ODM knows"),
             Problem::NotInstalled(title) => write!(f, "{title} is not installed yet — see Agent Settings"),
             Problem::NotOnPath(program) => write!(f, "`{program}` is not on PATH — install it first"),
         }
@@ -122,10 +145,9 @@ pub struct Resolved {
 }
 
 pub fn resolve(id: &str, config: &AgentConfig) -> Result<Resolved, Problem> {
-    // A custom entry may not shadow a built-in id: the settings page could
-    // not tell the two apart.
     let Some(agent) = built_in(id) else {
-        let custom = config.custom.get(id).ok_or_else(|| Problem::Unknown(id.to_owned()))?;
+        let custom = config.custom.as_ref().filter(|_| id == odm_config::CUSTOM);
+        let custom = custom.ok_or_else(|| Problem::Unknown(id.to_owned()))?;
         return Ok(Resolved { command: custom.command.clone(), env: custom.env.clone(), meta: None });
     };
     let command = match &agent.source {
@@ -141,27 +163,23 @@ pub fn resolve(id: &str, config: &AgentConfig) -> Result<Resolved, Problem> {
             std::iter::once(*program).chain(args.iter().copied()).map(str::to_owned).collect()
         }
     };
-    Ok(Resolved { command, env: Default::default(), meta: quiet_meta(id, config.quiet_odm) })
+    Ok(Resolved { command, env: Default::default(), meta: session_meta(id) })
 }
 
-/// The "quiet ODM work" recipe: allow rules handed to the *agent*, whose own
-/// parser applies them — ODM never reads a shell string or answers a
-/// permission request itself. Agents without a recipe just ask.
-fn quiet_meta(id: &str, quiet: bool) -> Option<Value> {
-    match (id, quiet) {
+/// `odm` commands and in-project edits never ask: allow rules handed to the
+/// *agent*, whose own parser applies them — ODM never reads a shell string
+/// or answers a permission request itself. Agents with no way to be told
+/// just ask (or not), by their own mode.
+fn session_meta(id: &str) -> Option<Value> {
+    match id {
         // The adapter spreads `options` into the Agent SDK's. Verified:
         // `odm status` and an in-project Write run unasked; `odm status;
         // touch x` and a Write outside cwd still ask.
-        ("claude-acp", true) => Some(json!({
+        "claude-acp" => Some(json!({
             "claudeCode": {"options": {"allowedTools": ["Bash(odm:*)", "Edit(./**)"]}}
         })),
         _ => None,
     }
-}
-
-/// Whether an agent has a quiet recipe at all (the settings box says so).
-pub fn has_quiet_recipe(id: &str) -> bool {
-    quiet_meta(id, true).is_some()
 }
 
 pub fn on_path(program: &str) -> bool {

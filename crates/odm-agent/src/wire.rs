@@ -59,6 +59,9 @@ pub struct PlanEntry {
 pub struct Choice {
     pub value: String,
     pub name: String,
+    /// `_meta.kind`, where the agent classifies its choices — modes come
+    /// as `standard`, `plan`, `auto_review`, `full_access`.
+    pub kind: Option<String>,
 }
 
 /// One selector the agent offers for the session (mode, model, effort, …).
@@ -84,6 +87,12 @@ pub(crate) enum OptionKind {
 impl ConfigOption {
     pub fn is_mode(&self) -> bool {
         self.category.as_deref() == Some("mode")
+    }
+
+    /// The choice a wish names: by value, else by `_meta.kind`.
+    pub fn find(&self, wish: &str) -> Option<&Choice> {
+        let by_value = self.choices.iter().find(|c| c.value == wish);
+        by_value.or_else(|| self.choices.iter().find(|c| c.kind.as_deref() == Some(wish)))
     }
 
     pub fn current_name(&self) -> Option<&str> {
@@ -244,7 +253,9 @@ pub(crate) fn config_options(v: &Value) -> Vec<ConfigOption> {
             .map(|modes| {
                 modes
                     .iter()
-                    .filter_map(|m| Some(Choice { value: str_of(m, "id")?, name: str_of(m, "name")? }))
+                    .filter_map(|m| {
+                        Some(Choice { value: str_of(m, "id")?, name: str_of(m, "name")?, kind: kind_of(m) })
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -278,7 +289,7 @@ fn config_option(v: &Value) -> Option<ConfigOption> {
         }
         "boolean" => {
             let choices = [("true", "On"), ("false", "Off")]
-                .map(|(value, name)| Choice { value: value.to_owned(), name: name.to_owned() });
+                .map(|(value, name)| Choice { value: value.to_owned(), name: name.to_owned(), kind: None });
             (OptionKind::Boolean, v.get("currentValue")?.as_bool()?.to_string(), choices.into())
         }
         _ => return None,
@@ -294,7 +305,11 @@ fn config_option(v: &Value) -> Option<ConfigOption> {
 }
 
 fn choice(v: &Value) -> Option<Choice> {
-    Some(Choice { value: str_of(v, "value")?, name: str_of(v, "name")? })
+    Some(Choice { value: str_of(v, "value")?, name: str_of(v, "name")?, kind: kind_of(v) })
+}
+
+fn kind_of(v: &Value) -> Option<String> {
+    v.pointer("/_meta/kind").and_then(Value::as_str).map(str::to_owned)
 }
 
 pub(crate) fn permission_options(params: &Value) -> Vec<PermissionOption> {

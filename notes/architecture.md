@@ -782,8 +782,9 @@ CLI, but have no chat — not a supported use case; the CLI may change
 freely with the managed agent.
 
 - **`odm-config`** — two TOML files, layered. System
-  (`$XDG_CONFIG_HOME/odm/config.toml`): `[agent] default`, `quiet_odm`,
-  `[agent.mode] <id> = "<mode>"`, `[agent.custom.<id>] command/env`;
+  (`$XDG_CONFIG_HOME/odm/config.toml`): `[agent] default`, `permissions`
+  (`safe`|`yolo`), `[agent.custom] command/env` — the *one* custom agent,
+  id `custom`;
   unknown keys *warn* (the file outlives any one ODM; an older ODM must
   start against a newer file), a file that won't parse is one warning and
   is never overwritten; writes go through `toml_edit` (comments and
@@ -800,7 +801,8 @@ freely with the managed agent.
   → commands in from any thread, `Event`s out of a channel. One thread
   reads stdout and runs the whole state machine (initialize →
   `session/load` if resumable, falling back to `session/new` → apply the
-  persisted mode → flush queued prompts), one drains stderr (tail kept
+  wished-for mode (a mode id, or a mode `_meta.kind` such as
+  `full_access`) → flush queued prompts), one drains stderr (tail kept
   for crash reports). **No schema crate either** (plan said
   `agent-client-protocol-schema`; dropped): `wire.rs` picks fields out of
   `serde_json::Value`, so an off-schema value costs that value, never the
@@ -844,7 +846,9 @@ freely with the managed agent.
   chunks join their message by `messageId` (looked for within the last
   64 items), or the last item when ids are absent; live
   `user_message_chunk` echoes are dropped (we put the user's line there).
-  - Lifecycle: spawned lazily by the first message, never headless;
+  - Lifecycle: spawned lazily by the first message — or by the Agent
+    Settings page coming forward (`warm`: a session and no prompt, so the
+    model list exists to pick from; quiet on failure) —, never headless;
     `session/load` replays history into a side list spliced in *above*
     what the user just typed; load failure → fresh session + a notice;
     crash → red line with the stderr tail, next message respawns; File ▸
@@ -876,14 +880,19 @@ freely with the managed agent.
     Host warnings (`engine_warning`) ride the same prompts. The pusher
     never takes engine locks under the host's lock; `pokes` closes the
     lost-wakeup gap between looking and sleeping.
-  - Permissions: `odm` commands and in-project edits run unasked,
-    everything else asks. ODM never parses a shell string and never
-    answers a request itself — `agent/table.rs` hands the *agent* allow
-    rules (`quiet_meta`). Claude: `session/new` `_meta.claudeCode.options.
-    allowedTools = ["Bash(odm:*)", "Edit(./**)"]` (verified in the
-    spike). Codex: none, and worse — see
-    issues/codex-sandbox-blocks-engine-socket.md. `[agent] quiet_odm =
-    false` turns it off.
+  - Permissions (user, 2026-09-18): `odm` commands and in-project edits
+    *always* run unasked, wherever the agent can be told so — no switch.
+    ODM never parses a shell string and never answers a request itself:
+    `agent/table.rs::session_meta` hands the *agent* allow rules (Claude:
+    `session/new` `_meta.claudeCode.options.allowedTools =
+    ["Bash(odm:*)", "Edit(./**)"]`, verified in the spike; Codex: none,
+    and worse — issues/codex-sandbox-blocks-engine-socket.md). The one
+    setting is **Safe vs YOLO** (`[agent] permissions`), mapped to a
+    session mode by `table::mode_wish`: YOLO = the mode every adapter
+    tags `_meta.kind: "full_access"`; Safe = a per-agent mode id (Claude
+    `default`, Codex `agent`), else whatever the agent starts in. It is
+    decoupled from the harness: one that lists no `full_access` mode
+    (OpenCode) grays the control. Plan mode and the rest are not exposed.
   - `table.rs`: built-in agents with pinned versions (bump per release;
     no registry fetch, no auto-update). claude-acp/codex-acp are npm
     adapters ODM installs — `npm install --prefix
@@ -909,12 +918,27 @@ freely with the managed agent.
   buttons' clicks. `theme::text_area` must not be put in a
   `ui.horizontal` (its child inherits the layout and collapses).
   `viewer/settings.rs` is the **Agent Settings** strip page (`kind:
-  "agent-settings"` in viewer.json; also Edit ▸ Agent Settings): agent
-  picker with on-disk status, install/update through `InstallDialog`,
-  custom command, the quiet-ODM check box, and one radio group per ACP
-  config option the running agent lists (mode persists via
-  `[agent.mode]`, the rest are the agent's to remember), login hint,
-  context usage.
+  "agent-settings"` in viewer.json; also Edit ▸ Agent Settings). UX rules
+  the user set (2026-09-18): the **Harness** selector is a plain static
+  radio list (Claude Code, Codex, OpenCode, Gemini CLI, Custom) — labels
+  carry at most one parenthesised fact (a version, "not installed"),
+  never how something was found; whatever the pick needs (install/update
+  via `InstallDialog`, the custom "ACP agent command" field, a login
+  hint) appears *below* the list, never inside it; no explanatory
+  captions. Under it, page-level settings, grayed rather than removed
+  when a harness can't honour them: Permissions (Safe/YOLO), Model
+  (`theme::drop_down`), Effort (a `trackbar` over the `thought_level`
+  choices, told on release). Nothing else an agent lists is exposed
+  (modes, fast mode), and session facts like context use don't belong
+  here. Verified live against OpenCode 2.0.6 (warm start, model list,
+  a turn running `odm status`); Claude/Codex adapters still unrun.
+- **`theme::drop_down`** (`theme/drop_down.rs`) is the project's
+  drop-down list box, built for any length: rows are one allocated block
+  with only the visible ones laid out/hit-tested/painted, a filter box
+  (auto-focused) heads lists over 12 entries, Up/Down/Enter/Escape work,
+  the list keeps its height while the filter narrows it. State (filter,
+  cursor) lives in egui temp data under the caller's id. Headless-egui
+  tests drive a 5000-row list.
 - **The message box takes newlines** (`theme::text_area`): a multiline
   `TextEdit` whose `return_key` is *shift+Enter*, so plain Enter falls
   through for the caller (`TextArea::submitted`). ctrl+J is rewritten

@@ -175,14 +175,26 @@ fn main() {
 
 // --- chat mode ---
 
-fn options(mode: &str, model: &str) -> Value {
+fn options(mode: &str, model: &str, effort: &str) -> Value {
+    // `ODM_FAKE_AGENT_MODELS=400`: a provider-sized list, for the selector.
+    let extra: usize = std::env::var("ODM_FAKE_AGENT_MODELS").ok().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let mut models = vec![
+        json!({"value": "default", "name": "Default (recommended)"}),
+        json!({"value": "big", "name": "Fake Big 1"}),
+        json!({"value": "small", "name": "Fake Small 1"}),
+    ];
+    models.extend((0..extra).map(|i| json!({"value": format!("m{i}"), "name": format!("provider-{}/model-{i}", i % 17)})));
     json!([
         {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": mode,
          "options": [{"value": "default", "name": "Manual"}, {"value": "acceptEdits", "name": "Accept Edits"},
-                     {"value": "plan", "name": "Plan"}]},
+                     {"value": "plan", "name": "Plan", "_meta": {"kind": "plan"}},
+                     {"value": "bypass", "name": "Bypass", "_meta": {"kind": "full_access"}}]},
+        {"id": "effort", "name": "Effort", "category": "thought_level", "type": "select", "currentValue": effort,
+         "options": [{"value": "low", "name": "Low"}, {"value": "medium", "name": "Medium"},
+                     {"value": "high", "name": "High"}]},
+        {"id": "fast", "name": "Fast mode", "category": "model_config", "type": "boolean", "currentValue": false},
         {"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model,
-         "options": [{"value": "default", "name": "Default (recommended)"}, {"value": "big", "name": "Fake Big 1"},
-                     {"value": "small", "name": "Fake Small 1"}]},
+         "options": models},
     ])
 }
 
@@ -191,7 +203,7 @@ fn chunk(kind: &str, id: &str, text: &str) -> Value {
 }
 
 fn chat(wire: &mut Wire) {
-    let (mut mode, mut model) = ("default".to_owned(), "big".to_owned());
+    let (mut mode, mut model, mut effort) = ("default".to_owned(), "big".to_owned(), "medium".to_owned());
     let mut turn = 0u32;
     while let Some(msg) = wire.next(None) {
         let method = msg.get("method").and_then(Value::as_str).unwrap_or_default().to_owned();
@@ -209,20 +221,21 @@ fn chat(wire: &mut Wire) {
                     {"kind": "subscription", "label": "Fake Max", "email": "user@example.com"}}));
             }
             "session/new" => wire.reply(&method, ("result", json!({
-                "sessionId": "fake-1", "configOptions": options(&mode, &model)}))),
+                "sessionId": "fake-1", "configOptions": options(&mode, &model, &effort)}))),
             "session/load" => {
                 wire.update(chunk("user_message_chunk", "h1", "make the post taller"));
                 wire.update(chunk("user_message_chunk", "h1", "odm://user-state"));
                 wire.update(chunk("agent_message_chunk", "h2", "Done: the post is 40 mm now."));
-                wire.reply(&method, ("result", json!({"configOptions": options(&mode, &model)})));
+                wire.reply(&method, ("result", json!({"configOptions": options(&mode, &model, &effort)})));
             }
             "session/set_config_option" => {
                 let value = params["value"].as_str().unwrap_or_default().to_owned();
                 match params["configId"].as_str() {
                     Some("mode") => mode = value,
+                    Some("effort") => effort = value,
                     _ => model = value,
                 }
-                wire.reply(&method, ("result", json!({"configOptions": options(&mode, &model)})));
+                wire.reply(&method, ("result", json!({"configOptions": options(&mode, &model, &effort)})));
             }
             "session/prompt" => {
                 turn += 1;

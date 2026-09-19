@@ -244,7 +244,7 @@ fn offset_at(track_len: f32, view: f32, content: f32, start: f32) -> f32 {
 
 /// The scrollbar arrow: a 7×4 pixel triangle pointing along `dim` (0 = x,
 /// 1 = y), towards the positive end if `positive`. `center` must be whole.
-fn arrow(p: &egui::Painter, center: egui::Pos2, dim: usize, positive: bool, color: Color32) {
+pub(super) fn arrow(p: &egui::Painter, center: egui::Pos2, dim: usize, positive: bool, color: Color32) {
     let mut mesh = egui::Mesh::default();
     for i in 0..4 {
         // Rows from the flat back (7 wide) to the apex (1 wide).

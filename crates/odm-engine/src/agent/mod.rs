@@ -19,7 +19,7 @@ pub use odm_agent::{ConfigOption, PermissionOption, PlanEntry, ToolCall, ToolCon
 
 use crate::state::{DiagnosticMap, EngineState};
 use odm_agent::{Agent, Event, ExitReason, Launch, SessionOptions, Update};
-use odm_config::{AgentState, Config, Files};
+use odm_config::{AgentState, Config, Files, Permissions};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
@@ -139,7 +139,6 @@ struct Inner {
     serial: u64,
     turn: bool,
     options: Vec<ConfigOption>,
-    usage: Option<(u64, u64)>,
     actions: u64,
     /// The diagnostic value the agent was last told.
     baseline: DiagnosticMap,
@@ -192,7 +191,6 @@ impl AgentHost {
             serial: 0,
             turn: false,
             options: Vec::new(),
-            usage: None,
             actions: 0,
             baseline: DiagnosticMap::new(),
             engine_prompts: 0,
@@ -309,21 +307,12 @@ impl AgentHost {
         self.inner.lock().unwrap().options.clone()
     }
 
-    /// Context used / size, when the agent reports it.
-    pub fn usage(&self) -> Option<(u64, u64)> {
-        self.inner.lock().unwrap().usage
-    }
-
     pub fn config(&self) -> Config {
         self.inner.lock().unwrap().config.clone()
     }
 
     pub fn selected(&self) -> Option<String> {
         self.inner.lock().unwrap().config.agent.selected.clone()
-    }
-
-    pub fn running(&self) -> bool {
-        self.inner.lock().unwrap().live.is_some()
     }
 
     /// How to log in, when the live agent has said it is logged out.
@@ -393,17 +382,49 @@ impl AgentHost {
         self.wake();
     }
 
-    /// Change one of the session's selectors. The mode is also a persisted
-    /// setting, re-applied to every later session.
+    /// Change one of the running session's selectors (model, effort). The
+    /// agent remembers these; ODM does not.
     pub fn set_option(&self, id: &str, value: &str) {
+        if let Some(live) = &self.inner.lock().unwrap().live {
+            live.agent.set_config_option(id, value);
+        }
+    }
+
+    /// Whether the running agent can be told the permissions setting: it
+    /// lists a mode tagged `full_access`. None = not running, not known.
+    pub fn permissions_supported(&self) -> Option<bool> {
+        let inner = self.inner.lock().unwrap();
+        inner.live.as_ref().filter(|live| live.ready)?;
+        Some(inner.options.iter().any(|o| o.is_mode() && o.find("full_access").is_some()))
+    }
+
+    /// Safe or YOLO: saved for every later session, and applied to the
+    /// running one.
+    pub fn set_permissions(&self, permissions: Permissions) {
         let mut inner = self.inner.lock().unwrap();
+        let saved = odm_config::set_permissions(&self.files, permissions);
+        inner.config.agent.permissions = permissions;
+        inner.note_config_error(saved);
         let Some(live) = &inner.live else { return };
-        live.agent.set_config_option(id, value);
-        if inner.options.iter().any(|o| o.id == id && o.is_mode()) {
-            let agent = live.id.clone();
-            let saved = odm_config::set_mode(&self.files, &agent, Some(value));
-            inner.config.agent.mode.insert(agent, value.to_owned());
-            inner.note_config_error(saved);
+        let mode = inner.options.iter().find(|o| o.is_mode());
+        if let Some(wish) = table::mode_wish(&live.id, permissions)
+            && let Some(mode) = mode
+            && let Some(choice) = mode.find(wish)
+            && choice.value != mode.current
+        {
+            live.agent.set_config_option(&mode.id, &choice.value);
+        }
+    }
+
+    /// Start the selected agent and its session without saying anything to
+    /// it, so its model list is there to pick from. Quiet about failure: an
+    /// agent that cannot start says so when the user next messages it.
+    pub fn warm(self: &Arc<Self>) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.live.is_none()
+            && let Some(id) = inner.config.agent.selected.clone()
+        {
+            let _ = self.spawn(&mut inner, &id);
         }
     }
 
@@ -436,16 +457,15 @@ impl AgentHost {
         self.wake();
     }
 
-    pub fn set_quiet_odm(&self, on: bool) {
+    /// The custom agent's command. Changing it retires a running one.
+    pub fn set_custom(&self, command: Vec<String>) -> Result<(), String> {
+        odm_config::set_custom(&self.files, &command)?;
         let mut inner = self.inner.lock().unwrap();
-        let saved = odm_config::set_quiet_odm(&self.files, on);
-        inner.config.agent.quiet_odm = on;
-        inner.note_config_error(saved);
-    }
-
-    pub fn set_custom(&self, id: &str, agent: odm_config::CustomAgent) -> Result<(), String> {
-        odm_config::set_custom(&self.files, id, &agent)?;
-        self.inner.lock().unwrap().config.agent.custom.insert(id.to_owned(), agent);
+        let env = inner.config.agent.custom.take().map(|c| c.env).unwrap_or_default();
+        inner.config.agent.custom = Some(odm_config::CustomAgent { command, env });
+        if inner.live.as_ref().is_some_and(|live| live.id == odm_config::CUSTOM) {
+            inner.retire();
+        }
         Ok(())
     }
 
@@ -501,15 +521,17 @@ impl AgentHost {
         let options = SessionOptions {
             resume: inner.memo.agents.get(id).and_then(|m| m.session_id.clone()),
             meta: resolved.meta,
-            mode: inner.config.agent.mode.get(id).cloned(),
+            mode: table::mode_wish(id, inner.config.agent.permissions).map(str::to_owned),
         };
         let (agent, events) = Agent::spawn(launch, options, Arc::new(|| {}))
             .map_err(|e| format!("could not start {}: {e}", table::title(id)))?;
         inner.serial += 1;
         let serial = inner.serial;
         inner.live = Some(Live { agent, id: id.to_owned(), serial, ready: false, login: None });
-        // History goes before what was just typed.
-        inner.replay_at = inner.items.len().saturating_sub(1);
+        // History goes before what was just typed, if this is a message's
+        // doing (a warm start has typed nothing).
+        let typed = matches!(inner.items.last(), Some(Item::User { .. }));
+        inner.replay_at = inner.items.len() - typed as usize;
         inner.replayed.clear();
         inner.baseline.clear();
         let host = self.clone();
@@ -626,7 +648,8 @@ impl AgentHost {
                     header.account = Some(label);
                 }
             }
-            Event::Usage { used, size } => inner.usage = Some((used, size)),
+            // No context meter yet: nothing to do with it.
+            Event::Usage { .. } => {}
             Event::Permission { id, tool, options } => {
                 inner.items.push(Item::Permission { id, tool, options, answer: None });
             }
@@ -826,7 +849,6 @@ impl Inner {
         }
         self.turn = false;
         self.options.clear();
-        self.usage = None;
         self.replayed.clear();
         self.close_turn();
     }

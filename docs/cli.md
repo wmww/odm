@@ -450,8 +450,8 @@ is the agent's tool surface; it carries no messages. (`poll`, `say` and
   the status, labelled with the plan entry in progress, else the
   running tool call. It ends when the turn does.
 - **Permissions.** `odm` commands and edits inside the project run
-  unasked (where the agent has a way to be told so — Agent Settings);
-  everything else asks the user in the panel.
+  unasked (where the agent has a way to be told so); everything else
+  asks the user in the panel, unless they picked YOLO in Agent Settings.
 
 Agents run by hand, outside ODM, can still use the CLI — they just
 have no chat.

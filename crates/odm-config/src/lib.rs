@@ -68,27 +68,38 @@ pub struct CustomAgent {
     pub env: BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// How much the agent may do without asking. `odm` commands and edits
+/// inside the project never ask, wherever the agent can be told so; this
+/// picks what happens to everything else.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Permissions {
+    /// Safe tools run; anything else asks.
+    #[default]
+    Safe,
+    /// Nothing asks.
+    Yolo,
+}
+
+impl Permissions {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Permissions::Safe => "safe",
+            Permissions::Yolo => "yolo",
+        }
+    }
+}
+
+/// The id the one custom agent is picked by.
+pub const CUSTOM: &str = "custom";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AgentConfig {
     /// The agent to run: the project's `use`, else the system `default`.
     /// None = unconfigured, nothing spawns.
     pub selected: Option<String>,
-    pub custom: BTreeMap<String, CustomAgent>,
-    /// agent id → the mode id to re-apply to every session.
-    pub mode: BTreeMap<String, String>,
-    /// Hand the agent allow rules for `odm` commands and in-project edits.
-    pub quiet_odm: bool,
-}
-
-impl Default for AgentConfig {
-    fn default() -> Self {
-        AgentConfig {
-            selected: None,
-            custom: BTreeMap::new(),
-            mode: BTreeMap::new(),
-            quiet_odm: true,
-        }
-    }
+    /// The custom agent ([`CUSTOM`]), when one is defined.
+    pub custom: Option<CustomAgent>,
+    pub permissions: Permissions,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -184,19 +195,12 @@ fn system(doc: &DocumentMut, path: &Path, config: &mut Config) {
             let full = format!("agent.{key}");
             match key {
                 "default" => config.agent.selected = r.string(&full, item),
-                "quiet_odm" => match item.as_bool() {
-                    Some(b) => config.agent.quiet_odm = b,
-                    None => r.warn(&full, "ignored: expected true or false"),
+                "permissions" => match item.as_str() {
+                    Some("safe") => config.agent.permissions = Permissions::Safe,
+                    Some("yolo") => config.agent.permissions = Permissions::Yolo,
+                    _ => r.warn(&full, "ignored: expected \"safe\" or \"yolo\""),
                 },
-                "mode" => config.agent.mode = r.string_map(&full, item),
-                "custom" => {
-                    let Some(table) = r.table(&full, item) else { continue };
-                    for (id, item) in table.iter() {
-                        if let Some(custom) = custom(&mut r, &format!("{full}.{id}"), item) {
-                            config.agent.custom.insert(id.to_owned(), custom);
-                        }
-                    }
-                }
+                "custom" => config.agent.custom = custom(&mut r, &full, item),
                 _ => r.warn(&full, "is not a key this ODM knows; ignored"),
             }
         }
@@ -271,42 +275,18 @@ pub fn set_agent(files: &Files, id: Option<&str>) -> Result<(), String> {
     edit(system, |doc| put(table(doc, &["agent"]), "default", id.into()))
 }
 
-/// Persist an agent's mode (`None` = back to the agent's own default).
-pub fn set_mode(files: &Files, agent: &str, mode: Option<&str>) -> Result<(), String> {
+pub fn set_permissions(files: &Files, permissions: Permissions) -> Result<(), String> {
     let Some(system) = &files.system else { return Ok(()) };
-    edit(system, |doc| {
-        let modes = table(doc, &["agent", "mode"]);
-        match mode {
-            Some(mode) => put(modes, agent, mode.into()),
-            None => {
-                modes.remove(agent);
-            }
-        }
-    })
+    edit(system, |doc| put(table(doc, &["agent"]), "permissions", permissions.as_str().into()))
 }
 
-pub fn set_quiet_odm(files: &Files, on: bool) -> Result<(), String> {
-    let Some(system) = &files.system else { return Ok(()) };
-    edit(system, |doc| put(table(doc, &["agent"]), "quiet_odm", on.into()))
-}
-
-/// Define (or redefine) a custom agent. System file only, by construction.
-pub fn set_custom(files: &Files, id: &str, agent: &CustomAgent) -> Result<(), String> {
+/// Define the custom agent's command. System file only, by construction.
+pub fn set_custom(files: &Files, command: &[String]) -> Result<(), String> {
     let Some(system) = &files.system else {
         return Err("no home directory to keep a config file in".to_owned());
     };
     edit(system, |doc| {
-        let entry = table(doc, &["agent", "custom", id]);
-        entry["command"] = value(agent.command.iter().collect::<Array>());
-        if agent.env.is_empty() {
-            entry.remove("env");
-        } else {
-            let mut env = toml_edit::InlineTable::new();
-            for (k, v) in &agent.env {
-                env.insert(k, v.as_str().into());
-            }
-            entry["env"] = value(env);
-        }
+        table(doc, &["agent", "custom"])["command"] = value(command.iter().collect::<Array>());
     })
 }
 
@@ -395,13 +375,11 @@ mod tests {
         let files = files(dir.path());
         write(
             files.system.as_ref().unwrap(),
-            "[viewer]\nfont = 1\n[agent]\ndefault = \"x\"\nfuture = true\nquiet_odm = \"no\"\n\
-             [agent.mode]\nx = \"plan\"\n",
+            "[viewer]\nfont = 1\n[agent]\ndefault = \"x\"\nfuture = true\npermissions = \"maybe\"\n",
         );
         let config = load(&files);
         assert_eq!(config.agent.selected.as_deref(), Some("x"));
-        assert_eq!(config.agent.mode["x"], "plan");
-        assert!(config.agent.quiet_odm, "a bad value keeps the default");
+        assert_eq!(config.agent.permissions, Permissions::Safe, "a bad value keeps the default");
         assert_eq!(config.warnings.len(), 3, "{:?}", config.warnings);
         // And a file that is not TOML at all is one warning, not a failure.
         write(files.system.as_ref().unwrap(), "[agent\n");
@@ -416,11 +394,11 @@ mod tests {
         let files = files(dir.path());
         write(
             &files.project,
-            "[agent]\nuse = \"evil\"\nquiet_odm = false\n[agent.custom.evil]\ncommand = [\"rm\"]\n",
+            "[agent]\nuse = \"custom\"\npermissions = \"yolo\"\n[agent.custom]\ncommand = [\"rm\"]\n",
         );
         let config = load(&files);
-        assert!(config.agent.custom.is_empty());
-        assert!(config.agent.quiet_odm);
+        assert_eq!(config.agent.custom, None);
+        assert_eq!(config.agent.permissions, Permissions::Safe);
         assert_eq!(config.warnings.len(), 2, "{:?}", config.warnings);
     }
 
@@ -431,24 +409,16 @@ mod tests {
         let system = files.system.clone().unwrap();
         write(&system, "# mine\n[agent]\ndefault = \"a\" # last pick\n");
         set_agent(&files, Some("claude-acp")).unwrap();
-        set_mode(&files, "claude-acp", Some("acceptEdits")).unwrap();
-        set_quiet_odm(&files, false).unwrap();
-        let custom = CustomAgent {
-            command: vec!["my-agent".into(), "--acp".into()],
-            env: BTreeMap::from([("KEY".to_owned(), "v".to_owned())]),
-        };
-        set_custom(&files, "mine", &custom).unwrap();
+        set_permissions(&files, Permissions::Yolo).unwrap();
+        let command = vec!["my-agent".to_owned(), "--acp".to_owned()];
+        set_custom(&files, &command).unwrap();
         let text = std::fs::read_to_string(&system).unwrap();
         assert!(text.contains("# mine") && text.contains("# last pick"), "{text}");
         let config = load(&files);
         assert!(config.warnings.is_empty(), "{:?}", config.warnings);
         assert_eq!(config.agent.selected.as_deref(), Some("claude-acp"));
-        assert_eq!(config.agent.mode["claude-acp"], "acceptEdits");
-        assert!(!config.agent.quiet_odm);
-        assert_eq!(config.agent.custom["mine"], custom);
-        // Clearing the mode, and the project's pick, reads back as unset.
-        set_mode(&files, "claude-acp", None).unwrap();
-        assert!(load(&files).agent.mode.is_empty());
+        assert_eq!(config.agent.permissions, Permissions::Yolo);
+        assert_eq!(config.agent.custom.unwrap().command, command);
     }
 
     #[test]
@@ -457,7 +427,7 @@ mod tests {
         let files = files(dir.path());
         let system = files.system.clone().unwrap();
         write(&system, "[agent\n");
-        assert!(set_quiet_odm(&files, false).is_err());
+        assert!(set_permissions(&files, Permissions::Yolo).is_err());
         assert_eq!(std::fs::read_to_string(&system).unwrap(), "[agent\n");
     }
 }

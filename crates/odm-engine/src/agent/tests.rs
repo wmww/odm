@@ -25,7 +25,7 @@ fn project() -> (tempfile::TempDir, Files) {
     std::fs::write(
         &system,
         format!(
-            "[agent]\ndefault = \"fake\"\n[agent.mode]\nfake = \"plan\"\n[agent.custom.fake]\n\
+            "[agent]\ndefault = \"custom\"\npermissions = \"yolo\"\n[agent.custom]\n\
              command = [{:?}, \"--chat\"]\nenv = {{ ODM_FAKE_AGENT_FAST = \"1\" }}\n",
             fake_agent().display().to_string()
         ),
@@ -63,7 +63,7 @@ fn a_conversation_then_a_resumed_one() {
     let (dir, files) = project();
     let host = AgentHost::with_files(dir.path(), files.clone());
     assert_eq!(host.lamp(), Lamp::Off, "nothing spawns until the user speaks");
-    assert_eq!(host.placeholder(), "Message fake");
+    assert_eq!(host.placeholder(), "Message Custom");
 
     host.send("make the post taller".into(), Some(json!({"path": "root.js"})));
     assert_eq!(host.lamp(), Lamp::Working, "lit from Enter");
@@ -79,8 +79,8 @@ fn a_conversation_then_a_resumed_one() {
         assert_eq!(header.agent.as_deref(), Some("Fake Agent"));
         assert_eq!(header.session.as_deref(), Some("fake-1"));
         assert_eq!(header.account.as_deref(), Some("Fake Max"));
-        // The persisted mode was applied to the new session.
-        assert_eq!(header.mode.as_deref(), Some("Plan"));
+        // YOLO found the mode the agent tags `full_access`.
+        assert_eq!(header.mode.as_deref(), Some("Bypass"));
     });
     host.shutdown(true);
 

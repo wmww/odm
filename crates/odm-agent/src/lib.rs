@@ -69,7 +69,8 @@ pub struct SessionOptions {
     pub resume: Option<String>,
     /// `_meta` for `session/new` / `session/load` — agent-specific extras.
     pub meta: Option<Value>,
-    /// Mode id to apply to the session once it exists.
+    /// The mode to put the session in before any prompt goes: a mode id,
+    /// or a mode `_meta.kind` (`full_access`, …) — see [`ConfigOption::find`].
     pub mode: Option<String>,
 }
 
@@ -662,14 +663,14 @@ impl Shared {
         self.emit(Event::ConfigOptions(state.config.clone()));
         self.emit(Event::SessionStarted { id, resumed });
         let mut out = Vec::new();
-        // The persisted mode, if this agent still has it and is not on it.
-        if let Some(mode) = state.options.mode.clone()
+        // The wished-for mode, if this agent has it and is not on it.
+        if let Some(wish) = state.options.mode.clone()
             && let Some(option) = state.config.iter().find(|o| o.is_mode())
-            && option.current != mode
-            && option.choices.iter().any(|c| c.value == mode)
+            && let Some(choice) = option.find(&wish)
+            && option.current != choice.value
         {
-            let id = option.id.clone();
-            out.extend(state.set_config(&id, &mode));
+            let (id, value) = (option.id.clone(), choice.value.clone());
+            out.extend(state.set_config(&id, &value));
         }
         out.extend(self.flush(state));
         out

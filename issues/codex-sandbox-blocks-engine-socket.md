@@ -7,7 +7,8 @@ default, and `read-only`) deny the CLI's connect to `.odm/engine.sock`:
 `agent`. (Spike, 2026-09-18: notes/agent-integration-research-2026-09.md.)
 
 Today: Agent Settings shows a note under Codex saying it needs Full
-Access, Codex has no "quiet ODM" recipe (`agent/table.rs::quiet_meta`),
+Access (YOLO picks it), Codex has no allow-rule recipe
+(`agent/table.rs::session_meta`),
 and the CLI names the cause ("a sandbox is blocking the socket; rerun
 outside it") — Codex reads that and reports it, but does not ask to
 escalate by itself.

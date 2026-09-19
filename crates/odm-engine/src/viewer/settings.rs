@@ -1,15 +1,23 @@
-//! The Agent Settings page: which agent ODM runs, installing it, and the
-//! selectors the running agent offers for its session.
+//! The Agent Settings page: which harness ODM runs, installing it, and the
+//! few settings worth a control — permissions, model, effort.
 //!
 //! A strip item like the Feedback page (`super::Item::Settings`). Everything
 //! it shows is read from the engine's `AgentHost` and the install directory;
 //! everything it changes goes through the host, which writes the config
 //! files. Nothing is downloaded without a yes in [`InstallDialog`].
+//!
+//! The harness selector is a plain, static radio list; what the pick needs
+//! (an install button, the custom command) appears *below* it, never inside.
+//! The settings under it belong to the page, not to the harness: one that
+//! cannot honour a setting grays it, it does not remove it. Putting the page
+//! in front starts the agent's session (without saying anything to it), so
+//! the model list is there to pick from.
 
 use crate::agent::table::{self, BuiltIn, Source};
 use crate::agent::{AgentHost, ConfigOption};
 use crate::theme;
 use eframe::egui;
+use odm_config::{CUSTOM, Permissions};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -19,19 +27,18 @@ pub const LABEL: &str = "Agent Settings";
 
 const PAD: f32 = 8.0;
 const ROW: f32 = 21.0;
-const INDENT: f32 = 18.0;
-/// Choices past this scroll in a box of their own (opencode lists every
-/// model of every provider).
-const CHOICES_INLINE: usize = 8;
-const CHOICES_HEIGHT: f32 = 150.0;
+/// The column the setting names sit in, and the controls' width beside it.
+const NAMES: f32 = 70.0;
+const CONTROL: f32 = 320.0;
 
-/// What is on disk for a built-in agent.
+/// What is on disk for a built-in harness.
 #[derive(Clone, PartialEq)]
 enum Status {
-    /// Installed at this version (an npm adapter), or found on PATH.
-    Ready(Option<String>),
-    NotInstalled,
-    NotOnPath(&'static str),
+    /// An npm adapter, installed at this version.
+    Installed(String),
+    /// The user's own CLI, on PATH.
+    Found,
+    Missing,
 }
 
 struct Installing {
@@ -47,9 +54,11 @@ pub struct SettingsPage {
     stale: bool,
     installing: Option<Installing>,
     install_error: Option<String>,
-    custom_id: String,
-    custom_command: String,
+    /// The custom command as typed; committed when the field is left.
+    custom: String,
     custom_error: Option<String>,
+    /// The effort slider mid-drag: the agent is told on release.
+    effort: Option<f64>,
 }
 
 impl SettingsPage {
@@ -66,22 +75,26 @@ impl SettingsPage {
         self.install_error.is_some()
     }
 
-    fn reload(&mut self) {
+    fn reload(&mut self, host: &Arc<AgentHost>) {
         self.status = table::BUILT_IN
             .iter()
             .map(|agent| {
                 let status = match &agent.source {
                     Source::Npm { package, .. } => table::install_dir(agent.id)
                         .and_then(|dir| table::installed_version(&dir, package))
-                        .map_or(Status::NotInstalled, |v| Status::Ready(Some(v))),
+                        .map_or(Status::Missing, Status::Installed),
                     Source::Path { program, .. } => match table::on_path(program) {
-                        true => Status::Ready(None),
-                        false => Status::NotOnPath(program),
+                        true => Status::Found,
+                        false => Status::Missing,
                     },
                 };
                 (agent.id, status)
             })
             .collect();
+        let custom = host.config().agent.custom;
+        self.custom = custom.map(|c| c.command.join(" ")).unwrap_or_default();
+        // The session is what knows the models: have one to ask.
+        host.warm();
     }
 
     /// The user said yes to [`InstallDialog`]: run npm, off the UI thread.
@@ -115,7 +128,7 @@ impl SettingsPage {
     pub fn ui(&mut self, ui: &mut egui::Ui, host: &Arc<AgentHost>) -> Option<InstallDialog> {
         self.collect_install();
         if std::mem::take(&mut self.stale) {
-            self.reload();
+            self.reload(host);
         }
         let mut ask = None;
         let size = ui.available_size();
@@ -123,202 +136,201 @@ impl SettingsPage {
             let margin = egui::Margin::same(PAD as i8);
             egui::Frame::new().inner_margin(margin).show(ui, |ui| {
                 ui.set_width((ui.available_width()).min(560.0));
-                ask = self.agents_ui(ui, host);
-                ui.add_space(PAD);
-                self.custom_ui(ui, host);
+                self.harness_ui(ui, host);
+                ask = self.selected_ui(ui, host);
                 ui.add_space(PAD);
                 permissions_ui(ui, host);
                 ui.add_space(PAD);
-                session_ui(ui, host);
+                self.session_ui(ui, host);
             });
         });
         ask
     }
 
-    fn agents_ui(&mut self, ui: &mut egui::Ui, host: &Arc<AgentHost>) -> Option<InstallDialog> {
-        let mut ask = None;
-        let config = host.config().agent;
-        heading(ui, "Agent");
-        weak(ui, "ODM runs the agent you pick here and shows the conversation in the Agent panel.");
-        ui.add_space(2.0);
+    /// The selector: the same five rows whatever is picked. A label carries
+    /// at most the one thing that matters about the harness on this machine.
+    fn harness_ui(&mut self, ui: &mut egui::Ui, host: &Arc<AgentHost>) {
+        heading(ui, "Harness");
+        let selected = host.selected();
+        let mut pick = None;
         for agent in table::BUILT_IN {
-            let selected = config.selected.as_deref() == Some(agent.id);
-            let status = self.status.get(agent.id).cloned().unwrap_or(Status::NotInstalled);
-            let note = match &status {
-                Status::Ready(Some(version)) => format!("installed, {version}"),
-                Status::Ready(None) => "found on PATH".to_owned(),
-                Status::NotInstalled => "not installed".to_owned(),
-                Status::NotOnPath(program) => format!("`{program}` not on PATH"),
+            let label = match self.status.get(agent.id) {
+                Some(Status::Installed(version)) => format!("{} ({version})", agent.title),
+                Some(Status::Found) => agent.title.to_owned(),
+                Some(Status::Missing) | None => format!("{} (not installed)", agent.title),
             };
-            if choice_row(ui, ("agent", agent.id), selected, &format!("{}  ({note})", agent.title)) {
-                host.select(agent.id);
-            }
-            if selected {
-                ask = ask.or(self.selected_ui(ui, agent, &status));
+            if choice_row(ui, ("harness", agent.id), selected.as_deref() == Some(agent.id), &label, true) {
+                pick = Some(agent.id);
             }
         }
-        for id in config.custom.keys() {
-            let selected = config.selected.as_deref() == Some(id.as_str());
-            let command = config.custom[id].command.join(" ");
-            if choice_row(ui, ("custom", id), selected, &format!("{id}  (custom: {command})")) {
-                host.select(id);
+        if choice_row(ui, ("harness", CUSTOM), selected.as_deref() == Some(CUSTOM), "Custom", true) {
+            pick = Some(CUSTOM);
+        }
+        if let Some(id) = pick {
+            host.select(id);
+            self.stale = true;
+        }
+    }
+
+    /// Under the selector: whatever the picked harness needs from the user.
+    fn selected_ui(&mut self, ui: &mut egui::Ui, host: &Arc<AgentHost>) -> Option<InstallDialog> {
+        let selected = host.selected()?;
+        let mut ask = None;
+        if selected == CUSTOM {
+            ui.add_space(4.0);
+            let width = ui.available_width() - 4.0;
+            let field = theme::text_edit(ui, "custom-agent-command", &mut self.custom, width, "ACP agent command");
+            if field.lost_focus() {
+                // Whitespace-split, no quoting: a command that needs more
+                // belongs in a wrapper script.
+                let command: Vec<String> = self.custom.split_whitespace().map(str::to_owned).collect();
+                let unchanged = host.config().agent.custom.is_some_and(|c| c.command == command);
+                if !command.is_empty() && !unchanged {
+                    self.custom_error = host.set_custom(command).err();
+                    self.stale = true;
+                }
+            }
+            if let Some(error) = &self.custom_error {
+                ui.label(egui::RichText::new(error).color(theme::ERROR));
             }
         }
-        // A pick this ODM cannot resolve (an id from a newer one, a custom
-        // entry since removed) still has to show up as the pick.
-        if let Some(id) = &config.selected
-            && table::built_in(id).is_none()
-            && !config.custom.contains_key(id)
-        {
-            choice_row(ui, ("unknown", id), true, &format!("{id}  (unknown to this ODM)"));
+        if let Some(agent) = table::built_in(&selected) {
+            let status = self.status.get(agent.id).cloned().unwrap_or(Status::Missing);
+            ask = self.install_ui(ui, agent, &status);
+        }
+        if let Some(login) = host.login_hint() {
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(format!("Logged out — run `{login}` in a terminal, then message the agent."))
+                    .color(theme::WARN),
+            );
         }
         ask
     }
 
-    /// Under the selected built-in: its note, and the install/update button.
-    fn selected_ui(&mut self, ui: &mut egui::Ui, agent: &'static BuiltIn, status: &Status) -> Option<InstallDialog> {
+    /// A built-in's note, and its install/update button.
+    fn install_ui(&mut self, ui: &mut egui::Ui, agent: &'static BuiltIn, status: &Status) -> Option<InstallDialog> {
         let mut ask = None;
-        indented(ui, |ui| {
-            if let Some(note) = agent.note {
-                ui.label(egui::RichText::new(note).color(theme::WARN));
+        if let Some(note) = agent.note {
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(note).color(theme::WARN));
+        }
+        let Source::Npm { version, .. } = &agent.source else {
+            if let (Status::Missing, Source::Path { program, .. }) = (status, &agent.source) {
+                ui.add_space(4.0);
+                weak(ui, &format!("`{program}` was not found on PATH. Install it, then come back."));
             }
-            let Source::Npm { version, .. } = &agent.source else {
-                if let Status::NotOnPath(program) = status {
-                    weak(ui, &format!("Install {program} yourself; ODM runs the one on your PATH."));
-                }
-                return;
-            };
-            if self.installing.as_ref().is_some_and(|i| i.id == agent.id) {
-                weak(ui, "Installing… this is a few hundred MB; the page can be left.");
-                return;
-            }
-            let verb = match status {
-                Status::Ready(Some(have)) if have == version => None,
-                Status::Ready(_) => Some(format!("Update to {version}…")),
-                _ => Some("Install…".to_owned()),
-            };
-            if let Some(verb) = verb
-                && theme::button(ui, verb).clicked()
-            {
+            return None;
+        };
+        if self.installing.as_ref().is_some_and(|i| i.id == agent.id) {
+            ui.add_space(4.0);
+            weak(ui, "Installing… this is a few hundred MB; the page can be left.");
+            return None;
+        }
+        let verb = match status {
+            Status::Installed(have) if have == version => None,
+            Status::Installed(_) => Some(format!("Update to {version}…")),
+            _ => Some("Install…".to_owned()),
+        };
+        if let Some(verb) = verb {
+            ui.add_space(4.0);
+            if theme::button(ui, verb).clicked() {
                 // Checked before the question is even asked.
                 match table::node_problem() {
                     Some(problem) => self.install_error = Some(problem),
                     None => ask = Some(InstallDialog { agent, error: None }),
                 }
             }
-            if let Some(error) = &self.install_error {
-                ui.label(egui::RichText::new(error).color(theme::ERROR));
-            }
-        });
+        }
+        if let Some(error) = &self.install_error {
+            ui.label(egui::RichText::new(error).color(theme::ERROR));
+        }
         ask
     }
 
-    fn custom_ui(&mut self, ui: &mut egui::Ui, host: &Arc<AgentHost>) {
-        heading(ui, "Custom agent");
-        weak(ui, "Any command that speaks ACP on its stdio. Kept in your own config file, never in the project.");
-        ui.add_space(2.0);
-        ui.horizontal(|ui| {
-            theme::text_edit(ui, "custom-agent-id", &mut self.custom_id, 110.0, "name");
-            let width = (ui.available_width() - 60.0).max(80.0);
-            theme::text_edit(ui, "custom-agent-command", &mut self.custom_command, width, "command --with --args");
-            if theme::button(ui, "Add").clicked() {
-                self.custom_error = self.add_custom(host).err();
+    /// Model and effort: the two session selectors worth a control. The
+    /// rest of what an agent lists (modes, fast mode, …) stays the agent's.
+    fn session_ui(&mut self, ui: &mut egui::Ui, host: &Arc<AgentHost>) {
+        let options = host.options();
+        let by_category = |category: &str| options.iter().find(|o| o.category.as_deref() == Some(category));
+
+        let model = by_category("model");
+        setting_row(ui, "Model", |ui| {
+            let names: Vec<&str> = model.iter().flat_map(|o| &o.choices).map(|c| c.name.as_str()).collect();
+            let current = model.and_then(|o| o.choices.iter().position(|c| c.value == o.current));
+            let picked = theme::drop_down(ui, "agent-model", CONTROL, &names, current, model.is_some());
+            if let (Some(index), Some(option)) = (picked, model)
+                && Some(index) != current
+            {
+                host.set_option(&option.id, &option.choices[index].value);
             }
         });
-        if let Some(error) = &self.custom_error {
-            ui.label(egui::RichText::new(error).color(theme::ERROR));
-        }
+
+        // A slider only means something over an ordered handful.
+        let Some(effort) = by_category("thought_level").filter(|o| o.choices.len() > 1) else { return };
+        setting_row(ui, "Effort", |ui| self.effort_ui(ui, host, effort));
     }
 
-    fn add_custom(&mut self, host: &Arc<AgentHost>) -> Result<(), String> {
-        let id = self.custom_id.trim();
-        let plain = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
-        if id.is_empty() || !id.chars().all(plain) {
-            return Err("The name is letters, digits, - and _.".to_owned());
+    fn effort_ui(&mut self, ui: &mut egui::Ui, host: &Arc<AgentHost>, option: &ConfigOption) {
+        let last = option.choices.len() - 1;
+        let current = option.choices.iter().position(|c| c.value == option.current).unwrap_or(0);
+        let mut value = self.effort.unwrap_or(current as f64);
+        let slider = theme::trackbar(ui, &mut value, 0.0..=last as f64, CONTROL - 90.0);
+        let index = (value.round() as usize).min(last);
+        ui.label(option.choices[index].name.as_str());
+        // Told once, where the handle is let go — not at every stop on the way.
+        self.effort = slider.dragged().then_some(value);
+        if !slider.dragged() && (slider.drag_stopped() || slider.changed()) && index != current {
+            host.set_option(&option.id, &option.choices[index].value);
         }
-        if table::built_in(id).is_some() {
-            return Err(format!("`{id}` is a built-in agent's name."));
-        }
-        // Whitespace-split, no quoting: a command that needs more belongs
-        // in a wrapper script (or a hand-edited config file).
-        let command: Vec<String> = self.custom_command.split_whitespace().map(str::to_owned).collect();
-        if command.is_empty() {
-            return Err("The command is empty.".to_owned());
-        }
-        host.set_custom(id, odm_config::CustomAgent { command, env: Default::default() })?;
-        host.select(id);
-        self.custom_id.clear();
-        self.custom_command.clear();
-        Ok(())
     }
 }
 
+/// Safe or YOLO. `odm` commands and edits inside the project never ask in
+/// either (wherever the harness can be told so); this is about the rest.
 fn permissions_ui(ui: &mut egui::Ui, host: &Arc<AgentHost>) {
-    let config = host.config().agent;
     heading(ui, "Permissions");
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW), egui::Sense::hover());
-    let label = "Run odm commands and project edits without asking";
-    if theme::check_box(ui, "quiet-odm", rect, config.quiet_odm, label).clicked() {
-        host.set_quiet_odm(!config.quiet_odm);
-    }
-    indented(ui, |ui| {
-        let recipe = config.selected.as_deref().is_some_and(table::has_quiet_recipe);
-        weak(ui, match (recipe, host.running()) {
-            (false, _) if config.selected.is_some() => {
-                "ODM has no way to tell this agent that; it follows its own mode and settings."
-            }
-            (_, true) => "Everything else still asks. Applies from the next session.",
-            _ => "Everything else still asks.",
-        });
-    });
-}
-
-/// The running session: account, context, and one selector per option the
-/// agent lists (mode, model, effort, …). The mode is remembered for next
-/// time; the rest are the agent's to remember.
-fn session_ui(ui: &mut egui::Ui, host: &Arc<AgentHost>) {
-    heading(ui, "Session");
-    if let Some(login) = host.login_hint() {
-        ui.label(
-            egui::RichText::new(format!("Logged out — run `{login}` in a terminal, then message the agent again."))
-                .color(theme::WARN),
-        );
-    }
-    if !host.running() {
-        return weak(ui, "Model, mode and the rest appear here once the agent is running — send it a message.");
-    }
-    if let Some((used, size)) = host.usage() {
-        weak(ui, &format!("Context: {}k of {}k tokens", used / 1000, size / 1000));
-    }
-    for option in host.options() {
-        ui.add_space(4.0);
-        option_ui(ui, host, &option);
-    }
-}
-
-fn option_ui(ui: &mut egui::Ui, host: &Arc<AgentHost>, option: &ConfigOption) {
-    ui.label(option.name.as_str());
-    let rows = |ui: &mut egui::Ui| {
-        for choice in &option.choices {
-            let selected = choice.value == option.current;
-            if choice_row(ui, ("option", &option.id, &choice.value), selected, &choice.name) {
-                host.set_option(&option.id, &choice.value);
-            }
+    let current = host.config().agent.permissions;
+    // Grayed only once the running harness has shown it has no such switch.
+    let enabled = host.permissions_supported() != Some(false);
+    let choices = [
+        (Permissions::Safe, "Safe: odm commands, project edits and other safe tools run; the rest asks"),
+        (Permissions::Yolo, "YOLO: nothing asks"),
+    ];
+    for (permissions, label) in choices {
+        let picked = choice_row(ui, ("permissions", label), current == permissions, label, enabled);
+        if picked {
+            host.set_permissions(permissions);
         }
-    };
-    if option.choices.len() <= CHOICES_INLINE {
-        return rows(ui);
     }
-    let size = egui::vec2(ui.available_width(), CHOICES_HEIGHT);
-    ui.push_id(("choices", &option.id), |ui| {
-        theme::sheet_box(ui, "choices", size, egui::Vec2b::new(false, true), rows);
+}
+
+/// A named control: the name in its column, the control beside it.
+fn setting_row(ui: &mut egui::Ui, name: &str, control: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(NAMES, ROW), egui::Sense::hover());
+        let pos = egui::pos2(rect.left(), rect.center().y - theme::UI_SIZE / 2.0);
+        ui.painter().text(
+            theme::snap(ui, pos),
+            egui::Align2::LEFT_TOP,
+            name,
+            egui::FontId::proportional(theme::UI_SIZE),
+            theme::TEXT,
+        );
+        control(ui);
     });
 }
 
 /// A radio row spanning the page. True when it was just picked.
-fn choice_row(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, selected: bool, text: &str) -> bool {
+fn choice_row(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    selected: bool,
+    text: &str,
+    enabled: bool,
+) -> bool {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW), egui::Sense::hover());
-    theme::radio(ui, id, rect, selected, text).clicked() && !selected
+    theme::radio_enabled(ui, id, rect, selected, text, enabled).clicked() && !selected
 }
 
 fn heading(ui: &mut egui::Ui, text: &str) {
@@ -327,13 +339,6 @@ fn heading(ui: &mut egui::Ui, text: &str) {
 
 fn weak(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).color(theme::WEAK_TEXT));
-}
-
-fn indented(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    ui.horizontal(|ui| {
-        ui.add_space(INDENT);
-        ui.vertical(add);
-    });
 }
 
 // --- the install question ---

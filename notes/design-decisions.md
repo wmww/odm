@@ -173,7 +173,9 @@ picks the agent (never inferred from what is installed); nothing is
 downloaded without a yes naming package@version and size; the engine
 never runs a command a project file chose (custom agents live in the
 system config only); ODM never answers a permission request or parses a
-shell string itself — it hands the agent allow rules. Accepted risk:
+shell string itself — it hands the agent allow rules; `odm` commands
+and in-project edits are always unasked, and the only permission setting
+is Safe vs YOLO, independent of the harness. Accepted risk:
 Anthropic's paused Agent-SDK billing change would hit Claude-over-ACP;
 no terminal fallback was built. Evidence:
 notes/agent-integration-research-2026-09.md; as built:

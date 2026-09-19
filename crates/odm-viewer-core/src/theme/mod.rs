@@ -12,8 +12,10 @@
 //! edge) but inverted in luminance: the face is dark and text is white, so
 //! the light edge is a mid gray rather than white.
 
+mod drop_down;
 mod scroll;
 
+pub use drop_down::drop_down;
 pub use scroll::{BAR as SCROLLBAR, list_box, sheet_box, tail_box};
 
 use crate::icons::{self, Icon};
@@ -344,12 +346,27 @@ pub fn radio(
     selected: bool,
     text: &str,
 ) -> Response {
+    radio_enabled(ui, id, rect, selected, text, true)
+}
+
+/// [`radio`], grayed out and unclickable when `enabled` is false: the choice
+/// exists, it just cannot be made right now.
+pub fn radio_enabled(
+    ui: &mut Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    rect: Rect,
+    selected: bool,
+    text: &str,
+    enabled: bool,
+) -> Response {
     let mid = snap(ui, rect.center()).y;
     radio_circle(ui.painter(), snap(ui, pos2(rect.left(), mid - RADIO / 2.0)), selected);
-    let galley = label(ui, text);
+    let color = if enabled { TEXT } else { WEAK_TEXT };
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(UI_SIZE), color);
     let pos = snap(ui, pos2(rect.left() + RADIO + INDICATOR_GAP, mid - galley.size().y / 2.0));
-    ui.painter().with_clip_rect(rect).galley(pos, galley, TEXT);
-    ui.interact(rect, egui::Id::new(id), egui::Sense::click())
+    ui.painter().with_clip_rect(rect).galley(pos, galley, color);
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    ui.interact(rect, egui::Id::new(id), sense)
 }
 
 /// The radio circle, pixel by pixel: a two-tone sunken ring (dark arc
@@ -857,7 +874,7 @@ pub fn menu<T: Copy>(ui: &mut Ui, title: &str, entries: &[MenuEntry<'_, T>]) -> 
     p.galley(pos, galley, TEXT);
 
     let mut picked = None;
-    let popup = egui::Popup::menu(&response).show(|ui| picked = drop_down(ui, entries));
+    let popup = egui::Popup::menu(&response).show(|ui| picked = menu_rows(ui, entries));
     if let Some(popup) = popup {
         // The popup's own frame is a flat 1px stroke; the era's menus have the
         // same raised edge as a button, so paint one over it.
@@ -874,7 +891,7 @@ pub fn context_menu<T: Copy>(
     entries: &[MenuEntry<'_, T>],
 ) -> Option<T> {
     let mut picked = None;
-    let popup = egui::Popup::context_menu(response).show(|ui| picked = drop_down(ui, entries));
+    let popup = egui::Popup::context_menu(response).show(|ui| picked = menu_rows(ui, entries));
     if let Some(popup) = popup {
         let painter = ui.ctx().layer_painter(popup.response.layer_id);
         bevel(&painter, popup.response.rect, Bevel::Raised);
@@ -887,7 +904,7 @@ fn label(ui: &Ui, text: &str) -> Arc<egui::Galley> {
     ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(UI_SIZE), TEXT)
 }
 
-fn drop_down<T: Copy>(ui: &mut Ui, entries: &[MenuEntry<'_, T>]) -> Option<T> {
+fn menu_rows<T: Copy>(ui: &mut Ui, entries: &[MenuEntry<'_, T>]) -> Option<T> {
     // Menus are as wide as their widest line: fix that up front so every row
     // can fill the width (a highlight that stops at the text looks broken).
     let mut width: f32 = 0.0;
