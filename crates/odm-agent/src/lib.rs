@@ -72,6 +72,8 @@ pub struct SessionOptions {
     /// The mode to put the session in before any prompt goes: a mode id,
     /// or a mode `_meta.kind` (`full_access`, …) — see [`ConfigOption::find`].
     pub mode: Option<String>,
+    /// Selectors to set before any prompt goes: (option id, value).
+    pub config: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -671,6 +673,12 @@ impl Shared {
         {
             let (id, value) = (option.id.clone(), choice.value.clone());
             out.extend(state.set_config(&id, &value));
+        }
+        for (id, value) in state.options.config.clone() {
+            let differs = state.config.iter().any(|o| o.id == id && o.current != value);
+            if differs {
+                out.extend(state.set_config(&id, &value));
+            }
         }
         out.extend(self.flush(state));
         out

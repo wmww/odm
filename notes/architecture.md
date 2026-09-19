@@ -793,8 +793,8 @@ freely with the managed agent.
   travels with a copied project, so a command there would be a project
   file choosing what the engine runs; anything else in it warns and is
   ignored. Picking an agent writes both. `.odm/agent.json` (`AgentState`)
-  remembers per agent id: session id, title, version, model — the header
-  and placeholder before anything is spawned, and what to resume.
+  remembers per agent id: title, version, model — the header and
+  placeholder before anything is spawned. Never the session.
 - **`odm-agent`** — the ACP client; no egui, no engine deps, no async
   runtime (the `agent-client-protocol` crate is a smol stack; the wire is
   one JSON object per line). `Agent::spawn(Launch, SessionOptions, wake)`
@@ -846,19 +846,24 @@ freely with the managed agent.
   chunks join their message by `messageId` (looked for within the last
   64 items), or the last item when ids are absent; live
   `user_message_chunk` echoes are dropped (we put the user's line there).
+  - **One session in the panel, always fresh** (user, 2026-09-18): the
+    transcript is one conversation, never a history of them, and a new
+    viewer is a new one — the host never passes `resume` (the client
+    still implements `session/load`; nothing uses it, and the replay
+    folding that went with it was deleted). Everything that ends a
+    conversation wipes the transcript back to a bare header
+    (`reset_transcript`): `/clear` typed in the box (= New Session),
+    switching harness, **switching model once anything has been said**
+    (`restart`: new session with the model set before any prompt, via
+    `SessionOptions.config`), and the first message after a crash.
   - Lifecycle: spawned lazily by the first message — or by the Agent
     Settings page coming forward (`warm`: a session and no prompt, so the
     model list exists to pick from; quiet on failure) —, never headless;
-    `session/load` replays history into a side list spliced in *above*
-    what the user just typed; load failure → fresh session + a notice;
     crash → red line with the stderr tail, next message respawns; File ▸
     Open (`stop`) and viewer exit (`lib.rs`, blocking) shut it down.
-    New Session = kill + forget the session id.
   - A user message = text + an embedded resource `odm://user-state` (the
-    view snapshot: "sent, not sampled" holds). On replay, chunks that are
-    an `odm://` uri or a `<context ref="odm://…">` wrapper are dropped,
-    and a prompt starting `[odm engine]` replays as an `engine:` line.
-    Action lines are not in the agent's record and do not come back.
+    view snapshot: "sent, not sampled" holds). Engine-authored prompts
+    start `[odm engine]`.
   - Working status is derived, never agent-set (`working()`): the plan
     entry in progress, else the running tool call's title, else
     "Working"; "Waiting for you" while a permission question is open.
@@ -867,8 +872,7 @@ freely with the managed agent.
   - An `execute` tool call titled `odm …` is hidden — the engine's own
     action line stands in (it feeds the activity view and is what
     plans/chat-links.md hangs links off) — unless it failed with no
-    action line logged while it ran (a sandbox-denied connect), or it is
-    replayed history.
+    action line logged while it ran (a sandbox-denied connect).
   - **Diagnostics are pushed** (`run_pusher`, a thread per viewer
     session; replaces poll's `events`): `EngineState::diagnostic_map`
     (failing `slot:`/`file:` → error) is state-compared against what the
@@ -913,7 +917,8 @@ freely with the managed agent.
   Thoughts and tool calls are collapsed `+` rows (tool: status lamp,
   opens onto output/diffs); permission questions are theme buttons,
   answered once then a log line. Stop button / Esc in the box; right-click
-  menu (`theme::context_menu`): Agent Settings, New Session, Stop — its
+  menu (`theme::context_menu`): Agent Settings, New Session (= typing
+  `/clear`), Stop — its
   hit area is registered *before* the transcript draws, or it eats the
   buttons' clicks. `theme::text_area` must not be put in a
   `ui.horizontal` (its child inherits the layout and collapses).
@@ -932,12 +937,18 @@ freely with the managed agent.
   (modes, fast mode), and session facts like context use don't belong
   here. Verified live against OpenCode 2.0.6 (warm start, model list,
   a turn running `odm status`); Claude/Codex adapters still unrun.
-- **`theme::drop_down`** (`theme/drop_down.rs`) is the project's
-  drop-down list box, built for any length: rows are one allocated block
-  with only the visible ones laid out/hit-tested/painted, a filter box
-  (auto-focused) heads lists over 12 entries, Up/Down/Enter/Escape work,
-  the list keeps its height while the filter narrows it. State (filter,
-  cursor) lives in egui temp data under the caller's id. Headless-egui
+- **`theme::DropDown`** (`theme/drop_down.rs`) is the project's drop-down
+  list box, built for any length: `DropDown::new(id, width).filter(..)
+  .enabled(..).show(ui, items, selected)`. Rows are one allocated block
+  with only the visible ones laid out/hit-tested/painted;
+  Up/Down/Enter/Escape work; the list keeps its height while narrowed.
+  Filtering is opt-in and has **no field**: typing while the list is open
+  narrows it (events are taken because the popup is open — no focus to
+  get wrong), the typed text shows as a weak line above the rows only
+  while there is any, Escape clears it before closing, and it is cleared
+  on open and on close. Row widget ids are keyed by *position*: keyed by
+  item, filtering made egui flash its red "rect changed id" debug boxes.
+  State lives in egui temp data under the caller's id. Headless-egui
   tests drive a 5000-row list.
 - **The message box takes newlines** (`theme::text_area`): a multiline
   `TextEdit` whose `return_key` is *shift+Enter*, so plain Enter falls

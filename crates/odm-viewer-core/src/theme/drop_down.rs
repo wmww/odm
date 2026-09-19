@@ -2,11 +2,15 @@
 //! button, and a list that drops under it.
 //!
 //! Built for lists of any length. Rows are laid out as one block and only
-//! the visible ones are painted, so thousands cost what a screenful does;
-//! past [`FILTER_AT`] entries a filter box heads the list and has the caret
-//! from the moment it opens, so a long list is a few letters and Enter.
+//! the visible ones are painted, so thousands cost what a screenful does.
 //! Up/Down walk the highlight, Enter takes it, Escape or a click elsewhere
 //! closes. Rows highlight under the pointer, as a menu's do.
+//!
+//! Filtering is opt-in ([`DropDown::filter`]) and has no field of its own:
+//! typing while the list is open narrows it, and what was typed shows as a
+//! line above the rows only while there is any. Less discoverable than a
+//! box, and much cleaner; the keys go to the list because it is open, so
+//! there is no focus to get wrong. Escape clears the filter first.
 
 use super::{ACCENT, Bevel, FACE, TEXT, TEXT_PAD, UI_SIZE, WEAK_TEXT, WINDOW, bevel, snap};
 use eframe::egui::{self, CornerRadius, FontId, Id, Rect, Sense, Ui, pos2, vec2};
@@ -16,8 +20,6 @@ const HEIGHT: f32 = 21.0;
 const ROW: f32 = 18.0;
 /// Rows the list shows before it scrolls.
 const MAX_ROWS: usize = 12;
-/// Lists longer than this get the filter box.
-const FILTER_AT: usize = 12;
 
 #[derive(Clone, Default)]
 struct State {
@@ -27,18 +29,42 @@ struct State {
     open: bool,
 }
 
-/// Draw the box. Returns the index (into `items`) the user just picked.
-/// `selected` = the current choice, if it is one of `items`. Disabled, it
-/// draws grayed and does not open.
-pub fn drop_down(
-    ui: &mut Ui,
-    id: impl std::hash::Hash + std::fmt::Debug,
+/// A drop-down, configured then shown:
+/// `DropDown::new("model", 300.0).filter(true).show(ui, &names, current)`.
+pub struct DropDown {
+    id: Id,
     width: f32,
-    items: &[&str],
-    selected: Option<usize>,
     enabled: bool,
-) -> Option<usize> {
-    let id = Id::new(id);
+    filter: bool,
+}
+
+impl DropDown {
+    pub fn new(id: impl std::hash::Hash + std::fmt::Debug, width: f32) -> DropDown {
+        DropDown { id: Id::new(id), width, enabled: true, filter: false }
+    }
+
+    /// Grayed, and does not open.
+    pub fn enabled(mut self, enabled: bool) -> DropDown {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Typing while the list is open narrows it (case-insensitive
+    /// substring). For lists long enough to need it.
+    pub fn filter(mut self, filter: bool) -> DropDown {
+        self.filter = filter;
+        self
+    }
+
+    /// Draw the box. Returns the index (into `items`) the user just picked.
+    /// `selected` = the current choice, if it is one of `items`.
+    pub fn show(self, ui: &mut Ui, items: &[&str], selected: Option<usize>) -> Option<usize> {
+        drop_down(ui, self, items, selected)
+    }
+}
+
+fn drop_down(ui: &mut Ui, config: DropDown, items: &[&str], selected: Option<usize>) -> Option<usize> {
+    let DropDown { id, width, enabled, filter } = config;
     let (rect, response) = ui.allocate_exact_size(vec2(width, HEIGHT), Sense::click());
     let response = if enabled { response } else { response.on_hover_text("not available") };
     let popup_id = egui::Popup::default_response_id(&response);
@@ -51,8 +77,14 @@ pub fn drop_down(
     let mut state: State = ui.ctx().data_mut(|d| d.get_temp(id).unwrap_or_default());
     let just_opened = is_open && !std::mem::replace(&mut state.open, is_open);
     if just_opened {
-        state.filter.clear();
         state.cursor = selected.unwrap_or(0);
+    }
+    // Whatever was typed belongs to the visit it was typed in.
+    if just_opened || !is_open {
+        state.filter.clear();
+    }
+    if is_open {
+        typed(ui, popup_id, &mut state, filter);
     }
     let mut picked = None;
     let popup = egui::Popup::from_toggle_button_response(&response)
@@ -60,6 +92,7 @@ pub fn drop_down(
         .width(width)
         .gap(0.0)
         .frame(egui::Frame::new().fill(FACE).inner_margin(egui::Margin::same(2)))
+        // Escape is ours: it clears a filter before it closes the list.
         .show(|ui| picked = list(ui, id, items, &mut state, just_opened));
     if let Some(popup) = popup {
         let painter = ui.ctx().layer_painter(popup.response.layer_id);
@@ -97,6 +130,39 @@ fn elided(ui: &Ui, text: &str, width: f32, color: egui::Color32) -> std::sync::A
     ui.painter().layout_job(job)
 }
 
+/// Fold this frame's typing into the filter (when there is one). The keys
+/// are taken because the list is open — nothing has to hold focus. Escape
+/// clears a filter; with none to clear it closes the list.
+fn typed(ui: &Ui, popup_id: Id, state: &mut State, filter: bool) {
+    let before = state.filter.clone();
+    let mut close = false;
+    ui.input_mut(|i| {
+        i.events.retain(|event| match event {
+            egui::Event::Text(text) if filter => {
+                state.filter.push_str(text);
+                false
+            }
+            egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } if filter => {
+                state.filter.pop();
+                false
+            }
+            egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => {
+                close = state.filter.is_empty();
+                state.filter.clear();
+                false
+            }
+            _ => true,
+        });
+    });
+    // A narrowed list is a different list: start again at the top of it.
+    if state.filter != before {
+        state.cursor = 0;
+    }
+    if close {
+        egui::Popup::close_id(ui.ctx(), popup_id);
+    }
+}
+
 /// The dropped list. Returns the picked index into `items`.
 fn list(
     ui: &mut Ui,
@@ -113,17 +179,8 @@ fn list(
     });
     ui.spacing_mut().item_spacing.y = 2.0;
     let width = ui.available_width();
-    if items.len() > FILTER_AT {
-        let before = state.filter.clone();
-        let field =
-            super::text_edit(ui, id.with("filter"), &mut state.filter, width - 8.0, "type to filter");
-        if just_opened {
-            field.request_focus();
-        }
-        // A narrowed list is a different list: start again at the top of it.
-        if state.filter != before {
-            state.cursor = 0;
-        }
+    if !state.filter.is_empty() {
+        ui.label(egui::RichText::new(format!(" {}", state.filter)).color(WEAK_TEXT));
     }
     let needle = state.filter.trim().to_lowercase();
     let rows: Vec<usize> = (0..items.len())
@@ -162,7 +219,9 @@ fn list(
         let last = (((clip.bottom() - block.top()) / ROW).ceil().max(0.0) as usize).min(rows.len());
         for n in first..last {
             let rect = row_rect(n);
-            let hit = ui.interact(rect, id.with(("row", rows[n])), Sense::click());
+            // Keyed by position, not by item: egui flags a rect whose id
+            // changes between frames, and filtering reshuffles the items.
+            let hit = ui.interact(rect, id.with(("row", n)), Sense::click());
             if hit.hovered() && ui.input(|i| i.pointer.is_moving()) {
                 state.cursor = n;
             }
@@ -211,7 +270,7 @@ mod tests {
             let mut picked = None;
             let items: Vec<&str> = self.items.iter().map(String::as_str).collect();
             let _ = self.ctx.run_ui(input, |ui| {
-                picked = drop_down(ui, "dd", 200.0, &items, self.selected, true);
+                picked = DropDown::new("dd", 200.0).filter(true).show(ui, &items, self.selected);
             });
             if let Some(i) = picked {
                 self.selected = Some(i);
@@ -249,8 +308,10 @@ mod tests {
         let mut h = Harness::new(5000);
         h.frame(Vec::new());
         assert_eq!(h.click(pos2(100.0, 20.0)), None, "the click opens it");
-        h.frame(Vec::new()); // the filter box is granted the focus it asked for
         h.frame(vec![egui::Event::Text("model-4321".into())]);
+        // A slip, rubbed out: the filter is "model-4321" again.
+        h.frame(vec![egui::Event::Text("x".into())]);
+        h.key(egui::Key::Backspace);
         assert_eq!(h.key(egui::Key::Enter), Some(4321));
         // Closed again: Enter now goes nowhere.
         h.frame(Vec::new());

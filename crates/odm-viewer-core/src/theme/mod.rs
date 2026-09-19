@@ -15,7 +15,7 @@
 mod drop_down;
 mod scroll;
 
-pub use drop_down::drop_down;
+pub use drop_down::DropDown;
 pub use scroll::{BAR as SCROLLBAR, list_box, sheet_box, tail_box};
 
 use crate::icons::{self, Icon};

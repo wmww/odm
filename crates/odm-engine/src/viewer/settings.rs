@@ -258,7 +258,11 @@ impl SettingsPage {
         setting_row(ui, "Model", |ui| {
             let names: Vec<&str> = model.iter().flat_map(|o| &o.choices).map(|c| c.name.as_str()).collect();
             let current = model.and_then(|o| o.choices.iter().position(|c| c.value == o.current));
-            let picked = theme::drop_down(ui, "agent-model", CONTROL, &names, current, model.is_some());
+            // Every model of every provider: a list worth filtering.
+            let picked = theme::DropDown::new("agent-model", CONTROL)
+                .filter(true)
+                .enabled(model.is_some())
+                .show(ui, &names, current);
             if let (Some(index), Some(option)) = (picked, model)
                 && Some(index) != current
             {
@@ -294,8 +298,8 @@ fn permissions_ui(ui: &mut egui::Ui, host: &Arc<AgentHost>) {
     // Grayed only once the running harness has shown it has no such switch.
     let enabled = host.permissions_supported() != Some(false);
     let choices = [
-        (Permissions::Safe, "Safe: odm commands, project edits and other safe tools run; the rest asks"),
-        (Permissions::Yolo, "YOLO: nothing asks"),
+        (Permissions::Safe, "Safe - permission prompts for non-odm commands"),
+        (Permissions::Yolo, "YOLO - no permission prompts"),
     ];
     for (permissions, label) in choices {
         let picked = choice_row(ui, ("permissions", label), current == permissions, label, enabled);

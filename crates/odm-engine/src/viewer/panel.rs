@@ -116,7 +116,7 @@ impl AgentPanel {
 
         let entries = [
             theme::MenuEntry::item(Menu::Settings, "Agent Settings…"),
-            theme::MenuEntry::item(Menu::NewSession, "New Session").enabled(host.selected().is_some()),
+            theme::MenuEntry::item(Menu::NewSession, "New Session").shortcut("/clear").enabled(host.selected().is_some()),
             theme::MenuEntry::separator(),
             theme::MenuEntry::item(Menu::Stop, "Stop").shortcut("Esc").enabled(working.is_some()),
         ];

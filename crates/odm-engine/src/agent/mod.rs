@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-/// How an engine-authored prompt starts, so it replays as an `engine:` line
-/// rather than as something the user said.
+/// How an engine-authored prompt starts, so the agent can tell it from
+/// something the user said.
 const ENGINE_TAG: &str = "[odm engine]";
 
 /// Engine prompts in a row, with no user message between, before the engine
@@ -54,8 +54,6 @@ pub struct Header {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolItem {
     pub call: ToolCall,
-    /// Part of a loaded session's history.
-    replayed: bool,
     /// CLI action lines logged before it started / whether any came while
     /// it ran: an `odm …` call that reached the engine has an action line
     /// standing in for it.
@@ -75,19 +73,18 @@ impl ToolItem {
     /// An `odm render` by the managed agent shows up twice: as this, and as
     /// the engine's own action line. The action line wins (it is semantic,
     /// and feeds the activity view) — unless the command failed without
-    /// ever reaching the engine, or comes from history, where no action
-    /// lines survive.
+    /// ever reaching the engine.
     pub fn visible(&self) -> bool {
         let odm = self.call.kind.as_deref() == Some("execute")
             && self.call.title.as_deref().is_some_and(|t| t == "odm" || t.starts_with("odm "));
-        !odm || self.replayed || (self.failed() && !self.reached_engine)
+        !odm || (self.failed() && !self.reached_engine)
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Header(Header),
-    User { id: Option<String>, text: String },
+    User { text: String },
     Agent { id: Option<String>, text: String },
     Thought { id: Option<String>, text: String },
     Tool(ToolItem),
@@ -98,8 +95,8 @@ pub enum Item {
     /// A CLI command the agent ran, a file it changed.
     Action(String),
     /// A host warning, or a note that the engine prompted the agent itself.
-    Engine { id: Option<String>, text: String },
-    /// Session events worth a line: resumed, stopped, …
+    Engine { text: String },
+    /// Session events worth a line: stopped, …
     Notice(String),
     /// The agent crashed, could not start, is logged out.
     Error(String),
@@ -131,10 +128,6 @@ struct Inner {
     config: Config,
     memo: AgentState,
     items: Vec<Item>,
-    /// A loading session's history, spliced in at `replay_at` once it is
-    /// whole — before whatever the user typed to wake the agent up.
-    replayed: Vec<Item>,
-    replay_at: usize,
     live: Option<Live>,
     serial: u64,
     turn: bool,
@@ -185,8 +178,6 @@ impl AgentHost {
         let mut inner = Inner {
             memo: AgentState::load(project),
             items: Vec::new(),
-            replayed: Vec::new(),
-            replay_at: 0,
             live: None,
             serial: 0,
             turn: false,
@@ -202,7 +193,7 @@ impl AgentHost {
         let header = inner.cached_header(project);
         inner.items.push(Item::Header(header));
         for warning in inner.config.warnings.clone() {
-            inner.items.push(Item::Engine { id: None, text: warning });
+            inner.items.push(Item::Engine { text: warning });
         }
         Arc::new(AgentHost {
             project: project.to_owned(),
@@ -327,19 +318,27 @@ impl AgentHost {
     /// user is looking at as they hit Enter — rides as a second content
     /// block ("user state: sent, not sampled").
     pub fn send(self: &Arc<Self>, text: String, snapshot: Option<Value>) {
+        if text.trim() == "/clear" {
+            return self.new_session();
+        }
         let mut inner = self.inner.lock().unwrap();
+        // The agent this conversation was with is gone (it crashed): what
+        // comes next is a new session, and the panel shows one at a time.
+        if inner.live.is_none() && inner.header().is_some_and(|h| h.session.is_some()) {
+            inner.reset_transcript(&self.project);
+        }
         let Some(id) = inner.config.agent.selected.clone() else {
             inner.items.push(Item::Notice("No agent selected — pick one in Agent Settings.".into()));
             drop(inner);
             return self.wake();
         };
-        inner.items.push(Item::User { id: None, text: text.clone() });
+        inner.items.push(Item::User { text: text.clone() });
         // The user is back: whatever loop the engine was holding off is
         // theirs to restart.
         inner.engine_prompts = 0;
         inner.muted = false;
         if inner.live.is_none()
-            && let Err(e) = self.spawn(&mut inner, &id)
+            && let Err(e) = self.spawn(&mut inner, &id, Vec::new())
         {
             inner.items.push(Item::Error(e));
             drop(inner);
@@ -383,9 +382,18 @@ impl AgentHost {
     }
 
     /// Change one of the running session's selectors (model, effort). The
-    /// agent remembers these; ODM does not.
-    pub fn set_option(&self, id: &str, value: &str) {
-        if let Some(live) = &self.inner.lock().unwrap().live {
+    /// agent remembers these; ODM does not. A different model mid-way is a
+    /// different conversation: once anything has been said, switching
+    /// starts a new session on that model, with an empty transcript.
+    pub fn set_option(self: &Arc<Self>, id: &str, value: &str) {
+        let inner = self.inner.lock().unwrap();
+        let model = inner.options.iter().any(|o| o.id == id && o.category.as_deref() == Some("model"));
+        let spoken = inner.items.iter().any(|i| matches!(i, Item::User { .. }));
+        if model && spoken {
+            drop(inner);
+            return self.restart(vec![(id.to_owned(), value.to_owned())]);
+        }
+        if let Some(live) = &inner.live {
             live.agent.set_config_option(id, value);
         }
     }
@@ -424,35 +432,41 @@ impl AgentHost {
         if inner.live.is_none()
             && let Some(id) = inner.config.agent.selected.clone()
         {
-            let _ = self.spawn(&mut inner, &id);
+            let _ = self.spawn(&mut inner, &id, Vec::new());
         }
     }
 
-    /// Forget the session and start over: the next message opens a new one.
-    pub fn new_session(&self) {
+    /// Start over: a new session, an empty transcript. The panel holds one
+    /// session, never a history of them. (`/clear`, New Session.)
+    pub fn new_session(self: &Arc<Self>) {
+        self.restart(Vec::new());
+    }
+
+    /// Retire the agent, wipe the transcript, and — if one was running —
+    /// start the next, with `config` set before anything is said to it.
+    fn restart(self: &Arc<Self>, config: Vec<(String, String)>) {
         let mut inner = self.inner.lock().unwrap();
+        let was_live = inner.live.is_some();
         inner.retire();
-        if let Some(id) = inner.config.agent.selected.clone() {
-            inner.memo.agents.entry(id).or_default().session_id = None;
-            inner.memo.save(&self.project);
+        inner.reset_transcript(&self.project);
+        if was_live && let Some(id) = inner.config.agent.selected.clone() {
+            let _ = self.spawn(&mut inner, &id, config);
         }
-        inner.fresh_header(&self.project);
         drop(inner);
         self.wake();
     }
 
     /// Pick an agent (project `use` + system `default`). A different one
-    /// retires whatever is running.
+    /// retires whatever is running, and its conversation with it.
     pub fn select(&self, id: &str) {
         let mut inner = self.inner.lock().unwrap();
         let saved = odm_config::set_agent(&self.files, Some(id));
-        inner.note_config_error(saved);
-        if inner.config.agent.selected.as_deref() == Some(id) {
-            return;
+        if inner.config.agent.selected.as_deref() != Some(id) {
+            inner.config.agent.selected = Some(id.to_owned());
+            inner.retire();
+            inner.reset_transcript(&self.project);
         }
-        inner.config.agent.selected = Some(id.to_owned());
-        inner.retire();
-        inner.fresh_header(&self.project);
+        inner.note_config_error(saved);
         drop(inner);
         self.wake();
     }
@@ -496,7 +510,7 @@ impl AgentHost {
     /// when a session is live and idle.
     pub(crate) fn warning(&self, text: String) {
         let mut inner = self.inner.lock().unwrap();
-        inner.items.push(Item::Engine { id: None, text: text.clone() });
+        inner.items.push(Item::Engine { text: text.clone() });
         inner.warnings.push(text);
         inner.pokes += 1;
         drop(inner);
@@ -510,7 +524,12 @@ impl AgentHost {
         self.cv.notify_all();
     }
 
-    fn spawn(self: &Arc<Self>, inner: &mut Inner, id: &str) -> Result<(), String> {
+    fn spawn(
+        self: &Arc<Self>,
+        inner: &mut Inner,
+        id: &str,
+        config: Vec<(String, String)>,
+    ) -> Result<(), String> {
         let resolved = table::resolve(id, &inner.config.agent).map_err(|e| e.to_string())?;
         let mut launch = Launch::new(resolved.command, self.project.clone());
         launch.env = resolved.env;
@@ -519,7 +538,10 @@ impl AgentHost {
         launch.path_prepend =
             std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_owned));
         let options = SessionOptions {
-            resume: inner.memo.agents.get(id).and_then(|m| m.session_id.clone()),
+            // Always a fresh session: the panel is one conversation, and a
+            // new viewer is a new one.
+            resume: None,
+            config,
             meta: resolved.meta,
             mode: table::mode_wish(id, inner.config.agent.permissions).map(str::to_owned),
         };
@@ -528,11 +550,6 @@ impl AgentHost {
         inner.serial += 1;
         let serial = inner.serial;
         inner.live = Some(Live { agent, id: id.to_owned(), serial, ready: false, login: None });
-        // History goes before what was just typed, if this is a message's
-        // doing (a warm start has typed nothing).
-        let typed = matches!(inner.items.last(), Some(Item::User { .. }));
-        inner.replay_at = inner.items.len() - typed as usize;
-        inner.replayed.clear();
         inner.baseline.clear();
         let host = self.clone();
         std::thread::Builder::new()
@@ -565,36 +582,17 @@ impl AgentHost {
                     header.version = info.version;
                 }
             }
-            Event::SessionStarted { id, resumed } => {
-                inner.splice_replay();
+            Event::SessionStarted { id, .. } => {
                 if let Some(live) = &mut inner.live {
                     live.ready = true;
                 }
-                // A new session under a header that already had one is a
-                // new header; otherwise this is the one it was waiting for.
-                if !resumed && inner.header().is_some_and(|h| h.session.is_some()) {
-                    let header = inner.header().cloned().unwrap_or_default();
-                    let at = inner.replay_at.min(inner.items.len());
-                    inner.items.insert(at, Item::Header(header));
-                }
                 if let Some(header) = inner.header_mut() {
-                    header.session = Some(id.clone());
+                    header.session = Some(id);
                 }
-                inner.memo.agents.entry(agent_id).or_default().session_id = Some(id);
-                inner.memo.save(&self.project);
                 poke = true;
             }
-            Event::SessionLost => {
-                inner.replayed.clear();
-                if let Some(header) = inner.header_mut() {
-                    header.session = None;
-                }
-                let at = inner.replay_at.min(inner.items.len());
-                inner.items.insert(
-                    at,
-                    Item::Notice("The last session could not be resumed; this is a new one.".into()),
-                );
-            }
+            // Never asked for: sessions are not resumed.
+            Event::SessionLost => {}
             Event::SessionFailed { message, auth_required } => {
                 inner.turn = false;
                 let login = table::built_in(&agent_id).map(|a| a.login.to_owned());
@@ -613,10 +611,9 @@ impl AgentHost {
                 }
                 inner.items.push(Item::Error(text));
             }
-            Event::Update { update, replay } => {
+            Event::Update { update, .. } => {
                 let actions = inner.actions;
-                let list = if replay { &mut inner.replayed } else { &mut inner.items };
-                fold(list, update, replay, actions);
+                fold(&mut inner.items, update, actions);
             }
             Event::ConfigOptions(options) => {
                 let name = |category: &str| {
@@ -668,7 +665,6 @@ impl AgentHost {
                 poke = true;
             }
             Event::Exited { reason, stderr } => {
-                inner.splice_replay();
                 inner.live = None;
                 inner.turn = false;
                 inner.options.clear();
@@ -809,15 +805,10 @@ impl Inner {
         }
     }
 
-    /// Start a new header — or, when the current one never got a session,
-    /// take its place: a header is a session's first line, not a log of
-    /// what was picked.
-    fn fresh_header(&mut self, project: &Path) {
+    /// Back to a bare header: the panel holds one session at a time.
+    fn reset_transcript(&mut self, project: &Path) {
         let header = self.cached_header(project);
-        match self.header_mut() {
-            Some(old) if old.session.is_none() => *old = header,
-            _ => self.items.push(Item::Header(header)),
-        }
+        self.items = vec![Item::Header(header)];
     }
 
     fn pending_permission(&self) -> bool {
@@ -835,27 +826,19 @@ impl Inner {
         }
     }
 
-    fn splice_replay(&mut self) {
-        let at = self.replay_at.min(self.items.len());
-        let replayed = std::mem::take(&mut self.replayed);
-        self.replay_at = at + replayed.len();
-        self.items.splice(at..at, replayed);
-    }
-
-    /// Drop the running agent; its session stays resumable.
+    /// Drop the running agent.
     fn retire(&mut self) {
         if let Some(live) = self.live.take() {
             live.agent.shutdown();
         }
         self.turn = false;
         self.options.clear();
-        self.replayed.clear();
         self.close_turn();
     }
 
     fn note_config_error(&mut self, saved: Result<(), String>) {
         if let Err(e) = saved {
-            self.items.push(Item::Engine { id: None, text: format!("setting not saved: {e}") });
+            self.items.push(Item::Engine { text: format!("setting not saved: {e}") });
         }
     }
 
@@ -876,7 +859,6 @@ impl Inner {
             self.baseline = map.clone();
             self.warnings.clear();
             self.items.push(Item::Engine {
-                id: None,
                 text: "not forwarding further build errors until you next message the agent".into(),
             });
             return;
@@ -892,7 +874,6 @@ impl Inner {
             text.push_str("\nFull errors are attached (odm://diagnostics).");
             let labels: Vec<&str> = failing.iter().map(|(l, _)| l.as_str()).collect();
             self.items.push(Item::Engine {
-                id: None,
                 text: format!("told the agent about build errors: {}", labels.join(", ")),
             });
         }
@@ -901,7 +882,7 @@ impl Inner {
         }
         // A turn nobody typed must say where it came from.
         if !news {
-            self.items.push(Item::Engine { id: None, text: "told the agent about the warnings above".into() });
+            self.items.push(Item::Engine { text: "told the agent about the warnings above".into() });
         }
         let failing: serde_json::Map<String, Value> =
             failing.iter().map(|(l, e)| (l.clone(), json!(e))).collect();
@@ -918,17 +899,10 @@ impl Inner {
     }
 }
 
-/// Context a prompt carried for the agent's eyes only: the bare uri chunk,
-/// and the `<context ref=…>` wrapper adapters replay embedded resources as.
-fn is_context(text: &str) -> bool {
-    let text = text.trim_start();
-    text.starts_with("odm://") || text.starts_with("<context ref=\"odm://")
-}
-
 /// Fold one session update into a transcript. Chunks are appended to their
 /// message: the one with the same id within this turn, else (no ids) the
 /// last item when it is the same kind.
-fn fold(items: &mut Vec<Item>, update: Update, replay: bool, actions: u64) {
+fn fold(items: &mut Vec<Item>, update: Update, actions: u64) {
     /// How far back an id is looked for: a message's chunks are never far
     /// apart, and a long transcript must not cost a scan per chunk.
     const REACH: usize = 64;
@@ -944,16 +918,8 @@ fn fold(items: &mut Vec<Item>, update: Update, replay: bool, actions: u64) {
         let from = if id.is_some() { last.saturating_sub(REACH) } else { last };
         let index = (from..=last).rev().find(|&i| id_of(&items[i]) == Some(id))?;
         match &mut items[index] {
-            Item::User { text, .. }
-            | Item::Engine { text, .. }
-            | Item::Agent { text, .. }
+            Item::Agent { text, .. }
             | Item::Thought { text, .. } => Some(text),
-            _ => None,
-        }
-    }
-    fn user(item: &Item) -> Option<&Option<String>> {
-        match item {
-            Item::User { id, .. } | Item::Engine { id, .. } => Some(id),
             _ => None,
         }
     }
@@ -971,25 +937,8 @@ fn fold(items: &mut Vec<Item>, update: Update, replay: bool, actions: u64) {
     }
 
     match update {
-        // Live, the user's message is already in the transcript: we put it
-        // there. Only history needs rebuilding from the agent's record.
-        Update::UserChunk(_) if !replay => {}
-        Update::UserChunk(chunk) => {
-            if is_context(&chunk.text) {
-                return;
-            }
-            match open(items, &chunk.message_id, user) {
-                Some(text) => text.push_str(&chunk.text),
-                // An engine-authored prompt replays as the engine, not the user.
-                None => match chunk.text.trim_start().strip_prefix(ENGINE_TAG) {
-                    Some(rest) => items.push(Item::Engine {
-                        id: chunk.message_id,
-                        text: rest.trim_start().to_owned(),
-                    }),
-                    None => items.push(Item::User { id: chunk.message_id, text: chunk.text }),
-                },
-            }
-        }
+        // The user's message is already in the transcript: we put it there.
+        Update::UserChunk(_) => {}
         Update::AgentChunk(chunk) => {
             match open(items, &chunk.message_id, agent) {
                 Some(text) => text.push_str(&chunk.text),
@@ -1020,7 +969,6 @@ fn fold(items: &mut Vec<Item>, update: Update, replay: bool, actions: u64) {
                 }
                 None => items.push(Item::Tool(ToolItem {
                     call,
-                    replayed: replay,
                     actions_before: actions,
                     reached_engine: false,
                 })),
