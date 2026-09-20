@@ -2807,6 +2807,7 @@ dependencies = [
  "include_dir",
  "odm-dylib",
  "odm-prompt",
+ "rustix 1.1.4",
  "serde_json",
  "tempfile",
 ]
@@ -2851,6 +2852,7 @@ dependencies = [
  "odm-render",
  "odm-store",
  "odm-viewer-core",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "serde_path_to_error",

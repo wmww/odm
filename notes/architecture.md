@@ -42,7 +42,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   the path (`at /0/position`).
 - The `//!` comment block doubles as prose description (summary line +
   body), parsed at sync time without evaluating the module.
-- `.odm/` is engine-owned (socket `.odm/engine.sock`, `renders/`,
+- `.odm/` is engine-owned (socket `.odm/engine.sock`, `mailbox/`, `renders/`,
   `viewer.json` tab persistence, `config.toml` + `agent.json` — see
   "Talking to the agent" —, `feedback/` pending reports — see
   "Feedback" below). Excluded from generation hashing.
@@ -383,7 +383,16 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   notes/agent-surface.md. CLI one-off views build without publishing;
   viewer slots publish into a per-slot map (all live roots pinned together
   for GC). Protocol: ndjson over unix socket,
-  `{ok: bool, ...}` responses. Files: `state.rs` (slot-keyed published map,
+  `{ok: bool, ...}` responses. Fallback transport, the **mailbox**
+  (`.odm/mailbox/`, `server.rs`): Codex's sandbox (seccomp) denies every
+  `connect()`, unix sockets included, but allows file access in the
+  project — so on `PermissionDenied` the CLI writes `<id>.req`, makes and
+  opens a FIFO `<id>.res`, and posts `<id>` down the engine's FIFO `in`.
+  `ODM_TRANSPORT=mailbox` forces it (e2e test). Verified with
+  `codex sandbox -c 'sandbox_mode="workspace-write"' -- odm status`.
+  Dead ends: codex-acp sends an explicit `sandboxPolicy` every turn, so
+  `CODEX_CONFIG` permission profiles (`network.unix_sockets`) never
+  apply; exec-policy rules are files under `~/.codex/rules` only. Files: `state.rs` (slot-keyed published map,
   active views + build queue, `build_slot`/`build_once`, and `stop`, below),
   `commands.rs` (the whole JSON
   layer: a serde-tagged `Request` enum with `deny_unknown_fields`, so a
@@ -889,8 +898,9 @@ freely with the managed agent.
     ODM never parses a shell string and never answers a request itself:
     `agent/table.rs::session_meta` hands the *agent* allow rules (Claude:
     `session/new` `_meta.claudeCode.options.allowedTools =
-    ["Bash(odm:*)", "Edit(./**)"]`, verified in the spike; Codex: none,
-    and worse — issues/codex-sandbox-blocks-engine-socket.md). The one
+    ["Bash(odm:*)", "Edit(./**)"]`, verified in the spike; Codex: none
+    needed — its `agent` mode runs sandboxed commands unasked, and the
+    CLI reaches the engine from inside the sandbox by the mailbox). The one
     setting is **Safe vs YOLO** (`[agent] permissions`), mapped to a
     session mode by `table::mode_wish`: YOLO = the mode every adapter
     tags `_meta.kind: "full_access"`; Safe = a per-agent mode id (Claude

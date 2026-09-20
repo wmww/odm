@@ -117,13 +117,13 @@ flows, gemini, cancel.
   cwd still asked (Claude does the shell parsing). `settingSources` is
   user+project+local, so `.claude/settings*.json` rules apply too, and
   `CLAUDE_CODE_EXECUTABLE` points the adapter at another `claude` binary.
-- **Codex's sandbox blocks the engine socket.** In modes `agent` (default,
-  "Approve for me": a model "Guardian Review" decides escalations — it let
-  an explicitly requested write to `~` through unasked) and `read-only`
-  ("Ask for approval": in-project edits *do* ask), `odm status` fails to
-  connect with the engine up; `agent-full-access` works. Also: a reject
-  option of kind `reject_once` named "No, and tell Codex what to do
-  differently" ends the turn `cancelled`.
+- **Codex's sandbox blocks the engine socket** (seccomp denies
+  `connect()`) in modes `agent` (default, "Approve for me": a model
+  "Guardian Review" decides escalations — it let an explicitly requested
+  write to `~` through unasked) and `read-only` ("Ask for approval":
+  in-project edits *do* ask). Solved by the CLI's mailbox fallback
+  (architecture.md). Also: a reject option of kind `reject_once` named
+  "No, and tell Codex what to do differently" ends the turn `cancelled`.
 - Unix socket paths cap at ~108 bytes (`SUN_LEN`): the engine refuses to
   start in a deeply nested project dir ("path must be shorter than
   SUN_LEN").

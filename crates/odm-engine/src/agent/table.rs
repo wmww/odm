@@ -18,8 +18,6 @@ pub struct BuiltIn {
     pub source: Source,
     /// What to run, in a terminal, when the agent says it is logged out.
     pub login: &'static str,
-    /// Anything the user should know before picking it.
-    pub note: Option<&'static str>,
     /// The mode that is [`Permissions::Safe`] here: safe tools run, the
     /// rest asks. None = whatever the agent starts in.
     pub safe_mode: Option<&'static str>,
@@ -44,7 +42,6 @@ pub const BUILT_IN: &[BuiltIn] = &[
             size_mb: 275,
         },
         login: "claude /login",
-        note: None,
         // "Manual" — plus the allow rules in `session_meta`.
         safe_mode: Some("default"),
     },
@@ -58,11 +55,6 @@ pub const BUILT_IN: &[BuiltIn] = &[
             size_mb: 340,
         },
         login: "codex login",
-        // issues/codex-sandbox-blocks-engine-socket.md
-        note: Some(
-            "Codex's sandbox blocks the engine's socket: odm commands only work in its \
-             Full Access mode.",
-        ),
         // "Approve for me": asks only for what it judges unsafe.
         safe_mode: Some("agent"),
     },
@@ -71,7 +63,6 @@ pub const BUILT_IN: &[BuiltIn] = &[
         title: "OpenCode",
         source: Source::Path { program: "opencode", args: &["acp"] },
         login: "opencode auth login",
-        note: None,
         safe_mode: None,
     },
     BuiltIn {
@@ -79,7 +70,6 @@ pub const BUILT_IN: &[BuiltIn] = &[
         title: "Gemini CLI",
         source: Source::Path { program: "gemini", args: &["--acp"] },
         login: "gemini",
-        note: None,
         safe_mode: None,
     },
 ];
@@ -169,7 +159,8 @@ pub fn resolve(id: &str, config: &AgentConfig) -> Result<Resolved, Problem> {
 /// `odm` commands and in-project edits never ask: allow rules handed to the
 /// *agent*, whose own parser applies them — ODM never reads a shell string
 /// or answers a permission request itself. Agents with no way to be told
-/// just ask (or not), by their own mode.
+/// just ask (or not), by their own mode — Codex runs them unasked inside
+/// its sandbox, where the CLI goes by the mailbox (`server.rs`).
 fn session_meta(id: &str) -> Option<Value> {
     match id {
         // The adapter spreads `options` into the Agent SDK's. Verified:

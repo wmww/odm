@@ -208,13 +208,9 @@ impl SettingsPage {
         ask
     }
 
-    /// A built-in's note, and its install/update button.
+    /// A built-in's install/update button.
     fn install_ui(&mut self, ui: &mut egui::Ui, agent: &'static BuiltIn, status: &Status) -> Option<InstallDialog> {
         let mut ask = None;
-        if let Some(note) = agent.note {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(note).color(theme::WARN));
-        }
         let Source::Npm { version, .. } = &agent.source else {
             if let (Status::Missing, Source::Path { program, .. }) = (status, &agent.source) {
                 ui.add_space(4.0);

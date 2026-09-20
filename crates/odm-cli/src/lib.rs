@@ -104,27 +104,40 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         request["out"] = json!(abs.display().to_string());
     }
 
-    let mut stream = UnixStream::connect(&sock).map_err(|e| {
-        // A sandboxed agent shell (Codex's, say) denies the connect; telling
-        // it "no engine" sends it off to start a second one.
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            anyhow::anyhow!(
-                "connecting to the engine at {} was denied ({e}) — a sandbox is \
-                 blocking the socket; rerun this command outside it",
-                sock.display()
-            )
-        } else {
-            anyhow::anyhow!(
-                "no engine at {} — start one with: odm run {} --headless",
-                sock.display(),
-                project.display()
-            )
+    let no_engine = || {
+        anyhow::anyhow!(
+            "no engine at {} — start one with: odm run {} --headless",
+            sock.display(),
+            project.display()
+        )
+    };
+    // ODM_TRANSPORT=mailbox skips the socket (tests).
+    let socket = match std::env::var_os("ODM_TRANSPORT") {
+        Some(v) if v == "mailbox" => Err(std::io::ErrorKind::PermissionDenied.into()),
+        _ => UnixStream::connect(&sock),
+    };
+    let value = match socket {
+        Ok(mut stream) => {
+            let mut reader = BufReader::new(stream.try_clone()?);
+            send(&mut stream, &request)?;
+            read_response(&mut reader)?
         }
-    })?;
-
-    let mut reader = BufReader::new(stream.try_clone()?);
-    send(&mut stream, &request)?;
-    let value = read_response(&mut reader)?;
+        // A sandboxed agent shell (Codex's, say) denies the connect itself:
+        // go by the mailbox, which takes only file access to the project.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            match mailbox(&project.join(".odm/mailbox"), &request) {
+                Ok(Some(value)) => value,
+                Ok(None) => return Err(no_engine()),
+                Err(mail) => bail!(
+                    "connecting to the engine at {} was denied ({e}), and so was its \
+                     mailbox ({mail:#}) — a sandbox is blocking both; rerun this command \
+                     outside it",
+                    sock.display()
+                ),
+            }
+        }
+        Err(_) => return Err(no_engine()),
+    };
     println!("{}", pretty(&value));
     Ok(if value.get("ok").and_then(|v| v.as_bool()) == Some(true) { 0 } else { 1 })
 }
@@ -159,6 +172,61 @@ fn json_arg(cmd: &str, rest: &[String]) -> anyhow::Result<Map<String, Value>> {
         bail!("the command is the first argument; drop \"cmd\": {prev} from the object");
     }
     Ok(body)
+}
+
+/// One request by the engine's mailbox (see its `server.rs`); `None` if no
+/// engine is reading it.
+fn mailbox(dir: &Path, request: &Value) -> anyhow::Result<Option<Value>> {
+    use rustix::fs::{FileType, Mode, OFlags};
+    use std::os::unix::fs::OpenOptionsExt;
+    let nonblock = OFlags::NONBLOCK.bits() as i32;
+    // ENXIO: a FIFO nobody reads. NotFound: no FIFO at all.
+    let post = || match std::fs::OpenOptions::new().write(true).custom_flags(nonblock).open(dir.join("in")) {
+        Ok(file) => Ok(Some(file)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(rustix::io::Errno::NXIO.raw_os_error()) => Ok(None),
+        Err(e) => Err(e),
+    };
+    let Some(mut inbox) = post()? else { return Ok(None) };
+
+    let nanos = std::time::UNIX_EPOCH.elapsed().map_or(0, |d| d.subsec_nanos());
+    let id = format!("{}-{nanos}", std::process::id());
+    let (req, res) = (dir.join(format!("{id}.req")), dir.join(format!("{id}.res")));
+    let _cleanup = Cleanup(vec![req.clone(), res.clone()]);
+    std::fs::write(&req, request.to_string())?;
+    rustix::fs::mknodat(rustix::fs::CWD, &res, FileType::Fifo, Mode::from_raw_mode(0o600), 0)?;
+    // Open before posting, so the engine always finds a reader.
+    let mut reader = std::fs::OpenOptions::new().read(true).custom_flags(nonblock).open(&res)?;
+    inbox.write_all(format!("{id}\n").as_bytes())?;
+    drop(inbox);
+
+    // Wait for the response, checking now and then that the engine lives.
+    loop {
+        let mut fds = [rustix::event::PollFd::new(&reader, rustix::event::PollFlags::IN)];
+        let timeout = rustix::event::Timespec { tv_sec: 1, tv_nsec: 0 };
+        if rustix::event::poll(&mut fds, Some(&timeout))? > 0 {
+            break;
+        }
+        if post()?.is_none() {
+            bail!("the engine went away before responding");
+        }
+    }
+    rustix::fs::fcntl_setfl(&reader, OFlags::empty())?;
+    let mut response = String::new();
+    std::io::Read::read_to_string(&mut reader, &mut response)?;
+    if response.trim().is_empty() {
+        bail!("engine closed the mailbox without responding");
+    }
+    serde_json::from_str(&response).context("engine sent invalid JSON").map(Some)
+}
+
+struct Cleanup(Vec<PathBuf>);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 fn send(stream: &mut UnixStream, request: &Value) -> anyhow::Result<()> {

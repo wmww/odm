@@ -405,6 +405,39 @@ fn bad_commands_and_bad_json_fail_with_something_to_read() {
 
 /// The crashed-engine restart every user eventually needs: SIGKILL leaves the
 /// socket file behind, and `bind()` must probe and remove it.
+/// What a CLI inside a sandbox that denies `connect` (Codex's) falls back to.
+#[test]
+fn the_mailbox_answers_when_the_socket_is_denied() {
+    let dir = project(&[("root.js", BOX10)]);
+    let mailed = |args: &[&str]| {
+        let out = Command::new(BIN)
+            .arg("--project")
+            .arg(dir.path())
+            .args(args)
+            .env("ODM_TRANSPORT", "mailbox")
+            .output()
+            .unwrap();
+        (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let (code, _, stderr) = mailed(&["status"]);
+    assert_eq!(code, Some(2));
+    assert!(stderr.contains("no engine at"), "{stderr}");
+
+    let engine = Engine::start(dir.path());
+    let (code, stdout, stderr) = mailed(&["inspect"]);
+    assert_eq!(code, Some(0), "{stdout}\n{stderr}");
+    assert!(stdout.contains("\"ok\": true"), "{stdout}");
+    // The client takes its files with it.
+    let left: Vec<_> = std::fs::read_dir(dir.path().join(".odm/mailbox")).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(left, ["in"]);
+
+    // A killed engine leaves its FIFO behind, unread.
+    drop(engine);
+    let (code, _, stderr) = mailed(&["status"]);
+    assert_eq!(code, Some(2));
+    assert!(stderr.contains("no engine at"), "{stderr}");
+}
+
 #[test]
 fn stale_socket_is_reclaimed() {
     let dir = project(&[("root.js", BOX10)]);
