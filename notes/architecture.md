@@ -386,8 +386,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   `{ok: bool, ...}` responses. Fallback transport, the **mailbox**
   (`.odm/mailbox/`, `server.rs`): Codex's sandbox (seccomp) denies every
   `connect()`, unix sockets included, but allows file access in the
-  project — so on `PermissionDenied` the CLI writes `<id>.req`, makes and
-  opens a FIFO `<id>.res`, and posts `<id>` down the engine's FIFO `in`.
+  project — so on `PermissionDenied` the CLI makes and opens a FIFO `<id>.res`
+  and posts `<id> <request>` down the engine's FIFO `in`, under `flock`
+  (shared FIFO; writes over PIPE_BUF aren't atomic; flock passes the
+  sandbox). Per-client response FIFOs are the minimum: FIFOs have no
+  `accept()`, so a shared one can't demultiplex concurrent clients.
   `ODM_TRANSPORT=mailbox` forces it (e2e test). Verified with
   `codex sandbox -c 'sandbox_mode="workspace-write"' -- odm status`.
   Dead ends: codex-acp sends an explicit `sandboxPolicy` every turn, so

@@ -190,13 +190,16 @@ fn mailbox(dir: &Path, request: &Value) -> anyhow::Result<Option<Value>> {
 
     let nanos = std::time::UNIX_EPOCH.elapsed().map_or(0, |d| d.subsec_nanos());
     let id = format!("{}-{nanos}", std::process::id());
-    let (req, res) = (dir.join(format!("{id}.req")), dir.join(format!("{id}.res")));
-    let _cleanup = Cleanup(vec![req.clone(), res.clone()]);
-    std::fs::write(&req, request.to_string())?;
+    let res = dir.join(format!("{id}.res"));
+    let _cleanup = Cleanup(res.clone());
     rustix::fs::mknodat(rustix::fs::CWD, &res, FileType::Fifo, Mode::from_raw_mode(0o600), 0)?;
     // Open before posting, so the engine always finds a reader.
     let mut reader = std::fs::OpenOptions::new().read(true).custom_flags(nonblock).open(&res)?;
-    inbox.write_all(format!("{id}\n").as_bytes())?;
+    // Locked: a write over PIPE_BUF isn't atomic, and clients share the FIFO.
+    // The leading newline ends whatever a client killed mid-write left.
+    rustix::fs::fcntl_setfl(&inbox, OFlags::empty())?;
+    rustix::fs::flock(&inbox, rustix::fs::FlockOperation::LockExclusive)?;
+    inbox.write_all(format!("\n{id} {request}\n").as_bytes())?;
     drop(inbox);
 
     // Wait for the response, checking now and then that the engine lives.
@@ -219,13 +222,11 @@ fn mailbox(dir: &Path, request: &Value) -> anyhow::Result<Option<Value>> {
     serde_json::from_str(&response).context("engine sent invalid JSON").map(Some)
 }
 
-struct Cleanup(Vec<PathBuf>);
+struct Cleanup(PathBuf);
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        for path in &self.0 {
-            let _ = std::fs::remove_file(path);
-        }
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 

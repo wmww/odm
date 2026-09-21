@@ -427,7 +427,7 @@ fn the_mailbox_answers_when_the_socket_is_denied() {
     let (code, stdout, stderr) = mailed(&["inspect"]);
     assert_eq!(code, Some(0), "{stdout}\n{stderr}");
     assert!(stdout.contains("\"ok\": true"), "{stdout}");
-    // The client takes its files with it.
+    // The client takes its FIFO with it.
     let left: Vec<_> = std::fs::read_dir(dir.path().join(".odm/mailbox")).unwrap().map(|e| e.unwrap().file_name()).collect();
     assert_eq!(left, ["in"]);
 

@@ -1,18 +1,19 @@
 //! Unix socket server: newline-delimited JSON, one response per request.
 //!
-//! Beside it, the *mailbox* (`.odm/mailbox/`): the same exchange over files
-//! and FIFOs, for a CLI whose sandbox denies `connect` outright (Codex's
-//! seccomp filter does) but lets it write inside the project. The client
-//! writes `<id>.req`, makes the FIFO `<id>.res`, opens it for reading, and
-//! posts `<id>` down the engine's FIFO `in`; the response comes back up
-//! `<id>.res`. The client cleans up its own two files.
+//! Beside it, the *mailbox* (`.odm/mailbox/`): the same exchange over FIFOs,
+//! for a CLI whose sandbox denies `connect` outright (Codex's seccomp filter
+//! does) but lets it write inside the project. The client makes the FIFO
+//! `<id>.res`, opens it for reading, and posts the line `<id> <request>` down
+//! the engine's FIFO `in`, under `flock` (clients share it, and a long write
+//! isn't atomic); the response comes back up `<id>.res`, which the client
+//! removes.
 
 use crate::state::EngineState;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 /// Claim a project's socket. Split from [`serve`] so the viewer can find out
@@ -118,29 +119,26 @@ fn serve_mailbox(state: Arc<EngineState>, dir: &Path) -> anyhow::Result<()> {
             }
         }
     });
-    for id in BufReader::new(reader).lines() {
+    for line in BufReader::new(reader).lines() {
         if state.stopping() {
             break;
         }
-        let id = id?;
-        // The id names files: nothing that could leave the directory.
+        let line = line?;
+        let Some((id, request)) = line.split_once(' ') else { continue };
+        // The id names a file: nothing that could leave the directory.
         if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
             continue;
         }
-        let (state, dir) = (state.clone(), dir.to_path_buf());
-        std::thread::spawn(move || handle_mail(&state, &dir, &id));
+        let (state, res, request) = (state.clone(), dir.join(format!("{id}.res")), request.to_string());
+        std::thread::spawn(move || {
+            let response = respond(&state, &request);
+            // The client opened its end before posting; if it has died since, drop it.
+            if let Ok(mut writer) = open_fifo_writer(&res) {
+                let _ = writer.write_all(response.as_bytes());
+            }
+        });
     }
     Ok(())
-}
-
-fn handle_mail(state: &EngineState, dir: &Path, id: &str) {
-    let file = |ext: &str| -> PathBuf { dir.join(format!("{id}.{ext}")) };
-    let Ok(request) = std::fs::read_to_string(file("req")) else { return };
-    let response = respond(state, &request);
-    // The client opened its end before posting; if it has died since, drop it.
-    if let Ok(mut writer) = open_fifo_writer(&file("res")) {
-        let _ = writer.write_all(response.as_bytes());
-    }
 }
 
 /// One request line to one response line.
