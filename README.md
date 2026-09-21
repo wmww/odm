@@ -8,8 +8,11 @@ To you, ODM is a CAD program for building parametric 3D objects at the speed of 
 __WARNING: ODM is still in early development, is currently Linux-only and has not yet had a stable release.__
 
 Features:
-- Dynamic web export - allows changing parameters
-- Fully git-compatible - projects are just code!
+- Use the model and coding harness of your choice (Claude Code, Codex, OpenCode, etc) inside ODM
+- Fully git-compatible, since projects are just code
 - Forward compatibility - a new version will never break an existing project
-- Timeless UI
+- Export to STL or a dynamic web app
+- Timeless UI/UX
 - Fully open source and permissively licensed
+
+To build and install under `$HOME/.local/bin` clone this repo and run `scripts/install.sh`. Official release and pre-built binaries coming soon.
