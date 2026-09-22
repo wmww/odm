@@ -1,9 +1,9 @@
 # Agent surface policy (prompt vs docs)
 
 Adopted 2026-08 (from plans/cli-diet.md, after the 2026-08 surface audit).
-The scarce resource is the agent's context: prompt is ~3K tokens paid once
-per session, but output *shape* dominates everything (the un-dieted `tree`
-printed 191 KB). Priority order for cuts: output fields ≫ concepts ≫
+The scarce resource is the agent's context: prompt is ~3.5K tokens (13.5 KB
+after the 2026-09-22 rewrite) paid once per session, but output *shape*
+dominates everything (the un-dieted `tree` printed 191 KB). Priority order for cuts: output fields ≫ concepts ≫
 command count.
 
 ## The policy
@@ -158,9 +158,9 @@ aspect)`; the viewer's orbit camera is just a fully-given one.
   the ACP prompt): tab path + inputs + selection + `camera` in the same
   spelling, **stamped by the viewer at send time** (per design-decisions
   "sent, not sampled").
-- Prompt teaches the `look` keywords only (it replaced the
-  `direction`+`ortho` pair); `focus`/`zoom`/`eye`/`target`/`up`/`fov`/
-  `ortho_height` are docs-only.
+- Prompt teaches `look` only (keywords + the vector form; it replaced
+  the `direction`+`ortho` pair); `focus`/`zoom`/`eye`/`target`/`up`/
+  `fov`/`ortho_height`/`frames` are docs-only.
 - `direction` is deleted; `requests.rs::removed_field` (new mechanism,
   parallel to removed commands) redirects it to `look`. The same hook
   teaches `camera` (the echo's wrapper, pasted back whole) to unwrap —
