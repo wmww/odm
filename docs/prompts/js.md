@@ -10,16 +10,25 @@ export default function build(ctx) {
 }
 ```
 
-Start every file with the `//! ODM API unstable` pragma (the JS API
-version it targets); the `//!` lines after it are the file's
-description. Doohickeys run sandboxed with the `odm` and `THREE`
-globals — no other imports, no file or network access. Return a
-`Solid`, `Group`, `Instance`, an array of these (nested arrays become
-groups), or `null`.
+- Start every file with the `//! ODM API unstable` pragma (the JS API
+  version it targets); the rest of the leading `//!` block is the
+  file's description.
+- Code runs sandboxed with the `odm` and `THREE` globals: no other
+  imports, no file or network access, no shared state.
+- Return a `Solid`, `Group`, `Instance`, an array of these (nested
+  arrays become groups), or `null`.
+- **Everything is immutable** (unlike three.js): every method returns a
+  new value, so write `part = part.rotateZ(a)`, not `part.rotateZ(a)`.
+- `build(ctx)` must be pure: same inputs → same output. `Date` is
+  frozen and `Math.random` repeats every build.
+- `console.log` output comes back with build results.
 
-**Everything is immutable**: every method returns a new value (unlike
-three.js). Reusing a value is always safe, and a call whose result you
-discard does nothing — write `part = part.rotateZ(a)`.
+## Conventions
+
+- **Z-up**, right-handed; the ground grid is the XY plane.
+- **Radians** everywhere; `odm.deg(90)` converts.
+- **Lengths are in the project's unit**: `units` in `odm.toml` (`mm`
+  when absent; `odm status` reports it). Exports rely on it.
 
 ## Solids
 
@@ -41,27 +50,32 @@ odm.fromThreeGeometry(new THREE.TorusGeometry(10, 3, 16, 48));  // closed geomet
 Primitives are centered on the origin; `center: false` puts a box's
 corner (a cylinder's base) there instead. A profile is `[[x, y], ...]`,
 a list of those (inner loops are holes; loops must not cross), or a
-`THREE.Shape`. A sweep path is a polyline used as given, or any
-`THREE.Curve` (`new THREE.CatmullRomCurve3(pts)` smooths waypoints).
+`THREE.Shape`. A sweep path is a polyline used as given, mitered at
+corners; pass a `THREE.Curve` (`new THREE.CatmullRomCurve3(pts)`) to
+smooth it. "Open surface, not a solid" means a profile or three.js
+geometry doesn't enclose a volume.
 
 ```js
 const [a, b, s] = [odm.box(10), odm.sphere(6), odm.cylinder(2, 12)];
-a.subtract(b); a.union(b); a.intersect(b); a.hull(b);   // CSG: methods only, variadic
+a.subtract(b); a.union(b); a.intersect(b); a.hull(b);   // CSG: methods only, Solids only, variadic
 s.translate(5, 0, 2).rotateZ(odm.deg(30)).scale(2, 2, 2); // world frame, in call order
 s.rotateZ(0.5, { about: [5, 0, 0] });                     // pivot instead of the origin
 s.rotate([0, 1, 1], 0.5);                                 // arbitrary axis
 s.color('#4682b4').name('bolt');                        // names address parts in the CLI
-s.opacity(0.3);                                         // translucent subtree
+s.opacity(0.3);                                         // translucent (multiplies down the tree)
 ```
 
 Rotations and scales are about the **origin** unless you pass
-`{ about: point }`. Exact engine-side queries, for placing parts against
-computed geometry instead of eyeballing: `.bounds()` → `THREE.Box3 |
-null`, `.volume()`, `.area()`, `.raycast(origin, dir, maxDist?)` →
-`{distance, point, normal} | null`, `.clearance(other)` → signed
-`{distance, closest?, separate?}` (positive = exact gap; negative =
-overlap, and `separate` clears it; a near-zero sign is float noise, so
-threshold `|distance|`).
+`{ about: point }`. Colors are `'#rrggbb'`/`'#rrggbbaa'`/`'#rgb'` or
+`[r, g, b, a?]` in 0..1, nothing else; alpha below 1 is translucent.
+
+Position parts from exact engine-side queries, never eyeballed numbers:
+`.bounds()` → `THREE.Box3 | null`, `.volume()`, `.area()`,
+`.raycast(origin, dir, maxDist?)` → `{distance, point, normal} | null`,
+`.clearance(other)` → signed `{distance, closest?, separate?}`
+(positive = exact gap; negative = overlap, translate `other` by
+`separate` to clear it; near zero the sign is noise — threshold
+`|distance|`).
 
 ## Composition
 
@@ -70,11 +84,11 @@ const wheel = ctx.invoke('parts/wheel.js', { radius: 8 }); // → Instance
 return odm.group(wheel.translate(-20, 0, 0), wheel.translate(20, 0, 0));
 ```
 
-Args target the invoked file's declared inputs (JSON values; Solids
-cross as handles); unknown names and schema mismatches are errors.
-Invokes are memoized: same file + same inputs is free. Groups and
-Instances can be transformed, colored and named, but not used in CSG
-or queried; a color on one is the default for descendants without
+Args must match the invoked file's declared inputs (JSON values, THREE
+math types, or Solids); unknown names and schema mismatches are
+errors. Invokes are memoized: same file + same inputs is free. Groups
+and Instances can be transformed, colored and named, but not used in
+CSG or queried; a color on one is the default for descendants without
 their own.
 
 ## Inputs
@@ -94,50 +108,27 @@ export const meta = {
 export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('t'));
 ```
 
-- An entry is a strict JSON Schema (`type`, `enum`, `default`,
-  `description`, `minimum`/`maximum`, `items`, `properties`, …) or an
-  ODM type: `solid`, `vector2`/`vector3`, `quaternion`, `matrix4`,
-  `color` (hydrated to real THREE values). No `default` = required.
-  Schemas nest, and the viewer renders the structure as controls
-  (`odm docs inputs`).
+- Entries are JSON Schemas (strict profile: `type`, `enum`, `default`,
+  `minimum`/`maximum`, `items`, `properties`, …) plus ODM types
+  `solid`, `vector2`/`vector3`, `quaternion`, `matrix4`, `color`
+  (hydrated to real THREE values). No `default` = required. The viewer
+  turns them into controls. Details: `odm docs inputs`.
 - **Plain inputs** come from the immediate caller: invoke args, or the
-  view's `inputs`. A **cascade** input (`cascade: true`, default
-  required) is settable from anywhere above without threading it
-  through every invoke: the nearest value up the chain wins — an
-  invoke's third argument, `ctx.invoke(path, args, cascade)`, or the
-  view's `inputs` outermost — and a declaration provides its default to
-  its own subtree.
+  view's `inputs`. **Cascade inputs** (`cascade: true`, default
+  required) are settable from anywhere above without threading them
+  through every invoke — the nearest value up the chain wins:
+  `ctx.invoke(path, args, cascade)`'s third argument, or the view's
+  `inputs` outermost.
 - **Time is just an input**: a ranged cascade `t` gets a play button in
   the viewer (looping over the range), and `odm render '{"inputs":
-  {"t": 1.5}}'` sets it like anything else. Only readers of `t` rebuild
-  when it changes.
+  {"t": 1.5}}'` renders one moment. Only readers of `t` rebuild when it
+  changes.
 - `meta.presets` names input bundles; the CLI's `"preset"` applies one.
-
-## Colors
-
-Hex `'#rrggbb'`/`'#rrggbbaa'`/`'#rgb'`, or `[r, g, b]`/`[r, g, b, a]`
-in 0..1; nothing else. Alpha below 1 renders translucent; `.opacity(x)`
-multiplies a whole subtree's alpha.
 
 ## THREE
 
-A vendored subset of three.js: the math types (`Vector3`, `Matrix4`,
-`Quaternion`, `Box3`, …), `BufferGeometry`, the geometry generators,
-`Shape`/`Path`, and curves. No renderer, scene or DOM classes. Three's
-generators are Y-up and ODM is Z-up: `.rotateX(odm.deg(90))` after
-`fromThreeGeometry` stands a lathe or cylinder up.
-
-## Conventions
-
-- **Z-up**, right-handed; the ground grid is the XY plane.
-- **Radians** everywhere; `odm.deg(90)` converts.
-- **Lengths are in the project's unit**: `units` in `odm.toml` (`mm`
-  when absent; `odm status` reports it). Exports rely on it.
-- Geometry lives engine-side; JS holds opaque handles. There is no
-  vertex access — use the queries.
-- `build(ctx)` must be **pure**: same inputs → same output. `Date` is
-  frozen and `Math.random` is seeded per build; prefer explicit
-  parameters.
-- `console.log` output comes back with build results.
-- "open surface, not a solid": a profile or three.js geometry must
-  enclose a volume.
+A vendored subset of three.js: math types (`Vector3`, `Matrix4`, `Box3`,
+…), `BufferGeometry`, the geometry generators, `Shape`/`Path`, and
+curves. No renderer, scene or DOM. Three's generators are Y-up and ODM
+is Z-up: `.rotateX(odm.deg(90))` after `fromThreeGeometry` stands a
+lathe or cylinder up.

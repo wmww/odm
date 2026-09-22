@@ -1,7 +1,7 @@
 # Agent surface policy (prompt vs docs)
 
 Adopted 2026-08 (from plans/cli-diet.md, after the 2026-08 surface audit).
-The scarce resource is the agent's context: prompt is ~3.5K tokens (13.5 KB
+The scarce resource is the agent's context: prompt is ~3K tokens (12.4 KB
 after the 2026-09-22 rewrite) paid once per session, but output *shape*
 dominates everything (the un-dieted `tree` printed 191 KB). Priority order for cuts: output fields ≫ concepts ≫
 command count.
