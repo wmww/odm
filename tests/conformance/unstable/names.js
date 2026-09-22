@@ -4,7 +4,7 @@
 // and a second .name() replaces rather than appends.
 export default function build() {
   // The name survives the transforms applied after it: the whole point is
-  // that you can label a part once and place it afterwards.
+  // that you can label a solid once and place it afterwards.
   const moved = odm.box(2).name('moved').translate(0, 0, 10).rotateZ(odm.deg(45)).scale(1, 1, 2);
 
   // Non-strings are stringified, not rejected: name(123) is '123'.
@@ -21,7 +21,7 @@ export default function build() {
   // the nearest name at or above it.
   const boxed = odm.group(odm.box(2).translate(40, 0, 0)).name('crate');
 
-  // ...but a name nearer the hit wins, so a sub-part inside a named
+  // ...but a name nearer the hit wins, so a sub-node inside a named
   // assembly is still hittable by its own name.
   const labelled = odm.group(odm.box(2).translate(50, 0, 0).name('lid')).name('outer');
 

@@ -6,7 +6,7 @@ its root. You write the code; a long-running engine rebuilds on every
 change and shows the result in a viewer the user is watching. The
 `odm` CLI is how you inspect your work.
 
-Every `.js` file is a *doohickey*: one composable piece, like a React
+Every `.js` file is a *part*: one composable piece, like a React
 component, default-exporting a pure `build(ctx)` function. Any file can
 be viewed and queried; `root.js` is the conventional entry file and the
 default target of every CLI command.

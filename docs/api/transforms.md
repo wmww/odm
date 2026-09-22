@@ -6,8 +6,8 @@ from three.js — reusing a value is always safe (place one wheel four
 times), and a call whose result you don't use does nothing:
 
 ```js skip
-part.rotateZ(a);          // does nothing — the result was discarded
-part = part.rotateZ(a);   // this is the rotated part
+s.rotateZ(a);       // does nothing — the result was discarded
+s = s.rotateZ(a);   // this is the rotated solid
 ```
 
 Available on `Solid`, `Group`, and `Instance` alike:
@@ -37,7 +37,7 @@ left-multiplies onto the pending matrix, so
 `s.rotateZ(a).translate(10, 0, 0)` rotates first, then translates along
 the world X axis. Without a pivot, rotations and scales are about the
 **origin**, not the value's center — translate-then-rotate orbits the
-part around the origin.
+value around the origin.
 
 On a `Group`/`Instance` the transform applies to the whole subtree.
 
@@ -45,7 +45,7 @@ On a `Group`/`Instance` the transform applies to the whole subtree.
 
 Rotations and `scale` accept `{ about: point }` (an `[x, y, z]` array
 or `Vector3`): the operation happens around that point instead of the
-origin. This is the natural way to spin a part in place or around a
+origin. This is the natural way to spin a solid in place or around a
 hinge:
 
 ```js

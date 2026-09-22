@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, MutexGuard};
 use std::sync::atomic::Ordering;
 
-/// What a query targets: a doohickey path (default: `root.js`, when it
+/// What a query targets: a part path (default: `root.js`, when it
 /// exists) plus input values. `inputs` names any input — declared plain
 /// inputs become view args, everything else a view-level cascade value;
 /// `preset` applies a named bundle from the target's meta first.
@@ -48,14 +48,14 @@ struct Scope {
 /// land on the root entry (`""` *is* the view).
 const VIEW_LEVEL_FIELDS: &[&str] = &["description", "inputs", "presets"];
 
-/// A failed command. `doohickey`/`logs` are set for build failures;
+/// A failed command. `part`/`logs` are set for build failures;
 /// `extra` fields land at the response's top level, next to `error`
 /// (`query_view` uses it to report the target's declared interface even
 /// when the build fails).
 pub(crate) struct CmdError {
     kind: &'static str,
     message: String,
-    doohickey: Option<String>,
+    part: Option<String>,
     logs: Vec<(String, LogLine)>,
     extra: Map<String, Value>,
 }
@@ -65,7 +65,7 @@ impl CmdError {
         CmdError {
             kind,
             message: message.into(),
-            doohickey: None,
+            part: None,
             logs: vec![],
             extra: Map::new(),
         }
@@ -86,7 +86,7 @@ impl CmdError {
             FailureKind::Js => "js-error",
             FailureKind::Cycle => "cycle",
             FailureKind::Cancelled => "cancelled",
-            FailureKind::MissingDoohickey => "missing-doohickey",
+            FailureKind::MissingPart => "missing-part",
             FailureKind::BadOutput => "bad-output",
             FailureKind::Version => "bad-version",
             FailureKind::Meta => "bad-meta",
@@ -96,17 +96,17 @@ impl CmdError {
         CmdError {
             kind,
             message: f.message.clone(),
-            doohickey: Some(f.path.clone()),
+            part: Some(f.path.clone()),
             logs,
             extra: Map::new(),
         }
     }
 
     fn to_json(&self) -> Value {
-        match &self.doohickey {
+        match &self.part {
             Some(path) => json!({
                 "kind": self.kind,
-                "doohickey": path,
+                "part": path,
                 "message": self.message,
                 "logs": logs_json(&self.logs),
             }),
@@ -155,7 +155,7 @@ impl EngineState {
         out
     }
 
-    /// The command line as the user reads it: the verb, the doohickey it
+    /// The command line as the user reads it: the verb, the part it
     /// answered about (the response's own resolved path, so a defaulted
     /// `root.js` reads as one), and a failure said plainly.
     fn dispatch_inner(&self, req: Request) -> Result<Value, CmdError> {
@@ -313,7 +313,7 @@ impl EngineState {
                     let files: Vec<&str> =
                         sync.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
                     return Err(CmdError::bad_request(format!(
-                        "no {} in this project — name a doohickey to view; viewable files: {}",
+                        "no {} in this project — name a part to view; viewable files: {}",
                         odm_build::DEFAULT_ROOT,
                         if files.is_empty() { "(no .js files)".into() } else { files.join(", ") }
                     )));
@@ -324,7 +324,7 @@ impl EngineState {
             let files: Vec<&str> =
                 sync.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
             return Err(CmdError::bad_request(format!(
-                "no doohickey at {path:?}; project has: {}",
+                "no part at {path:?}; project has: {}",
                 if files.is_empty() { "(no .js files)".into() } else { files.join(", ") }
             )));
         };
@@ -402,7 +402,7 @@ impl EngineState {
     /// nothing roots yet). Post-build reads (inspect, flatten, render) run
     /// gate-free instead: the returned `RootPin` keeps the result alive
     /// across concurrent GCs — a one-off build's root is otherwise pinned
-    /// only by its memo entry, which a rebuild of the same doohickey under
+    /// only by its memo entry, which a rebuild of the same part under
     /// different cascade values (a viewer scrub) overwrites. Callers keep
     /// the pin for as long as they read the scene.
     fn query_view(
@@ -1001,7 +1001,7 @@ pub(crate) fn stl_label(
 /// One log line for a finished command (see `dispatch`).
 fn action_line(verb: &str, out: &Result<Value, CmdError>) -> String {
     match out {
-        // `view` is the resolved doohickey path; `path` in a render
+        // `view` is the resolved part path; `path` in a render
         // response is the PNG it wrote, which is not what this line is about.
         Ok(v) => match v.get("view").and_then(Value::as_str) {
             Some(path) => format!("{verb} {path}"),
@@ -1278,7 +1278,7 @@ fn stats_json(stats: &odm_build::BuildStats) -> Value {
             .into_iter()
             .map(|(path, (runs, t))| {
                 json!({
-                    "doohickey": path,
+                    "part": path,
                     "runs": runs,
                     "ms": (t.as_secs_f64() * 10_000.0).round() / 10.0,
                 })
@@ -1290,7 +1290,7 @@ fn stats_json(stats: &odm_build::BuildStats) -> Value {
 fn logs_json(logs: &[(String, LogLine)]) -> Value {
     Value::Array(
         logs.iter()
-            .map(|(path, l)| json!({ "doohickey": path, "level": l.level, "message": l.message }))
+            .map(|(path, l)| json!({ "part": path, "level": l.level, "message": l.message }))
             .collect(),
     )
 }
@@ -1438,7 +1438,7 @@ mod tests {
     }
 
     /// Every project-facing command is one compact line in the chat log,
-    /// with the doohickey it answered about; the chat commands are not.
+    /// with the part it answered about; the chat commands are not.
     #[test]
     fn commands_are_logged_to_the_chat() {
         let dir = tempfile::tempdir().unwrap();

@@ -3,9 +3,9 @@
 //!
 //! - ```js skip``` opts a block out (signature listings, pseudo-code).
 //! - ```js error="substring"``` expects the build to fail with the substring.
-//! - Blocks containing `export default` run verbatim as a doohickey; bare
+//! - Blocks containing `export default` run verbatim as a part; bare
 //!   fragments are wrapped in a standard `build(ctx)` prelude.
-//! - `ctx.invoke('path')` references get stub doohickeys, so composition
+//! - `ctx.invoke('path')` references get stub parts, so composition
 //!   examples run without their whole imaginary project.
 //!
 //! Blocks in the live tree run as `unstable`. When frozen `docs/api-N/`

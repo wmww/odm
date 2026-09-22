@@ -1,7 +1,7 @@
 # Links in the chat action log
 
 The action lines the viewer writes for the agent's work (`Who::Action`)
-name things the viewer can already show: a doohickey file, a scene node.
+name things the viewer can already show: a part file, a scene node.
 Make those names links — click a file to open it in a tab, click a node
 to select it — so the log is a way *into* the model, not just a receipt.
 
@@ -25,7 +25,7 @@ first, phase 3 carries `spans` across; ~250 lines, so no reason to wait.
   — sets the selection, `tree.reveal`s its ancestors, tells the engine.
 - `tab.scene.root: TreeNode` (viewer-core tree.rs) — the tab's scene tree,
   already materialized with names; ids are index paths (`/1/0`, root `""`).
-- Every project `.js` is a doohickey (`generation_sources` is exactly
+- Every project `.js` is a part (`generation_sources` is exactly
   them), so every `new`/`edit` path is a valid tab target when logged.
 
 ## The two links

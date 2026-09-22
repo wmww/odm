@@ -1,6 +1,6 @@
 //! Framework snapshot: the ODM framework + three.js subset are embedded in
 //! the binary and loaded once into a snapshot at startup (~40 ms); every
-//! doohickey isolate is created from that snapshot (~1.4 ms each).
+//! part isolate is created from that snapshot (~1.4 ms each).
 //!
 //! API versions: ONE snapshot holds every supported version's modules. Each
 //! version's manifest module (framework/versions/…) registers an installer
@@ -27,10 +27,10 @@ static FRAMEWORK: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../framework");
 
 /// All framework modules live under this synthetic root.
 const FRAMEWORK_ROOT: &str = "file:///odm/framework/";
-/// Doohickey modules live under this synthetic root.
+/// Part modules live under this synthetic root.
 const PROJECT_ROOT: &str = "file:///odm/project/";
 
-pub fn doohickey_specifier(path: &str) -> Result<ModuleSpecifier, String> {
+pub fn part_specifier(path: &str) -> Result<ModuleSpecifier, String> {
     if path.starts_with('/') || path.split('/').any(|c| c == ".." || c == "." || c.is_empty()) {
         return Err("path must be relative, without . or ..".into());
     }
@@ -108,21 +108,21 @@ impl ModuleLoader for EmbeddedFrameworkLoader {
     }
 }
 
-/// Runtime loader: serves exactly one doohickey module; everything else must
+/// Runtime loader: serves exactly one part module; everything else must
 /// come from the snapshot module map (three/odm) or fail with a clear error.
-pub struct DoohickeyLoader {
+pub struct PartLoader {
     version: ApiVersion,
     specifier: ModuleSpecifier,
     code: String,
 }
 
-impl DoohickeyLoader {
+impl PartLoader {
     pub fn new(version: ApiVersion, specifier: ModuleSpecifier, code: String) -> Self {
-        DoohickeyLoader { version, specifier, code }
+        PartLoader { version, specifier, code }
     }
 }
 
-impl ModuleLoader for DoohickeyLoader {
+impl ModuleLoader for PartLoader {
     fn resolve(
         &self,
         specifier: &str,
@@ -156,8 +156,8 @@ impl ModuleLoader for DoohickeyLoader {
             ))
         } else {
             Err(JsErrorBox::generic(format!(
-                "cannot import {module_specifier}: doohickeys may only import 'three' and 'odm'; \
-                 use ctx.invoke('path/to/other.js') to use other doohickeys"
+                "cannot import {module_specifier}: parts may only import 'three' and 'odm'; \
+                 use ctx.invoke('path/to/other.js') to use other parts"
             )))
         };
         ModuleLoadResponse::Sync(res)
@@ -185,7 +185,7 @@ impl JsEnv {
         });
 
         // Load every supported version's manifest; each registers its
-        // installer in `__odmVersions`. Side modules: doohickeys get to be
+        // installer in `__odmVersions`. Side modules: parts get to be
         // the main module at runtime.
         for &version in odm_build::SUPPORTED {
             let entry =
@@ -214,7 +214,7 @@ impl JsEnv {
     }
 }
 
-/// The script an isolate runs before its doohickey loads: installs the
+/// The script an isolate runs before its part loads: installs the
 /// selected version's surface (globals + `__odm` plumbing).
 pub fn select_version_script(version: ApiVersion) -> String {
     format!("__odmVersions[{:?}].install(globalThis);", version.name())

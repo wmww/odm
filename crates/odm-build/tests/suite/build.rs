@@ -347,7 +347,7 @@ fn cycles_error_instead_of_hanging() {
 }
 
 #[test]
-fn missing_doohickey_lists_available() {
+fn missing_part_lists_available() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "root.js", "export default (ctx) => ctx.invoke('nope/missing.js', {})");
     write(dir.path(), "parts/wheel.js", WHEEL);
@@ -355,7 +355,7 @@ fn missing_doohickey_lists_available() {
     let e = engine(dir.path());
     let sync = e.sync().unwrap();
     let err = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap_err();
-    assert!(err.message.contains("no doohickey"), "{err:?}");
+    assert!(err.message.contains("no part"), "{err:?}");
     assert!(err.message.contains("parts/wheel.js"), "should list files: {err:?}");
 }
 
@@ -470,7 +470,7 @@ fn concurrent_same_pass_dedups() {
         .collect();
     let roots: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
     assert!(roots.windows(2).all(|w| w[0] == w[1]));
-    assert_eq!(builds(&e), 2, "in-flight dedup: each doohickey built once");
+    assert_eq!(builds(&e), 2, "in-flight dedup: each part built once");
 }
 
 #[test]

@@ -11,7 +11,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   Project always writes it. Unknown keys rejected; NOT part of generation
   identity). Every `*.js` under it
   (recursive, skipping dot-dirs like `.odm`/`.git` and `node_modules`) is a
-  doohickey, identified by project-relative path. Any file is viewable;
+  part, identified by project-relative path. Any file is viewable;
   `root.js` is pure convention — the default target when a query names no
   path.
 - **Views**: a view = (path, args, cascade), evaluated against the current
@@ -149,7 +149,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   stored subtree — so an Instance with no transform/color/name reuses the
   invoked subtree's hash outright. Isolates nest strictly LIFO per thread. Module URLs:
   framework at `file:///odm/framework/*` (bare 'three'/'odm' resolve there);
-  doohickeys at `file:///odm/project/<path>` — single file, no project
+  parts at `file:///odm/project/<path>` — single file, no project
   imports. op2 quirks: `op_invoke` must be `#[op2(reentrant)]` (nested build
   ops re-enter); no fixed-size-array params (use Vec<f64>);
   `serde_json::Value` must be written fully qualified. Module loading is
@@ -185,7 +185,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   — the input panel's data source and the input-name typo check
   (`check_input_names`); `declared_entries` is the failure-path subset
   (target's declared schema, no walk needed). Each pass also collects
-  `BuildStats` (per-doohickey runs + self-time, memo hits) into
+  `BuildStats` (per-part runs + self-time, memo hits) into
   `PassResult.stats`, surfaced by `"stats": true` on any view command.
   In-flight registry (wait-for-in-flight + wait-graph cycle detection);
   cancellation (token + TerminateExecution post-module-eval). Cycle check is
@@ -282,7 +282,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   `.odm/viewer.json` (a `kind` key, absent = view); classic notebook tabs,
   each with its own close box, a
   red label when that tab's last build failed, and a magnifier at the end
-  opening the doohickey picker. The *last* tab closes too (Ctrl+W, or its
+  opening the part picker. The *last* tab closes too (Ctrl+W, or its
   box): no tab is a real state — empty panels, a blank viewport well
   (`blank_viewport`), `set_active_slot(None)`, no view registered, chat
   messages with no view snapshot — and it persists as an empty tab list in
@@ -405,7 +405,7 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   chat, dialogs, and the `impl odm_viewer_core::Engine for EngineState`;
   `panel.rs` the Agent panel, `settings.rs` the Agent Settings page,
   `idle.rs` event loop, `menu.rs` menu bar + its accelerators, `browse.rs`
-  folder list with `open.rs`/`new.rs`/`export.rs`/`export_stl.rs` on top of it, `pick.rs` doohickey
+  folder list with `open.rs`/`new.rs`/`export.rs`/`export_stl.rs` on top of it, `pick.rs` part
   picker, `tabs.rs` tab persistence, `agent.rs` agent-file question,
   `feedback.rs` the Feedback page + its notice dialog, `activity.rs` — see
   "Agent activity view" above).
@@ -548,7 +548,7 @@ drives it at 1 unit/sec, looping.
 Wanted later: a color swatch/picker; element reorder buttons and
 per-path reset; selection↔panel linking (authored provenance tags
 mapping scene nodes → input paths, needs an IR field + FORMAT_VERSION
-bump — wait for demonstrated need); doohickey-typed inputs (`items`
+bump — wait for demonstrated need); part-typed inputs (`items`
 referencing another file's declared inputs would de-duplicate the
 gallery's marker schema and make a real scene composer).
 
@@ -613,8 +613,8 @@ labels, real focus, asserting on the painted galley text).
 
 `viewer/menu.rs` is the whole bar: an `Action` enum, a `theme::menu` per
 drop-down listing `MenuEntry`s, and one `apply` that turns an action into an
-effect. File has New Project… / Open Project… | Open Doohickey… (Ctrl+O) /
-Close Doohickey (Ctrl+W) | Export Web… / Export STL… (grayed via
+effect. File has New Project… / Open Project… | Open Part… (Ctrl+O) /
+Close Part (Ctrl+W) | Export Web… / Export STL… (grayed via
 `MenuEntry::enabled` while the tab has no built result) | Quit (Ctrl+Q); Edit has Message
 Agent (Ctrl+Enter) — put the dock on the Agent tab and the caret in its box
 (`AgentPanel::focus`, taken by the box when it next draws) — and Agent Settings…; View
@@ -665,8 +665,8 @@ it (tabs, `self.tabs[self.active]`) assumes a project. Open from here is the
 same `Sessions::open` path as a swap, minus the old session to retire —
 `Sessions::start` is now just `empty()` + `open()`.
 
-`viewer/pick.rs` is the doohickey picker — the tab strip's magnifier and File ▸
-Open Doohickey both put it up, on a fresh `sync()` so it lists what is on disk
+`viewer/pick.rs` is the part picker — the tab strip's magnifier and File ▸
+Open Part both put it up, on a fresh `sync()` so it lists what is on disk
 now. An auto-focused filter box over the list: case-insensitive substring,
 up/down walk the highlight, Enter takes it, a click takes the row clicked. The
 keys are consumed before the box is drawn, or Enter would drop its focus and
@@ -708,11 +708,11 @@ and agent-file questions go first.
 2026-09-18, was plans/stl-export.md; driven by the human from File ▸ Export
 STL…, with `odm export '{"out": "x.stl"}'` as the agent/test twin. 3D
 printing is the common case, not the only one — nothing in the feature
-assumes it. Decisions: always the **whole view** (export one part = open its
-doohickey; no `node` field yet — `scene::scene_solids` makes it a small
+assumes it. Decisions: always the **whole view** (export one piece = view the
+part that builds it; no `node` field yet — `scene::scene_solids` makes it a small
 addition); options are `units` (default the project's) and `union` (default
 on), in one `StlOptions` shared by request and dialog; color/opacity ignored
-(ghost parts export too); Z-up as modeled, no recentering (multi-file exports
+(ghost solids export too); Z-up as modeled, no recentering (multi-file exports
 stay registered); binary only, no timestamp → deterministic bytes.
 
 - `Kernel::export_solids` folds the union (or not) on Manifolds and *returns
@@ -737,7 +737,7 @@ stay registered); binary only, no timestamp → deterministic bytes.
 - The bitmap UI font has `×` and `·` but no `→` (renders tofu) — the size
   line says `=`.
 - Later: 3MF (units/colors/objects) through the same command by extension;
-  per-node export; an option to skip ghost parts; showing the unit in the
+  per-node export; an option to skip ghost solids; showing the unit in the
   viewer.
 
 ### Feedback
@@ -1157,7 +1157,7 @@ this.
 ## API versions
 
 Contract: `docs/versioning.md`; rationale + implementation map:
-`notes/api-stability-and-docs.md`. The short version: every doohickey
+`notes/api-stability-and-docs.md`. The short version: every part
 carries `//! ODM API <version>` (parsed at sync time in odm-build/sources.rs,
 missing = unstable until API 1); `framework/versions/<v>` manifests register
 per-version installers in one shared snapshot, `run_build` installs the
@@ -1172,7 +1172,7 @@ notes/spike-findings.md "Snapshot count/concurrency".
 - Consistency: every published result is byte-equivalent to a from-scratch
   build of its generation (tested: `odm-build/tests/build.rs`).
 - The engine never writes ODM project files of an existing project — with two
-  exceptions, neither of which can touch a doohickey or churn a generation
+  exceptions, neither of which can touch a part or churn a generation
   (neither odm.toml nor `.md` files are part of generation identity):
   the `engine` value in `odm.toml` (recorded on project open;
   `odm_build::sync_marker`), and the standard prompt inside the marker pair of
@@ -1253,7 +1253,7 @@ the process (see spike-findings "Snapshot count/concurrency").
 Two data-driven suites guard the JS API:
 - **Conformance**: `tests/conformance/unstable/` (repo root), run by
   `cargo test -p odm-engine conformance`. Declarative `export const
-  checks` per test doohickey; format in `tests/conformance/README.md`.
+  checks` per test part; format in `tests/conformance/README.md`.
   Add a test with every feature and every bug found — it seeds the frozen
   API 1 suite. `every_api_name_is_exercised` reads the live API surface and
   fails until each name appears in the suite, so a new function cannot

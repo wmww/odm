@@ -1,5 +1,5 @@
 //! ODM API unstable
-// Cross-doohickey invocation: JSON + Solid args cross the boundary, the
+// Cross-part invocation: JSON + Solid args cross the boundary, the
 // result comes back as an Instance, and console output is captured from
 // both files.
 export default function build(ctx) {

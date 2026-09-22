@@ -1,5 +1,5 @@
 //! ODM API unstable
-//! Doohickey composition: one wheel geometry, four placements — content
+//! Part composition: one wheel geometry, four placements — content
 //! addressing stores the wheel mesh once.
 export default function build(ctx) {
   const wheel = ctx.invoke('parts/wheel.js', { radius: 8 });

@@ -69,7 +69,7 @@ fn walk(
     };
     let color = node.color.map(to_linear).or(inherited);
     // Nearest named ancestor wins over farther ones, so an author can label a
-    // sub-part inside a named assembly and still hit that sub-part.
+    // sub-node inside a named assembly and still hit that sub-node.
     let name = node.name.as_deref().or(inherited_name);
     // Multiplicative, unlike color: a 50% subassembly halves everything in it.
     let opacity = parent_opacity * node.opacity.unwrap_or(1.0).clamp(0.0, 1.0);

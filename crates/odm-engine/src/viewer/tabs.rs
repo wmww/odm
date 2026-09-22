@@ -150,7 +150,7 @@ mod tests {
     }
 
     /// What the user left the viewer looking at comes back: which
-    /// doohickeys, the values they set on each, where the camera was, and
+    /// parts, the values they set on each, where the camera was, and
     /// which tab was in front.
     #[test]
     fn tabs_round_trip() {

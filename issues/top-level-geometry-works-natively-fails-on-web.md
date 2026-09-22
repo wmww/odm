@@ -8,7 +8,7 @@ present for the whole isolate, so module-scope `odm.box(1)` builds fine
 extraction path). The web export installs `__odmOps` per build
 (`crates/odm-web/src/executor.rs`), so the same file throws in a browser.
 
-So a doohickey can pass every local check and break only once exported —
+So a part can pass every local check and break only once exported —
 the failure mode `notes/web-export.md` calls out as the drift risk, here
 in the framework rather than in the ops list.
 

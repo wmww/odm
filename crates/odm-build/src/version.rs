@@ -1,6 +1,6 @@
 //! JS API versions and the `//! ODM API <version>` pragma.
 //!
-//! Every doohickey names the API version it targets in its leading comments
+//! Every part names the API version it targets in its leading comments
 //! (`//! ODM API unstable`; later `//! ODM API 1`, `//! ODM API 2`, …). The
 //! pragma is parsed at sync time without evaluating the module. A missing
 //! pragma means `unstable` until API 1 is cut; then it becomes an error.
@@ -140,7 +140,7 @@ pub fn parse_pragma(code: &str) -> Result<Option<ApiVersion>, String> {
     Ok(found)
 }
 
-/// The doohickey's prose description: every non-pragma `//!` line in the
+/// The part's prose description: every non-pragma `//!` line in the
 /// leading comment block, joined. First line = one-sentence summary, the
 /// rest is the body. Parsed without evaluating the module, so it survives
 /// broken builds.

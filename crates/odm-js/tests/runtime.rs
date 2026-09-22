@@ -359,7 +359,7 @@ impl Invoker for NestedInvoker {
         let (code, decls) = self
             .codes
             .get(path)
-            .ok_or_else(|| odm_js::InvokeError::from(format!("no doohickey at {path}")))?
+            .ok_or_else(|| odm_js::InvokeError::from(format!("no part at {path}")))?
             .clone();
         // The invoke's cascade values become the nested build's environment
         // (the scheduler additionally overlays declaration defaults).

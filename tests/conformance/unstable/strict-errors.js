@@ -73,7 +73,7 @@ export const checks = [
   { set: { mode: 'box-shape' }, error: 'box size must be a number or [x, y, z]' },
   { set: { mode: 'cylinder-segments' }, error: 'segments' },
   // A missing path lists the files that do exist...
-  { set: { mode: 'missing-invoke' }, error: 'no doohickey at "nope.js"; project has: root.js' },
+  { set: { mode: 'missing-invoke' }, error: 'no part at "nope.js"; project has: root.js' },
   // ...and an undeclared input lists the declared names.
   { set: { mode: 'undeclared-input' }, error: 'not declared in meta.inputs (declared: mode)' },
 ];

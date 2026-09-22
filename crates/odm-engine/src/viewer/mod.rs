@@ -115,7 +115,7 @@ enum Dialog {
     Install(settings::InstallDialog),
 }
 
-/// One thing in the tab strip. Nearly always a view — one doohickey, its
+/// One thing in the tab strip. Nearly always a view — one part, its
 /// inputs and its camera; the feedback page is the one other kind, and at
 /// most one of it is ever open. With it in front the viewport, side bar and
 /// console show the same "no tab" state as an empty strip, because there is
@@ -182,7 +182,7 @@ pub struct ViewerApp {
     /// Feedback the user has yet to be told about, shown one dialog at a
     /// time behind whatever else is up.
     feedback_notices: Vec<feedback::Notice>,
-    /// The new-tab doohickey picker, when it is up.
+    /// The new-tab part picker, when it is up.
     pick: Option<pick::Picker>,
     /// File ▸ Quit; acted on by the event loop (see `idle.rs`).
     quit: Quit,
@@ -451,7 +451,7 @@ impl ViewerApp {
     }
 
     /// Close one tab — the last one included, which leaves the window on the
-    /// project with empty panels (File ▸ Open Doohickey fills them again).
+    /// project with empty panels (File ▸ Open Part fills them again).
     fn close_tab(&mut self, index: usize) {
         if index >= self.items.len() {
             return;
@@ -473,7 +473,7 @@ impl ViewerApp {
     }
 
     /// The tab strip: a row of notebook tabs, each with its own close box, and
-    /// a magnifier at the end that opens the doohickey picker.
+    /// a magnifier at the end that opens the part picker.
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
         /// Face left and right of a tab's contents.
         const PAD: f32 = 8.0;
@@ -629,7 +629,7 @@ impl ViewerApp {
         };
         theme::bevel(ui.painter(), find, bevel);
         theme::magnifier(ui.painter(), find.center(), theme::TEXT);
-        if hit.on_hover_text("open doohickey").clicked() {
+        if hit.on_hover_text("open part").clicked() {
             add = true;
         }
 
@@ -644,7 +644,7 @@ impl ViewerApp {
         }
     }
 
-    /// Put the doohickey picker up, on a fresh scan so it lists what is on
+    /// Put the part picker up, on a fresh scan so it lists what is on
     /// disk right now.
     fn open_picker(&mut self) {
         let files = match self.state().build_engine().sync() {
@@ -654,7 +654,7 @@ impl ViewerApp {
         self.pick = Some(pick::Picker::new(files));
     }
 
-    /// The doohickey picker, when it is up. What it picks opens in a new tab.
+    /// The part picker, when it is up. What it picks opens in a new tab.
     fn pick_ui(&mut self, ctx: &egui::Context) {
         let Some(mut picker) = self.pick.take() else { return };
         match picker.ui(ctx) {

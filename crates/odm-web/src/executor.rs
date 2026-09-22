@@ -1,6 +1,6 @@
 //! The web executor: odm-build's `Executor` implemented against the page's
 //! JS. `run_build` pushes a session frame, asks runtime.js to invoke the
-//! doohickey's factory + `__odm.runBuild`, and interns the returned IR JSON.
+//! part's factory + `__odm.runBuild`, and interns the returned IR JSON.
 //! While the factory runs, the framework's ops land in the `op_*` exports
 //! below (the browser mirror of odm-js `ops.rs`), which read the top frame.
 //! Reentrancy is the load-bearing bit: `op_invoke` → scheduler → executor →

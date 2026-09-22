@@ -1,7 +1,7 @@
 # Geometry queries
 
 Exact, engine-side measurements on a `Solid`. Use these to position
-parts relative to computed geometry — never eyeball dimensions off a
+solids relative to computed geometry — never eyeball dimensions off a
 render. Queries account for the solid's pending transform (it is baked
 engine-side and cached), so results are in the solid's current frame.
 
@@ -25,9 +25,9 @@ Box3, so a forgotten empty check fails loudly instead of propagating
 ±Infinity into geometry.
 
 ```js
-const part = odm.cylinder(8, 20);
+const post = odm.cylinder(8, 20);
 const other = odm.box(10);
-const b = part.bounds();
+const b = post.bounds();
 const onTop = other.translate(0, 0, b.max.z - other.bounds().min.z);
 ```
 
@@ -59,9 +59,9 @@ export default function build(ctx) {
 - **Contact**: at exact tangency the *sign* is floating-point noise, so
   resting contact reads `distance ≈ 0` of either sign. Threshold
   `Math.abs(c.distance)` with your own tolerance for "touching" — do
-  not nudge parts apart just to stabilize the sign.
+  not nudge solids apart just to stabilize the sign.
 
-Throwing on a failed fit (as above) makes a doohickey assert its own
+Throwing on a failed fit (as above) makes a part assert its own
 assembly. The CLI twin is `odm clearance` — same numeric fields, node
 pairs by name, whole subtrees per node, plus `between`/`overlapping`
 naming the colliding leaves (`odm docs cli`).
@@ -72,8 +72,8 @@ Nearest surface hit of the ray from `origin` along `dir`, within
 `maxDist` (default 1e9):
 
 ```js
-const part = odm.box(10);
-const hit = part.raycast([0, 0, 50], [0, 0, -1]);
+const s = odm.box(10);
+const hit = s.raycast([0, 0, 50], [0, 0, -1]);
 // → { distance, point: Vector3, normal: Vector3 }  or  null
 ```
 

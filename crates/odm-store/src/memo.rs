@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 /// cascade value like `t` back and forth revalidates instead of rebuilding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MemoKey {
-    /// Hash of the doohickey's source code.
+    /// Hash of the part's source code.
     pub code: Hash,
     /// Canonical hash of the build args.
     pub args: Hash,

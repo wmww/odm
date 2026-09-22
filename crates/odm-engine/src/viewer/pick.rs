@@ -1,4 +1,4 @@
-//! The doohickey picker: which file a new tab opens on.
+//! The part picker: which file a new tab opens on.
 //!
 //! Every viewable file in the project, narrowed by what is typed in the box at
 //! the top. The box has the caret from the moment the picker comes up, so the
@@ -37,7 +37,7 @@ impl Picker {
     }
 
     pub fn ui(&mut self, ctx: &egui::Context) -> Outcome {
-        let res = theme::dialog(ctx, "open-doohickey", "Open Doohickey", WIDTH, |ui| self.body(ui));
+        let res = theme::dialog(ctx, "open-part", "Open Part", WIDTH, |ui| self.body(ui));
         if res.dismissed { Outcome::Cancelled } else { res.inner }
     }
 
@@ -93,7 +93,7 @@ impl Picker {
             }
             for (i, file) in matches.iter().enumerate() {
                 // The cube, not the folder icon the browse dialogs use: these
-                // rows are doohickeys, not places.
+                // rows are parts, not places.
                 let row = theme::list_row(ui, Icon::Mesh, file, i == self.selected);
                 if row.clicked() {
                     picked = Some(file.clone());

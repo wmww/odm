@@ -11,7 +11,7 @@ odm.group(bolt, nuts).name('assembly').translate(0, 0, 10); // arrays flatten
 Returns a `Group`: a pure grouping under one transform/color/name.
 Children may be Solids, Groups, Instances, or arrays of those; one
 level of arrays is flattened and `null`/`undefined` children are
-dropped (handy for conditional parts). `g.children` returns a copy of
+dropped (handy for conditional children). `g.children` returns a copy of
 the child list.
 
 An array that survives the flattening — one nested two or more deep —
@@ -31,7 +31,7 @@ const wheel = ctx.invoke('parts/wheel.js', { radius: 8 });
 return odm.group(wheel.translate(-20, 0, 0), wheel.translate(20, 0, 0));
 ```
 
-Builds another doohickey and returns its output as an `Instance`.
+Builds another part and returns its output as an `Instance`.
 `path` is project-relative. The invoked file reads the args through its
 declared inputs — `ctx.input('radius')` there — after validation against
 its `meta.inputs` schemas, with declared defaults merged in
@@ -52,10 +52,10 @@ its `meta.inputs` schemas, with declared defaults merged in
   nothing). See [inputs.md](inputs.md) for resolution.
 - **Memoized**: same file content + same effective inputs → the cached
   result, free. Invoking one file many times with different args is
-  the intended pattern for repeated parts. (An arg spelled out at its
+  the intended pattern for repeated geometry. (An arg spelled out at its
   default value and an omitted one are the same build.)
 - The invoked file runs in its own isolate; there is no other way to
-  share values between doohickeys.
+  share values between parts.
 - Invokes can nest (a invokes b invokes c). A dependency cycle is a
   build error.
 
@@ -64,12 +64,12 @@ its `meta.inputs` schemas, with declared defaults merged in
 The output of `ctx.invoke`: an opaque handle to the built subtree. It
 can be transformed, colored (a default for descendants without one,
 like a Group), and named — each copy independently — but it can be
-neither queried nor used in CSG. Naming it is how copies of one part
+neither queried nor used in CSG. Naming it is how copies of one invoke
 are told apart: a raycast hit inside an unnamed subtree is attributed
 to the nearest named ancestor, and the Instance (like a Group) is the
 only place a per-copy name can live.
 
-Structure around that limit: a doohickey that needs to *cut or measure*
+Structure around that limit: a part that needs to *cut or measure*
 a shape from elsewhere should receive it as a Solid through a
 `{ type: 'solid' }` input, not invoke it. Data can also flow upward
 only as geometry — if a parent needs numbers from a child (say, a

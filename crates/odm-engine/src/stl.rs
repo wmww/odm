@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 pub struct StlOptions {
     /// What one model unit is; the file is in mm.
     pub units: Units,
-    /// Fuse all solids into one manifold (overlaps merge, disjoint parts stay
+    /// Fuse all solids into one manifold (overlaps merge, disjoint solids stay
     /// separate bodies). Off = every solid as-is: exact, but overlapping
     /// siblings self-intersect.
     pub union: bool,

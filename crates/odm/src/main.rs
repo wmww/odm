@@ -100,7 +100,7 @@ fn export_site(args: &[String]) -> anyhow::Result<i32> {
             }
             "--view" => {
                 opts.view = Some(odm_export::View::of(
-                    it.next().ok_or_else(|| anyhow::anyhow!("--view takes a doohickey path"))?.clone(),
+                    it.next().ok_or_else(|| anyhow::anyhow!("--view takes a part path"))?.clone(),
                 ));
             }
             "--template" => {
@@ -139,7 +139,7 @@ fn export_site(args: &[String]) -> anyhow::Result<i32> {
         eprintln!("warning: {w}");
     }
     println!(
-        "exported {} ({} doohickeys) to {}",
+        "exported {} ({} parts) to {}",
         project.display(),
         report.files,
         report.out.display()

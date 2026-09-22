@@ -1,4 +1,4 @@
-//! JS runtime: runs doohickey `build()` functions in disposable V8 isolates
+//! JS runtime: runs part `build()` functions in disposable V8 isolates
 //! created from a snapshot with the ODM framework + three.js subset preloaded.
 //!
 //! Thread rules (see notes/spike-findings.md): isolates nest
@@ -63,12 +63,12 @@ impl odm_build::Executor for JsEnv {
     }
 }
 
-/// Run one doohickey build in a fresh disposable isolate.
+/// Run one part build in a fresh disposable isolate.
 pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, FailedBuild> {
-    let specifier = snapshot::doohickey_specifier(input.path)
-        .map_err(|e| BuildError::Internal(format!("bad doohickey path {:?}: {e}", input.path)))?;
+    let specifier = snapshot::part_specifier(input.path)
+        .map_err(|e| BuildError::Internal(format!("bad part path {:?}: {e}", input.path)))?;
 
-    let loader = snapshot::DoohickeyLoader::new(input.api, specifier.clone(), input.code.to_string());
+    let loader = snapshot::PartLoader::new(input.api, specifier.clone(), input.code.to_string());
     let mut rt = JsRuntime::new(RuntimeOptions {
         startup_snapshot: Some(env.snapshot()),
         module_loader: Some(Rc::new(loader)),
@@ -95,7 +95,7 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
     rt.op_state().borrow_mut().put(session);
 
     // Hand out the interrupt handle before the module (whose top level is
-    // arbitrary doohickey code) evaluates, so even `while(true){}` outside
+    // arbitrary part code) evaluates, so even `while(true){}` outside
     // build() stays terminable.
     if let Some(cb) = on_handle {
         let handle: InterruptHandle =
@@ -107,7 +107,7 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
         rt.op_state().borrow_mut().take::<SessionState>()
     };
 
-    // Load + evaluate the doohickey module (sync loader; the event loop
+    // Load + evaluate the part module (sync loader; the event loop
     // settles immediately).
     let mod_id = {
         let load = futures::executor::block_on(rt.load_main_es_module(&specifier));
@@ -201,7 +201,7 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
     })
 }
 
-/// Load a doohickey module (without calling its build()) and return one of
+/// Load a part module (without calling its build()) and return one of
 /// its exports as JSON — `None` if the export is absent. The conformance
 /// runner reads `export const checks` this way. The module's top level runs,
 /// so it gets a real session (ops work) under the version its pragma picks.
@@ -217,9 +217,9 @@ pub fn extract_export(
     store: Arc<odm_store::Store>,
     timeout: std::time::Duration,
 ) -> Result<Option<Value>, BuildError> {
-    let specifier = snapshot::doohickey_specifier(path)
-        .map_err(|e| BuildError::Internal(format!("bad doohickey path {path:?}: {e}")))?;
-    let loader = snapshot::DoohickeyLoader::new(api, specifier.clone(), code.to_string());
+    let specifier = snapshot::part_specifier(path)
+        .map_err(|e| BuildError::Internal(format!("bad part path {path:?}: {e}")))?;
+    let loader = snapshot::PartLoader::new(api, specifier.clone(), code.to_string());
     let mut rt = JsRuntime::new(RuntimeOptions {
         startup_snapshot: Some(env.snapshot()),
         module_loader: Some(Rc::new(loader)),

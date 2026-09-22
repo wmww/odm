@@ -6,7 +6,7 @@ for one.
 
 ## The pragma
 
-Every doohickey names the API version it targets in its leading
+Every part names the API version it targets in its leading
 comments:
 
 ```js skip

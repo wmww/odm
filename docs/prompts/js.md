@@ -1,4 +1,4 @@
-# Writing doohickeys
+# Writing parts
 
 ```js
 //! ODM API unstable
@@ -18,7 +18,7 @@ export default function build(ctx) {
 - Return a `Solid`, `Group`, `Instance`, an array of these (nested
   arrays become groups), or `null`.
 - **Everything is immutable** (unlike three.js): every method returns a
-  new value, so write `part = part.rotateZ(a)`, not `part.rotateZ(a)`.
+  new value, so write `s = s.rotateZ(a)`, not `s.rotateZ(a)`.
 - `build(ctx)` must be pure: same inputs → same output. `Date` is
   frozen and `Math.random` repeats every build.
 - `console.log` output comes back with build results.
@@ -61,7 +61,7 @@ a.subtract(b); a.union(b); a.intersect(b); a.hull(b);   // CSG: methods only, So
 s.translate(5, 0, 2).rotateZ(odm.deg(30)).scale(2, 2, 2); // world frame, in call order
 s.rotateZ(0.5, { about: [5, 0, 0] });                     // pivot instead of the origin
 s.rotate([0, 1, 1], 0.5);                                 // arbitrary axis
-s.color('#4682b4').name('bolt');                        // names address parts in the CLI
+s.color('#4682b4').name('bolt');                        // names address nodes in the CLI
 s.opacity(0.3);                                         // translucent (multiplies down the tree)
 ```
 
@@ -69,7 +69,7 @@ Rotations and scales are about the **origin** unless you pass
 `{ about: point }`. Colors are `'#rrggbb'`/`'#rrggbbaa'`/`'#rgb'` or
 `[r, g, b, a?]` in 0..1, nothing else; alpha below 1 is translucent.
 
-Position parts from exact engine-side queries, never eyeballed numbers:
+Position solids from exact engine-side queries, never eyeballed numbers:
 `.bounds()` → `THREE.Box3 | null`, `.volume()`, `.area()`,
 `.raycast(origin, dir, maxDist?)` → `{distance, point, normal} | null`,
 `.clearance(other)` → signed `{distance, closest?, separate?}`

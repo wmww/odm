@@ -11,9 +11,9 @@ command count.
 - **The prompt teaches only the core loop**: edit → `inspect` → `render`,
   plus "the conversation is the channel" (ODM runs the agent; user state
   and engine-authored prompts arrive as attachments), plus "view commands take one JSON request", `inputs`/
-  `preset`, and "parts have names". After basic work the concept load
-  should be: files are doohickeys; queries target a view; `inputs` sets
-  inputs; parts have names; just answer.
+  `preset`, and "solids have names". After basic work the concept load
+  should be: files are parts; queries target a view; `inputs` sets
+  inputs; solids have names; just answer.
 - **Everything else lives in `odm docs`**, paid for only when consulted.
   `docs/cli.md` (topic `cli`) is the full CLI reference: every request
   field of every command (a generated section printed from the engine's
@@ -104,8 +104,8 @@ grammar. Standing decisions:
   shape beats JS camelCase. CLI errors on a pair where one node
   contains the other, and on nodes with no geometry. A weaker
   complementary idea (build-report lint flagging subtrees whose bounds
-  touch nothing — "floating part") was left unbuilt: heuristic,
-  false-positives on grounded/intentionally-gapped parts.
+  touch nothing — "floating solid") was left unbuilt: heuristic,
+  false-positives on grounded/intentionally-gapped solids.
 
 ## Inspect + description papercuts (landed 2026-08-17)
 
@@ -225,7 +225,7 @@ writing the values costs tokens ~nothing vs reading tiles.
   error + logs, and memoization makes that byte-identical to the
   original run. Reporting per-file ok/skipped rows would re-run the
   191 KB `tree` mistake; failures only, absence claims nothing.
-- **Errors are per-view, not per-doohickey**: an error can genuinely
+- **Errors are per-view, not per-part**: an error can genuinely
   depend on inputs, so no surface may say "this file is broken/fine" —
   slots report the exact views on screen, `health` a default-inputs
   canary per file, and the two may disagree (that's information).

@@ -4,7 +4,7 @@
 //
 // Isolation model (weaker than native isolates, by design — see
 // plans/web-export.md): framework modules instantiate once per page;
-// doohickey factories re-run per build for a fresh module scope; Date /
+// part factories re-run per build for a fresh module scope; Date /
 // Math.random / console are swapped in per build and restored after.
 
 import init, * as wasm from './odm_web.js';
@@ -82,7 +82,7 @@ function installSurface(api) {
 function formatError(e) {
   if (e instanceof Error) {
     // The V8/SpiderMonkey stack already carries frame lines; keep the first
-    // few, they name doohickey code by bundle position.
+    // few, they name part code by bundle position.
     const stack = typeof e.stack === 'string' ? e.stack.split('\n').slice(0, 9).join('\n') : '';
     return stack.includes(e.message) ? stack : `${e.message}\n${stack}`;
   }
@@ -99,14 +99,14 @@ globalThis.__odmWeb = {
       globalThis.Date = REAL.Date;
       B.prelude();
       installSurface(api);
-      const d = B.doohickeys.get(path);
+      const d = B.parts.get(path);
       if (!d) {
         // The bundler could not transform it (bad import, unsupported
         // syntax): its builds fail with that error, like the engine's loader.
         const broken = B.broken.get(path);
         if (broken) return JSON.stringify({ error: { kind: 'js', message: broken } });
         return JSON.stringify({
-          error: { kind: 'internal', message: `bundle has no doohickey at ${path}` },
+          error: { kind: 'internal', message: `bundle has no part at ${path}` },
         });
       }
       const ns = {};

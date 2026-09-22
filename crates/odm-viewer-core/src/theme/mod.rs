@@ -1092,7 +1092,7 @@ pub fn cross(p: &egui::Painter, at: Pos2, color: Color32) {
 }
 
 /// A magnifier: a five-pixel ring with a two-pixel handle off its corner.
-/// The tab strip's "open a doohickey" button — a glyph rather than an icon
+/// The tab strip's "open a part" button — a glyph rather than an icon
 /// PNG, since it is chrome, in chrome's one color, like the × next to it.
 const MAGNIFIER: [&str; 8] = [
     " ###    ", //

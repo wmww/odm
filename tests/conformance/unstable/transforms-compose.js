@@ -1,7 +1,7 @@
 //! ODM API unstable
 // How transforms compose. Transforms are world-frame and applied in call
 // order — each call left-multiplies onto the pending matrix — so order
-// matters and the identities below are the ones a doohickey can rely on.
+// matters and the identities below are the ones a part can rely on.
 //
 // "Same solid" is asserted by symmetric difference: if a ⊖ b and b ⊖ a are
 // both empty, the two solids are the same set of points. That is stronger
@@ -66,7 +66,7 @@ export default function build() {
   same(odm.box(2).translate(0, 10, 0).rotateX(q), odm.box(2).translate(0, 0, 10), 'rotateX is right-handed');
 
   // Rotate-then-scale is not scale-then-rotate: the scale is world-axis
-  // aligned either way, so it stretches a different direction of the part.
+  // aligned either way, so it stretches a different direction of the solid.
   const bar = odm.box([20, 2, 2]);
   differs(bar.rotateZ(odm.deg(90)).scale(3, 1, 1), bar.scale(3, 1, 1).rotateZ(odm.deg(90)), 'rotate∘scale order');
 

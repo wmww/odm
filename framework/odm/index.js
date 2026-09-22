@@ -1,4 +1,4 @@
-// ODM framework: the API doohickeys build with.
+// ODM framework: the API parts build with.
 //
 // Conventions: Z-up, distances in project units, ALL angles in radians
 // (like three.js; `odm.deg(90)` converts). Scene values are immutable —
@@ -335,7 +335,7 @@ export class Group extends transformable(SceneValue) {
   }
 }
 
-/** The output of ctx.invoke(): another doohickey's built subtree. */
+/** The output of ctx.invoke(): another part's built subtree. */
 export class Instance extends transformable(SceneValue) {
   constructor(ref, matrix = null, color = null, label = null, opacity = null) {
     super(matrix, color, label, opacity);
@@ -860,7 +860,7 @@ function makeCtx(argsJson, decls) {
       return hydrate(decl.schema, raw);
     },
     /**
-     * Build another doohickey and get its output as an Instance.
+     * Build another part and get its output as an Instance.
      * `path` is project-relative, e.g. 'parts/wheel.js'. `args` go to that
      * file's declared inputs; `cascade` values scope over its whole
      * subtree (no declaration needed here).
@@ -917,7 +917,7 @@ export function installGlobals(g) {
       const fn = ns?.default;
       if (typeof fn !== 'function') {
         throw new TypeError(
-          'doohickey must have a default export: `export default function build(ctx) { ... }`',
+          'part must have a default export: `export default function build(ctx) { ... }`',
         );
       }
       return toIRNode(fn(makeCtx(argsJson ?? {}, declsJson ?? {})));

@@ -1,6 +1,6 @@
 # Conformance suite
 
-Per-API-version test doohickeys asserting what the JS API *means*. One
+Per-API-version test parts asserting what the JS API *means*. One
 directory per version channel. `unstable/` is mutable and grows with every
 feature and every bug found — it is the seed of the future API 1 suite. From API 1
 on, a stamped version's suite follows the contract in `docs/versioning.md`:

@@ -21,7 +21,7 @@ export default function build(ctx) {
     .name('deep');
 
   // One level of arrays flattens, and null/undefined children drop out —
-  // the point being that `cond && part` is a usable idiom.
+  // the point being that `cond && solid` is a usable idiom.
   const flat = odm
     .group([odm.box(2), odm.box(2).translate(4, 0, 0)], null, odm.box(2).translate(8, 0, 0), undefined)
     .translate(0, 20, 0)

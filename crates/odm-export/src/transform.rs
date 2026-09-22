@@ -6,14 +6,14 @@
 //! assignments. Re-invoking the factory gives a fresh module scope — the
 //! web runtime's stand-in for a fresh isolate per build.
 //!
-//! Scope: the module forms the framework and doohickeys actually use — the
+//! Scope: the module forms the framework and parts actually use — the
 //! whole static import/export grammar over identifier bindings. Not a JS
 //! parser: a small lexer skips comments/strings/templates (regex literals
 //! by the standard prev-token heuristic) and only reads `import`/`export`
 //! statements found at top level. Unsupported forms (dynamic `import()`,
 //! `import.meta`, destructuring exports, live re-binding of imports) fail
 //! with an error naming the file. The transform assumes the module graph is
-//! acyclic — true by construction: doohickeys import only 'three'/'odm',
+//! acyclic — true by construction: parts import only 'three'/'odm',
 //! and the framework is checked at bundle time.
 
 /// Resolve an import specifier to a bundle module id.

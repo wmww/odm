@@ -2,7 +2,7 @@
 //! dedup across threads, cycle detection, cancellation.
 //!
 //! Model: a *pass* = (generation, view). Builds are demand-driven from the
-//! root doohickey; nested `invoke()`s run inline on the requesting thread in
+//! root part; nested `invoke()`s run inline on the requesting thread in
 //! their own disposable isolates (LIFO nesting). Memo lookup is by
 //! (code hash, args hash) with Salsa-style validation of recorded deps.
 //! Consistency invariant: every published result is byte-equivalent to a

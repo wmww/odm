@@ -22,7 +22,7 @@ unless marked otherwise.
   (scene/objects) are ODM-owned API. Vendor only the three.js subset the
   framework actually uses.
 - Animation is build(t), NOT first-class animation tracks. Made cheap by
-  (a) dependency-tracked context reads — a doohickey that never reads `t`
+  (a) dependency-tracked context reads — a part that never reads `t`
   has a memo entry valid for all t; (b) content-addressed outputs — the same
   object at n transforms is one geometry blob + one stored subtree + n tiny
   wrapper nodes (IR children are hashes, so nothing is copied per placement);
@@ -108,7 +108,7 @@ Built from plans/sweep.md; the decisions worth keeping:
 ## One renderer of record
 
 The original concept ("built on Three.js classes" + "Rust engine renders")
-hid a contradiction: if doohickeys output three.js objects and Rust draws
+hid a contradiction: if parts output three.js objects and Rust draws
 them, three.js semantics become an implicit spec the renderer forever
 chases. No comparable product runs two renderers as equals — everyone picks
 one renderer of record (see ecosystem-research). Resolution: an explicit ODM
@@ -119,13 +119,13 @@ pixel-identical for free.
 
 ## Stack choices
 
-- **JS**: rusty_v8 via deno_core; per-doohickey isolates from a snapshot;
+- **JS**: rusty_v8 via deno_core; per-part isolates from a snapshot;
   Date/Math.random frozen — determinism enforced, not assumed. (rquickjs/Boa
   rejected: interpreter-only, 5–30x slower on math-heavy code.)
 - **Kernel**: Manifold via manifold-csg — robust, deterministic, battle-
   tested mesh CSG. NOT truck (bus factor 1, fragile booleans, stale
   releases); NOT OCCT unless STEP/exact fillets become product requirements
-  (LGPL, weak Rust story). Kernel types stay out of the doohickey API so a
+  (LGPL, weak Rust story). Kernel types stay out of the part API so a
   B-rep backend could be added later; fidget as optional SDF backend later.
   Mesh-first limits accepted: no exact fillets/chamfers, no STEP.
 - **Viewer**: custom wgpu renderer + egui/eframe — the Rerun architecture.

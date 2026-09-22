@@ -27,7 +27,7 @@ pub fn cascade_value_hash(v: Option<&Value>) -> Hash {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildError {
-    /// Syntax or runtime error in doohickey JS; agent-readable, includes stack.
+    /// Syntax or runtime error in part JS; agent-readable, includes stack.
     #[error("{0}")]
     Js(String),
     #[error("build cancelled")]
@@ -81,7 +81,7 @@ impl From<String> for InvokeError {
 
 /// Nested-build callback, provided by the scheduler. Runs on the calling
 /// worker thread; the executor may create nested (LIFO) build contexts under
-/// it. Returns the hash of the invoked doohickey's output Node in the store.
+/// it. Returns the hash of the invoked part's output Node in the store.
 pub trait Invoker {
     fn invoke(
         &mut self,
@@ -120,7 +120,7 @@ pub struct BuildInput<'a> {
     pub cancel: Option<odm_kernel::CancelToken>,
     /// Callback for nested `ctx.invoke()`; None makes invoke fail.
     pub invoker: Option<Box<dyn Invoker>>,
-    /// Called with the interrupt handle before any doohickey code runs
+    /// Called with the interrupt handle before any part code runs
     /// (module top level included); the scheduler may use it to interrupt
     /// from another thread. Executors without cross-thread interruption
     /// (the web runtime) may never call it.
@@ -140,15 +140,15 @@ pub struct BuildOutput {
 /// file unusably slow anyway.
 pub const EXTRACT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// A JS host: runs doohickey builds and reads module exports. One per
+/// A JS host: runs part builds and reads module exports. One per
 /// process/page; must behave identically across hosts — every published
 /// result stays byte-equivalent to a from-scratch build regardless of which
 /// executor ran it.
 pub trait Executor: Send + Sync {
-    /// Run one doohickey build in a fresh module scope.
+    /// Run one part build in a fresh module scope.
     fn run_build(&self, input: BuildInput<'_>) -> Result<BuildOutput, FailedBuild>;
 
-    /// Load a doohickey module (without calling its build()) and return one
+    /// Load a part module (without calling its build()) and return one
     /// of its exports as JSON — `None` if the export is absent. The module's
     /// top level runs, so it gets real ops. Callers have no cancel plumbing,
     /// so a watchdog bounds top-level evaluation by `timeout`.

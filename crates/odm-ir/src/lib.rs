@@ -1,4 +1,4 @@
-//! ODM IR: the contract between JS doohickeys and the engine.
+//! ODM IR: the contract between JS parts and the engine.
 //!
 //! Everything here is content-addressable via a canonical byte encoding fed to
 //! blake3. Hashing is bit-exact (floats hashed as raw IEEE bits, no

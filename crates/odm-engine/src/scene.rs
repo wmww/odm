@@ -276,9 +276,9 @@ pub struct Inspector<'a> {
     store: &'a Store,
     kernel: &'a Kernel,
     fields: Fields,
-    /// Local AABB / counts per mesh hash — repeated parts pay once.
+    /// Local AABB / counts per mesh hash — repeated meshes pay once.
     meshes: HashMap<Hash, MeshStats>,
-    /// Local volume/area per mesh hash — repeated parts pay Manifold once.
+    /// Local volume/area per mesh hash — repeated meshes pay Manifold once.
     measures: HashMap<Hash, (Option<f64>, Option<f64>)>,
 }
 
@@ -493,7 +493,7 @@ fn color_json(c: Color) -> Value {
     }
 }
 
-/// Identity of a repeated part: everything about a node except where it sits.
+/// Identity of a repeated node: everything about a node except where it sits.
 /// Children are content hashes, so this covers whole subtrees.
 fn repeat_key(node: &Node) -> Hash {
     let mut probe = node.clone();
@@ -616,7 +616,7 @@ fn collect_meshes(
 }
 
 /// Every solid under `root`, with its world transform — what an export
-/// writes. Color and opacity play no part: translucent parts are solids too.
+/// writes. Color and opacity play no part: translucent nodes are solids too.
 pub fn scene_solids(store: &Store, root: &Node) -> Result<Vec<(Hash, Transform)>, String> {
     let mut out = Vec::new();
     collect_meshes(store, root, "", &odm_render::math::IDENTITY, None, &mut out)
@@ -801,7 +801,7 @@ mod tests {
         t
     }
 
-    /// Root with three identical named parts at x = 0, 10, 20.
+    /// Root with three identical named nodes at x = 0, 10, 20.
     fn scene() -> (Arc<Store>, Node) {
         let store = Store::new();
         let mesh = store.put(Object::Mesh(Arc::new(tri())));

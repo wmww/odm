@@ -1,6 +1,6 @@
 # ODM documentation
 
-Docs for *using* ODM on a project (writing doohickeys, driving the
+Docs for *using* ODM on a project (writing parts, driving the
 engine). Docs about ODM's implementation live in `notes/`.
 
 - `prompts/` — the lean in-context layer: the markdown compiled into

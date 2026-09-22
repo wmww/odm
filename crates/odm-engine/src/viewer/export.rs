@@ -3,7 +3,7 @@
 //! the page opens on what the viewer was showing.
 //!
 //! The export itself runs on a background thread: meta extraction can hang on
-//! a broken doohickey for its full 10s timeout, and the UI must not. It reuses
+//! a broken part for its full 10s timeout, and the UI must not. It reuses
 //! the process's one `JsEnv` — creating a second V8 snapshot while the build
 //! thread executes JS aborts the process (`JsEnv::new` says so).
 
@@ -100,7 +100,7 @@ impl ExportDialog {
                 ui.add_space(4.0);
                 let s = if report.files == 1 { "" } else { "s" };
                 ui.label(format!(
-                    "Exported {} doohickey{s} to {}.",
+                    "Exported {} part{s} to {}.",
                     report.files,
                     report.out.display()
                 ));

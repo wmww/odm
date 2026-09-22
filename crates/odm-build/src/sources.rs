@@ -1,6 +1,6 @@
 //! Project scanning: every `*.js` under the project dir (recursive, skipping
 //! dot-directories like `.odm`/`.git`, `node_modules`, and exported sites —
-//! dirs holding `EXPORT_MARKER`) is a doohickey. `odm.toml` at the root is
+//! dirs holding `EXPORT_MARKER`) is a part. `odm.toml` at the root is
 //! the project marker.
 
 use odm_ir::Hash;
@@ -105,7 +105,7 @@ pub enum ScanError {
     Exists(String),
 }
 
-/// One doohickey's source as of a sync.
+/// One part's source as of a sync.
 #[derive(Debug, Clone)]
 pub struct Source {
     pub code: String,
@@ -122,12 +122,12 @@ pub struct Source {
 
 #[derive(Debug, Clone)]
 pub struct ProjectSnapshot {
-    /// path → source for every doohickey.
+    /// path → source for every part.
     pub sources: BTreeMap<String, Source>,
     /// Parsed `odm.toml`, when the project has one. Not hashed into
     /// `generation_sources` (it never affects build output).
     pub marker: Option<ProjectMarker>,
-    /// path → content hash for generation identity (the doohickeys).
+    /// path → content hash for generation identity (the parts).
     pub generation_sources: BTreeMap<String, Hash>,
 }
 
@@ -244,7 +244,7 @@ fn write_new(path: &Path, contents: &str) -> Result<(), ScanError> {
         .map_err(|e| ScanError::Io { path: name, err: e.to_string() })
 }
 
-/// The doohickey a new project opens with: the smallest thing worth seeing.
+/// The part a new project opens with: the smallest thing worth seeing.
 /// The block is about 40 × 30 × 20 mm whatever the project's unit.
 fn starter(name: &str, units: Units) -> String {
     let size = match units {
@@ -284,7 +284,7 @@ fn walk(
             .map_err(|e| ScanError::Io { path: rel.clone(), err: e.to_string() })?;
         if ft.is_dir() {
             // Skip engine state, VCS, and other dot-dirs; also node_modules
-            // and exported sites (their .js files are not doohickeys).
+            // and exported sites (their .js files are not parts).
             if name.starts_with('.')
                 || name == "node_modules"
                 || path.join(EXPORT_MARKER).is_file()

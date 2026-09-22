@@ -342,7 +342,7 @@ impl BuildEngine {
         };
         let args_hash = hash_json(&Value::Object(effective));
 
-        // A node can be reached along many paths (shared parts); its
+        // A node can be reached along many paths (shared subtrees); its
         // *uncovered* set differs per path, so key the visited set on a
         // coarse cover fingerprint to bound rework while staying correct
         // for the common diamond case.

@@ -1,4 +1,4 @@
-//! Doohickey metadata: `export const meta = { inputs: {...}, presets: {...} }`.
+//! Part metadata: `export const meta = { inputs: {...}, presets: {...} }`.
 //!
 //! `meta.inputs` is ONE map, name → entry; an entry is a profiled JSON
 //! Schema (`type`, `enum`, `default`, `description`, `minimum`/`maximum`,
@@ -173,7 +173,7 @@ impl Input {
     }
 }
 
-/// A doohickey's parsed `export const meta`. Absent export = empty meta.
+/// A part's parsed `export const meta`. Absent export = empty meta.
 #[derive(Debug, Default)]
 pub struct Meta {
     pub inputs: BTreeMap<String, Input>,

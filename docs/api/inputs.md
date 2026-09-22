@@ -1,6 +1,6 @@
 # Inputs
 
-A doohickey declares everything it can be given in one place:
+A part declares everything it can be given in one place:
 
 ```js
 //! ODM API unstable
@@ -29,7 +29,7 @@ export default function build(ctx) {
 from:
 
 - **Plain input** (no `cascade`): the value comes from the immediate
-  caller only — the invoking doohickey's args, or the view (viewer
+  caller only — the invoking part's args, or the view (viewer
   panel / a CLI request's `inputs`) when this file is the view target.
   No `default` means required.
 - **Cascade input** (`cascade: true`): an authoring tool — the input
@@ -105,7 +105,7 @@ keeps setting whole JSON values (`{"inputs": {"objects": [...]}}`).
   elements don't exist to fill); it seeds the panel's Add button.
 
 The worked pattern — a scene as an editable object list, one invoke
-per element so editing one object rebuilds one part and memo-hits the
+per element so editing one object rebuilds one invoke and memo-hits the
 rest (`"stats": true` shows it):
 
 ```js
@@ -248,7 +248,7 @@ export const meta = {
 export default (ctx) => odm.box([10, 2, 2]).rotateZ(Math.PI * ctx.input('t'));
 ```
 
-Any doohickey that reads `t` animates; assemblies compose animated
+Any part that reads `t` animates; assemblies compose animated
 parts without mentioning `t` at all, yet the view can still set it —
 that is the cascade mechanism doing its job. The viewer shows a ranged,
 fall-through numeric control named `t` in the input panel like any
@@ -256,8 +256,8 @@ other input, with a play button beside its slider (1 unit/second,
 looping over the range); the CLI sets it
 like any input (`odm render '{"inputs": {"t": 1.5}}'`). Declaring
 `t` 0–2 *is*
-"this loops every 2 seconds". Only doohickeys that read `t` rebuild
-when it changes — keep static geometry in doohickeys that don't, and
+"this loops every 2 seconds". Only parts that read `t` rebuild
+when it changes — keep static geometry in parts that don't, and
 animate at the assembly level with transforms, so scrubbing stays
 cheap (`"stats": true` on any view command shows what actually
 re-ran).
@@ -278,7 +278,7 @@ export const meta = {
 
 One click in the viewer applies one; the CLI takes
 `'{"preset": "heavy"}'` (explicit `inputs` values override the
-preset). Use them as the "stories" of a doohickey: the configurations
+preset). Use them as the "stories" of a part: the configurations
 worth looking at.
 
 `odm inspect '{"fields": ["inputs", "presets"]}'` is the CLI's window

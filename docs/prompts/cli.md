@@ -19,7 +19,7 @@ odm docs search <pattern>     # grep the reference
 `odm docs cli` has every request field of every command (exact camera
 placement, view slots, index paths, `--project`).
 
-Every scene command targets a **view**: a doohickey (`root.js` unless
+Every scene command targets a **view**: a part (`root.js` unless
 `"path"` names another) built with its declared input defaults.
 `"inputs"` sets any input (`{"inputs": {"t": 1.5}}`; an unknown name
 is an error listing the settable ones), `"preset"` applies one from the
@@ -32,20 +32,20 @@ target's meta, and `"view": true` starts from the user's active tab
 
 ```
 odm inspect                                         # whole scene, summary
-odm inspect '{"node": "seat"}'                      # one part, in full
+odm inspect '{"node": "seat"}'                      # one node, in full
 odm inspect '{"node": "seat", "recursive": true}'   # …and its subtree
 odm inspect '{"fields": ["name", "bounds"]}'        # just these columns
 odm inspect '{"fields": ["description", "inputs", "presets"]}'  # what can I set here
 ```
 
-Name your parts (`s.name('seat')`) — that is how nodes are addressed.
+Name your solids (`s.name('seat')`) — that is how nodes are addressed.
 Every entry has `id`, `name`, and world `bounds` and `tris` for its
 whole subtree, so the root's bounds are the model's extent. Identical
 siblings collapse into one entry with `repeat: N`. `"full": true` adds
 `volume`, `area` and placement, and expands repeats. The interface
 fields report even when the build fails.
 
-A part can look right from one angle and still float or collide. After
+An assembly can look right from one angle and still float or collide. After
 assembly edits, `odm clearance '{"pairs": [["seat", "frame"]]}'` gives
 a signed `distance` per pair (positive = exact gap with the closest
 points; negative = penetration with a translation that clears it) and
@@ -80,7 +80,7 @@ text as typed; the rebuilt scene speaks for itself).
 
 - Each user message carries an `odm://user-state` attachment: what they
   were looking at as they hit Enter — the tab's `slot` and `path`, its
-  `inputs`, their `selection` (clicked parts as `{id, name}`, in pick
+  `inputs`, their `selection` (clicked nodes as `{id, name}`, in pick
   order) and the `camera`. "Make *this* one longer" means the
   selection. Paste `camera`'s contents into `odm render` to see exactly
   what they saw. No attachment means no tab was open.

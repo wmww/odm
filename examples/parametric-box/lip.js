@@ -1,5 +1,5 @@
 //! ODM API unstable
-//! The box's stacking lip. A separate doohickey so editing root.js alone
+//! The box's stacking lip. A separate part so editing root.js alone
 //! shows partial rebuilds (this one stays memoized).
 export const meta = {
   inputs: {

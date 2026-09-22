@@ -19,11 +19,11 @@ return odm.box(10).union(odm.group(odm.box(4)));
 
 **"… operands must be Solids … Groups/Instances cannot be used in
 CSG"** — CSG works on `Solid`s only. Assemble Groups/Instances with
-`odm.group`; if you need to cut with geometry from another doohickey,
+`odm.group`; if you need to cut with geometry from another part,
 pass the Solid through `ctx.invoke` args instead
 ([composition.md](composition.md)).
 
-**"doohickey must have a default export"** — every `.js` file in the
+**"part must have a default export"** — every `.js` file in the
 project is built; each needs `export default function build(ctx)`.
 There are no shared library files — share by `ctx.invoke` or args.
 

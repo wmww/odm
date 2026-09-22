@@ -24,7 +24,7 @@ fn scan_skips_exported_sites() {
     std::fs::write(dir.path().join("root.js"), "//! ODM API unstable\n").unwrap();
     let site = dir.path().join("web-export");
     std::fs::create_dir(&site).unwrap();
-    std::fs::write(site.join("runtime.js"), "not a doohickey").unwrap();
+    std::fs::write(site.join("runtime.js"), "not a part").unwrap();
     std::fs::write(site.join(EXPORT_MARKER), "").unwrap();
     // Plain subdirs still scan.
     let parts = dir.path().join("parts");

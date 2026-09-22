@@ -1,7 +1,7 @@
-# Doohickeys and build()
+# Parts and build()
 
 Every `.js` file in the project (dot-directories like `.odm` excluded)
-is a doohickey: one composable piece, like a React component. Any file
+is a part: one composable piece, like a React component. Any file
 can be viewed, queried, or invoked; `root.js` is pure convention — the
 entry file the CLI and viewer try when no path is given, like
 `index.html`. Projects are free to name entry files meaningfully
@@ -21,7 +21,7 @@ warns when the project was last touched by a newer engine.
 
 ```js
 //! ODM API unstable
-//! A steel plate, for the doohickeys chapter.
+//! A steel plate, for the parts chapter.
 export default function build(ctx) {
   return odm.box([40, 20, 5]).color('#4682b4');
 }
@@ -67,9 +67,9 @@ a build error.
 
 ## Sandbox
 
-Each doohickey runs in its own V8 isolate with the framework preloaded.
+Each part runs in its own V8 isolate with the framework preloaded.
 There are no `import`s, no file or network access, no timers, and no
-shared state with other doohickeys — communication happens only through
+shared state with other parts — communication happens only through
 declared inputs and `ctx.invoke`. `Date` is frozen and `Math.random`
 is a seeded PRNG ([determinism.md](determinism.md)).
 

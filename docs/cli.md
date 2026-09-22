@@ -41,9 +41,9 @@ and markdown rather than JSON.)
 
 ## Views
 
-Every scene query targets a **view**: a doohickey (default `root.js`)
+Every scene query targets a **view**: a part (default `root.js`)
 built with chosen input values. The shared request fields below say
-which view and how: `path` names the doohickey; `inputs` sets any
+which view and how: `path` names the part; `inputs` sets any
 input (plain inputs of the target become view args, anything else —
 declared cascade inputs, or names read by invoked descendants — becomes
 a view-level cascade value; a name nothing reads is an error listing
@@ -59,11 +59,11 @@ they never change what the viewer shows.
 <!--- BEGIN GENERATED COMMAND REFERENCE --->
 Request fields every view-targeting command (inspect, render, raycast, clearance, export) shares:
 
-- `path` (string) — the doohickey to build (default `root.js`)
+- `path` (string) — the part to build (default `root.js`)
 - `inputs` (object) — input values by name, e.g. `{"t": 1.5}`; plain inputs of the target become view args, everything else a view-level cascade value — a name nothing reads is an error listing the settable inputs
 - `preset` (string) — apply a named bundle from the target's `meta.presets` first; explicit `inputs` override it
 - `view` (true | string) — target what the user sees: `true` = the active viewer tab (its path and inputs) as the base, a string = a specific slot (`status` lists them)
-- `stats` (bool) — add build stats to the response: which doohickeys re-ran (with self-time) vs. were served from the memo cache
+- `stats` (bool) — add build stats to the response: which parts re-ran (with self-time) vs. were served from the memo cache
 
 ### status
 
@@ -115,7 +115,7 @@ JS twin: `s.raycast(origin, dir, maxDist?)` — same query, same result shape; t
 
 assembly check: per pair of nodes, the signed distance between them (positive = exact gap, negative = penetration).
 
-- `pairs` (array) — node pairs to check, each `["a", "b"]` (names or `/1/0/2` index paths, as `inspect` addresses them; each node stands for its whole subtree); all against the request's one view, answered in order. Per pair, `clearances` holds a signed `distance` — positive: the exact minimum gap, with `closest` (the two nearest points) — negative: the parts overlap, and `separate` is a translation of the pair's second node that clears the first (its length is `-distance`, an upper bound on true penetration depth). `between` names the deciding leaf pair, and a negative result adds `overlapping`: every colliding leaf pair. The sign of a near-zero distance is float noise (exact tangency): treat `|distance|` below your own tolerance as contact — don't nudge geometry to disambiguate
+- `pairs` (array) — node pairs to check, each `["a", "b"]` (names or `/1/0/2` index paths, as `inspect` addresses them; each node stands for its whole subtree); all against the request's one view, answered in order. Per pair, `clearances` holds a signed `distance` — positive: the exact minimum gap, with `closest` (the two nearest points) — negative: the nodes overlap, and `separate` is a translation of the pair's second node that clears the first (its length is `-distance`, an upper bound on true penetration depth). `between` names the deciding leaf pair, and a negative result adds `overlapping`: every colliding leaf pair. The sign of a near-zero distance is float noise (exact tangency): treat `|distance|` below your own tolerance as contact — don't nudge geometry to disambiguate
 
 JS twin: `a.clearance(b)` on Solids — same query; the numeric fields only (in JS you hold the two solids, so there is nothing to name), points as Vector3s; the CLI addresses nodes and maps over `pairs`.
 
@@ -125,7 +125,7 @@ write the view's solids to a file — binary STL, in millimetres, world coordina
 
 - `out` (string) — required: the file to write, replaced atomically; the extension picks the format — `.stl` is the only one today
 - `units` (string) — what one model unit is — `mm`, `m`, `in` or `ft`; default the project's (`units` in odm.toml, itself default `mm`; `status` reports it). The file is always millimetres
-- `union` (bool) — default true: fuse every solid into one valid manifold — overlaps merge, disjoint parts stay separate bodies. `false` writes each solid as-is (exact, but overlapping parts self-intersect)
+- `union` (bool) — default true: fuse every solid into one valid manifold — overlaps merge, disjoint solids stay separate bodies. `false` writes each solid as-is (exact, but overlapping solids self-intersect)
 
 ### feedback
 
@@ -160,7 +160,7 @@ error message), so it still answers when the project is broken.
 building — the value shown is the last one published, never masked by
 an in-progress build. Also there: the project path, name and `units`
 (what one model unit is, from `odm.toml`; `mm` when it doesn't say), the
-doohickey file list, whether `root.js` exists, each slot's path and
+part file list, whether `root.js` exists, each slot's path and
 inputs, which tab is the user's active one, their current `selection`
 (on the active slot), the `generation` — an internal counter that ticks
 whenever a source file changes, useful only for checking that an edit
@@ -187,7 +187,7 @@ shape.
 
 ```
 odm inspect                             # whole scene, recursive, summary
-odm inspect '{"node": "seat"}'          # that part, in full, children as a count
+odm inspect '{"node": "seat"}'          # that node, in full, children as a count
 odm inspect '{"node": "seat", "recursive": true}'   # ...and its subtree
 odm inspect '{"fields": ["name", "bounds"]}'        # narrow the columns instead
 odm inspect '{"fields": ["inputs", "presets"]}'     # the view's interface
@@ -297,7 +297,7 @@ frame is explicit — no ranged sampling; write out the values you want.
 odm render                                                   # framed overview
 odm render '{"look": "top"}'                                 # plan view
 odm render '{"look": "left"}'                                # side elevation
-odm render '{"look": [-1, 0, -0.4], "focus": "seat"}'        # frame one part
+odm render '{"look": [-1, 0, -0.4], "focus": "seat"}'        # frame one node
 odm render '{"wireframe": true, "width": 1600}'              # inspect topology
 odm render '{"opacity": 0.3}'                                # x-ray: see inside
 odm render '{"inputs": {"t": 2.5}, "out": "/tmp/frame.png"}' # one animation moment
@@ -336,7 +336,7 @@ owning the mesh; `name` is that node's own name, else its nearest named
 ancestor's, else `null` — so naming a group or an invoked part labels
 every hit inside it, while a name deeper down still wins. Precise probing — "what is directly
 under this point", clearance along a line. For "how big / where is a
-part", `inspect` is the better tool.
+node", `inspect` is the better tool.
 
 ```
 odm raycast '{"rays": [{"origin": [0, 0, 50], "dir": [0, 0, -1]},
@@ -356,12 +356,12 @@ odm clearance '{"pairs": [["seat", "chainL"], ["seat", "chainR"]], "inputs": {"t
 
 Per pair, a signed `distance`:
 
-- **Positive** — the parts are clear, `distance` is the exact minimum
+- **Positive** — the nodes are clear, `distance` is the exact minimum
   gap, and `closest` gives the two nearest points (`[[x,y,z],[x,y,z]]`,
   on the first and second node): where the gap is, not just how big.
-- **Negative** — the parts overlap. `separate` is a translation for the
+- **Negative** — the nodes overlap. `separate` is a translation for the
   pair's *second* node that clears the first; its length is
-  `-distance`. It is a guarantee (applying it separates the parts) and
+  `-distance`. It is a guarantee (applying it separates the nodes) and
   an upper bound on the true penetration depth — "chainL is ~2.1 into
   the seat; move +z by 2.1" is the intended reading.
 
@@ -378,7 +378,7 @@ Leaves are named by their own or nearest named ancestor's name (else
 index path).
 
 **Contact:** at exact tangency the *sign* is floating-point noise, so
-resting/touching parts read as `distance ≈ 0` of either sign. Treat
+resting/touching solids read as `distance ≈ 0` of either sign. Treat
 `|distance|` below your own tolerance as contact; do not nudge geometry
 apart just to make the sign stable.
 
@@ -393,18 +393,18 @@ odm export '{"out": "arm.stl", "path": "parts/arm.js", "inputs": {"t": 0.5}}'
 ```
 
 `export` writes every solid of the view — the whole scene, translucent
-parts included; color is ignored — as one binary STL. To export one part
-of an assembly, export that part's doohickey (`path`). The extension of
+ones included; color is ignored — as one binary STL. To export one
+piece of an assembly, export the part that builds it (`path`). The extension of
 `out` picks the format; `.stl` is the only one today.
 
 - **Millimetres.** STL carries no unit and readers assume mm, so the
   file is converted from the project's unit (`units` in `odm.toml`: `mm`
   — the default —, `m`, `in` or `ft`). `"units"` in the request overrides
   it for one export. Coordinates are otherwise exactly as modeled: Z-up,
-  no recentering, so parts exported separately stay registered.
+  no recentering, so pieces exported separately stay registered.
 - **`union`** (default `true`) fuses all solids into one valid manifold:
-  overlapping parts merge, disjoint ones stay separate bodies. `false`
-  writes each solid as-is — exact, but overlapping parts self-intersect,
+  overlapping solids merge, disjoint ones stay separate bodies. `false`
+  writes each solid as-is — exact, but overlapping solids self-intersect,
   which some readers mishandle.
 
 The response reports what was written: `path`, the resolved `units` and
@@ -425,7 +425,7 @@ is the agent's tool surface; it carries no messages. (`poll`, `say` and
 - **User state is sent, not sampled.** Each user message carries a
   second content block, an embedded resource `odm://user-state`: JSON
   with the viewer tab's `slot` and `path`, its `inputs`, the user's
-  `selection` (`{id, name}` per clicked part, in pick order —
+  `selection` (`{id, name}` per clicked node, in pick order —
   shift-click selects several) and the `camera`, in the same
   `eye`/`target`/`up`/`fov` spelling `render` accepts, so pasting its
   contents into a render replays their exact view. Stamped as they hit
@@ -474,7 +474,7 @@ in — you know them; they are what makes a pattern of reports readable.
 
 What belongs in `body`:
 
-- the smallest reproduction you have, as code — paste the doohickey
+- the smallest reproduction you have, as code — paste the part
   source (or the few lines that matter) into the body,
 - the exact request you ran and the exact response you got back,
 - what you expected instead.

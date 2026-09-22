@@ -11,7 +11,7 @@
 use std::process::Command;
 
 const ROOT_JS: &str = r#"//! ODM API unstable
-//! Node-test doohickey.
+//! Node-test part.
 import * as THREE from 'three';
 export const meta = { inputs: { t: { type: 'number', minimum: 0, maximum: 1, default: 0.25, cascade: true } } };
 let perBuildState = 0;
@@ -60,7 +60,7 @@ if (ir.name !== 'part') throw new Error('bad IR: ' + JSON.stringify(ir));
 if (!globalThis.__mockHandles.has(ir.geom)) throw new Error('IR does not reference a mock solid');
 if (ir.matrix[12] !== 1 || ir.matrix[13] !== 2 || ir.matrix[14] !== 3) throw new Error('bad matrix');
 
-// A doohickey the bundle does not carry: internal error envelope.
+// A part the bundle does not carry: internal error envelope.
 const missing = JSON.parse(globalThis.__odmWeb.runBuild('nope.js', 'unstable', '{}', '{}'));
 if (!missing.error || missing.error.kind !== 'internal') throw new Error('missing-file envelope wrong');
 
@@ -69,7 +69,7 @@ console.log('driver: all checks passed');
 "#;
 
 /// Mock of the wasm-bindgen module: enough op surface for the test
-/// doohickey, handles as fake hex hashes, logs captured globally.
+/// part, handles as fake hex hashes, logs captured globally.
 const MOCK_WASM: &str = r#"
 export default async function init() {}
 // Content-addressed like the real kernel: same args, same handle.

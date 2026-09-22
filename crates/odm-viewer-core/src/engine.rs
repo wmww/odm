@@ -22,7 +22,7 @@ pub struct Published {
     pub root: Option<(odm_ir::Hash, Arc<Object>)>,
     pub error: Option<String>,
     /// Console output of the last build attempt — success or failure, memo
-    /// hits replay theirs — as (doohickey path, line). Latest-attempt
+    /// hits replay theirs — as (part path, line). Latest-attempt
     /// semantics, unlike `root`'s last-good.
     pub logs: Arc<Vec<(String, LogLine)>>,
     pub building: bool,

@@ -60,7 +60,7 @@ Rules to preserve in future API work:
   Rejected X.Y min-featureset: unenforced minor rots; its one payoff
   (clear "engine too old" error) is had cheaper via good unknown-API
   errors. Pragma grammar can grow a minor later. The same `//!` block
-  also carries the doohickey's prose description (first line = summary)
+  also carries the part's prose description (first line = summary)
   — see `plans/views-and-metadata.md` phase 1.
 - **One live implementation, not frozen copies**: engine ops + core
   stay singular; each stamped version is a thin JS shim. The frozen
@@ -79,9 +79,9 @@ Rules to preserve in future API work:
 - Old versions live indefinitely; revisit only if a shim becomes
   burdensome.
 - odm.json does not fall under the API version — it was deleted
-  entirely (2026-07-29, implemented): params/animation are per-doohickey
+  entirely (2026-07-29, implemented): params/animation are per-part
   declared inputs, `odm.toml` is the project marker, `root.js` the
-  default-view convention. Doohickey `meta` (inputs/presets) IS part of
+  default-view convention. Part `meta` (inputs/presets) belongs to
   the versioned API surface (`ctx.input`, `ctx.invoke(path, args,
   cascade)`).
 
@@ -97,7 +97,7 @@ Rules to preserve in future API work:
 - **One snapshot, per-isolate surface selection**:
   `framework/versions/<v>` manifests register installers in
   `__odmVersions`; `run_build` executes
-  `__odmVersions[v].install(globalThis)` before the doohickey loads;
+  `__odmVersions[v].install(globalThis)` before the part loads;
   bare `'odm'`/`'three'` imports resolve per version
   (`odm-js/src/snapshot.rs`). One snapshot per version does NOT work —
   see "V8 constraints" below.
@@ -119,7 +119,7 @@ Rules to preserve in future API work:
 - **Doctests**: `crates/odm-build/tests/doctests.rs` runs every fenced
   ```js block under docs/ (` ```js skip` opts out, ` ```js error="…"`
   expects failure; fragments get a build(ctx) wrapper; `invoke('…')`
-  targets get stub doohickeys). Docs examples were made
+  targets get stub parts). Docs examples were made
   self-contained to pass — keep new examples runnable.
 - In-repo examples carry explicit `//! ODM API unstable` pragmas.
 - **Legacy spelling**: exactly `//! odm unstable` still parses as unstable

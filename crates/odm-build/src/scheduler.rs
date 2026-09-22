@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 /// convention, like `index.html`: used if present, nothing structural.
 pub const DEFAULT_ROOT: &str = "root.js";
 
-/// What a query or viewer tab evaluates: one doohickey against one set of
+/// What a query or viewer tab evaluates: one part against one set of
 /// inputs, against the current generation. `args` go to the target's
 /// declared inputs; `cascade` sets cascade values over the whole built
 /// tree (the view is the outermost layer).
@@ -107,7 +107,7 @@ impl Env {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuildFailure {
-    /// Doohickey the failure originated in.
+    /// Part the failure originated in.
     pub path: String,
     pub kind: FailureKind,
     /// Agent-readable message (includes the JS stack where relevant).
@@ -120,7 +120,7 @@ pub enum FailureKind {
     Js,
     Cycle,
     Cancelled,
-    MissingDoohickey,
+    MissingPart,
     BadOutput,
     /// Bad or unsupported `//! ODM API <version>` pragma.
     Version,
@@ -239,12 +239,12 @@ pub struct Stats {
 }
 
 /// One pass's build accounting: what actually ran (memo misses, per
-/// doohickey, with total JS time) and how many memo hits stood in for
+/// part, with total JS time) and how many memo hits stood in for
 /// builds. Surfaced in the CLI build response, so "structure your model
 /// for the cache" is verifiable rather than advice.
 #[derive(Debug, Default, Clone)]
 pub struct BuildStats {
-    /// doohickey path → (builds run, total build time). One doohickey built
+    /// part path → (builds run, total build time). One part built
     /// under several distinct inputs counts each run.
     pub built: BTreeMap<String, (u64, std::time::Duration)>,
     pub memo_hits: u64,
@@ -366,7 +366,7 @@ impl BuildEngine {
         })
     }
 
-    /// Build a pass's view: its target doohickey with the view's args,
+    /// Build a pass's view: its target part with the view's args,
     /// under the view's cascade values (the outermost layer).
     pub fn build_view(self: &Arc<Self>, pass: &Arc<Pass>) -> Result<PassResult, BuildFailure> {
         let env = Env::from_cascade(&pass.view.cascade);
@@ -386,7 +386,7 @@ impl BuildEngine {
         self.kernel.prune_cache();
     }
 
-    /// Build one doohickey. `env_base` is the caller's environment plus the
+    /// Build one part. `env_base` is the caller's environment plus the
     /// invoke's cascade values; this file's own cascade declaration
     /// defaults fill in whatever nothing above covered.
     fn get_or_build(
@@ -405,9 +405,9 @@ impl BuildEngine {
                 pass.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
             return Err(fail(
                 path,
-                FailureKind::MissingDoohickey,
+                FailureKind::MissingPart,
                 format!(
-                    "no doohickey at {path:?}; project has: {}",
+                    "no part at {path:?}; project has: {}",
                     if available.is_empty() { "(no .js files)".into() } else { available.join(", ") }
                 ),
             ));
@@ -464,7 +464,7 @@ impl BuildEngine {
                 path,
                 FailureKind::Cycle,
                 format!(
-                    "dependency cycle (same doohickey, same inputs): {} -> {path}",
+                    "dependency cycle (same part, same inputs): {} -> {path}",
                     paths.join(" -> ")
                 ),
             ));

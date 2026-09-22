@@ -223,7 +223,7 @@ struct CommandSpec {
 /// The fields every view-targeting command shares: which view to build,
 /// with which input values.
 const VIEW_FIELDS: &[FieldSpec] = &[
-    f("path", "string", "the doohickey to build (default `root.js`)"),
+    f("path", "string", "the part to build (default `root.js`)"),
     f(
         "inputs",
         "object",
@@ -246,7 +246,7 @@ const VIEW_FIELDS: &[FieldSpec] = &[
     f(
         "stats",
         "bool",
-        "add build stats to the response: which doohickeys re-ran (with self-time) vs. were \
+        "add build stats to the response: which parts re-ran (with self-time) vs. were \
          served from the memo cache",
     ),
 ];
@@ -405,7 +405,7 @@ const SPECS: &[CommandSpec] = &[
              `inspect` addresses them; each node stands for its whole subtree); all against the \
              request's one view, answered in order. Per pair, `clearances` holds a signed \
              `distance` — positive: the exact minimum gap, with `closest` (the two nearest \
-             points) — negative: the parts overlap, and `separate` is a translation of the \
+             points) — negative: the nodes overlap, and `separate` is a translation of the \
              pair's second node that clears the first (its length is `-distance`, an upper \
              bound on true penetration depth). `between` names the deciding leaf pair, and \
              a negative result adds `overlapping`: every colliding leaf pair. The sign of \
@@ -444,8 +444,8 @@ const SPECS: &[CommandSpec] = &[
                 "union",
                 "bool",
                 "default true: fuse every solid into one valid manifold — overlaps merge, \
-                 disjoint parts stay separate bodies. `false` writes each solid as-is \
-                 (exact, but overlapping parts self-intersect)",
+                 disjoint solids stay separate bodies. `false` writes each solid as-is \
+                 (exact, but overlapping solids self-intersect)",
             ),
         ],
         js_twin: None,

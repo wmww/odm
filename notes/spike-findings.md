@@ -48,7 +48,7 @@ did we measure / what did we prove" record behind `design-decisions.md`.
 - Numbers (this 24-core machine, release): snapshot blob 1.5 MB, built in
   ~40 ms; isolate from snapshot ~1.4 ms; isolate + box build + serde round
   trip ~1.8 ms; warm call p50 8 µs; budget ~3 MB RSS per live isolate.
-  Hundreds of doohickeys is a non-issue.
+  Hundreds of parts is a non-issue.
 
 ## Build scheduler dedup (spike 0a)
 
@@ -56,7 +56,7 @@ did we measure / what did we prove" record behind `design-decisions.md`.
   check done atomically under the registry lock (implemented in
   odm-build/src/registry.rs). Key insight: every wait edge is a genuine
   dependency edge, so a would-be wait cycle is always a real cycle in the
-  user's doohickey graph — report Cycle, never deadlock. No false positives;
+  user's part graph — report Cycle, never deadlock. No false positives;
   the walk is O(pool size).
 - Measured alternative (duplicate instead of wait): 14–21% duplicated builds
   on randomized DAGs, same wall time. Not worth it.
@@ -111,7 +111,7 @@ run instructions). Facts:
   set a `Deno.core.ops`-shaped global, import
   `framework/versions/unstable.js` + `runtime/determinism.js`, call
   `__odmVersions.unstable.install(globalThis)`, run a factory-wrapped
-  doohickey via `__odm.runBuild`. Note `install` replaces `console`
+  part via `__odm.runBuild`. Note `install` replaces `console`
   (op_log capture) — host-side prints must use stdout directly.
 - Boolean perf (sphere-subtract, non-parallel both sides, this machine):
   segs 64/128/256 → native 4.1/12.3/48.7 ms, wasm-in-node

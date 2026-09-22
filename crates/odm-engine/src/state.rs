@@ -848,7 +848,7 @@ pub(crate) mod tests {
     /// Commands must not queue behind an in-flight build — the old global
     /// command lock did exactly that (a CLI query stalled for the whole of a
     /// viewer scrub's rebuild). The loop builds something slow; status and
-    /// an inspect of a different doohickey answer while it is still going.
+    /// an inspect of a different part answer while it is still going.
     #[test]
     fn commands_overlap_an_in_flight_build() {
         let dir = tempfile::tempdir().unwrap();

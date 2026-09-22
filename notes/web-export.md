@@ -57,10 +57,10 @@ Sites may live inside the project: every export writes
 and the project scanner skips marked dirs. `check_destination` (odm-export
 lib.rs, shared by CLI and dialog) still refuses a project *root* and an
 unmarked dir inside a project that already holds `.js` files (a stale
-pre-marker export must be deleted once; the error says so). A doohickey the
+pre-marker export must be deleted once; the error says so). A part the
 bundler cannot transform (bad import etc.) no longer fails the export: it
 ships in `B.broken` (path → bare message) instead of a factory, export
-warns, and the page fails that doohickey's builds with the message —
+warns, and the page fails that part's builds with the message —
 engine-like per-file failure.
 
 ## Shape
@@ -69,14 +69,14 @@ Two halves with different lifecycles:
 
 - **Project-specific** (`bundle.js` + `manifest.json`), written by
   `odm-export` at export time — native code only.
-  - `bundle.js`: every framework module + every doohickey, factory-wrapped
+  - `bundle.js`: every framework module + every part, factory-wrapped
     (`function (__req, __exp) {…}`) by the transformer in
     odm-export/src/transform.rs — a small JS lexer (comments/strings/
     templates/regex-heuristic, top-level depth tracking), NOT a parser; it
     handles the whole static import/export grammar over identifier
     bindings and errors (naming the file) on the rest (dynamic `import()`,
     `import.meta`, destructuring exports). Imports resolve at export time
-    to bundle ids (doohickeys: only 'three'/'odm', per API version —
+    to bundle ids (parts: only 'three'/'odm', per API version —
     same contract and error text as the engine loader). Also carries the
     determinism prelude as a re-runnable function and the per-version
     bare-import tables (mirror of odm-js snapshot.rs — extend both when a
@@ -130,7 +130,7 @@ odm-kernel with `wasm-uu`.
   the frame around the nested build (RefCell discipline).
 - **runtime.js**: module registry (framework namespaces instantiate once
   per page — the graph is acyclic, checked implicitly by a cycle guard;
-  doohickey factories re-invoked per build = fresh module scope), ops glue
+  part factories re-invoked per build = fresh module scope), ops glue
   (`globalThis.__odmOps`, the generalized `ops()` accessor in
   framework/odm/index.js), and per-build realm swap: save Date/
   Math.random/console, reset Date to the page's real one, re-run the
@@ -152,7 +152,7 @@ odm-kernel with `wasm-uu`.
 
 ## Isolation & drift (accepted, by design)
 
-- Weaker than isolates: page globals are shared; a hostile doohickey could
+- Weaker than isolates: page globals are shared; a hostile part could
   smuggle state across builds (deep prototype mutation). An export is a
   replay of a project authored under the real engine's enforcement.
 - Failure *messages* differ from native (browser JS stacks vs V8 format);

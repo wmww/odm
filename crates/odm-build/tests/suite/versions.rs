@@ -1,5 +1,5 @@
 //! API version routing: the `//! ODM API <version>` pragma picks the framework
-//! snapshot a doohickey's isolate is created from. Exercised through the
+//! snapshot a part's isolate is created from. Exercised through the
 //! test-only `test` version (odm-js `test-api-version` feature), whose one
 //! surface difference is `odm.apiProbe`.
 

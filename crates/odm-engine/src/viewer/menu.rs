@@ -14,8 +14,8 @@ use eframe::egui;
 pub enum Action {
     New,
     Open,
-    OpenDoohickey,
-    CloseDoohickey,
+    OpenPart,
+    ClosePart,
     ExportWeb,
     ExportStl,
     FocusAgent,
@@ -41,14 +41,14 @@ pub fn bar(app: &mut ViewerApp, ui: &mut egui::Ui) {
             // The tabs get their own section: what is open in the window is a
             // different subject from which project the window is on.
             file.push(MenuEntry::separator());
-            file.push(MenuEntry::item(Action::OpenDoohickey, "Open Doohickey…").shortcut("Ctrl+O"));
+            file.push(MenuEntry::item(Action::OpenPart, "Open Part…").shortcut("Ctrl+O"));
             // Ctrl+W closes whatever is in front; the label says which.
             let closing = match app.items.get(app.active) {
                 Some(super::Item::Feedback(_)) => "Close Feedback",
                 Some(super::Item::Settings(_)) => "Close Agent Settings",
-                _ => "Close Doohickey",
+                _ => "Close Part",
             };
-            file.push(MenuEntry::item(Action::CloseDoohickey, closing).shortcut("Ctrl+W"));
+            file.push(MenuEntry::item(Action::ClosePart, closing).shortcut("Ctrl+W"));
             file.push(MenuEntry::separator());
             file.push(MenuEntry::item(Action::ExportWeb, "Export Web…"));
             // Exports what the tab shows, so there has to be something shown.
@@ -113,9 +113,9 @@ pub fn shortcuts(app: &mut ViewerApp, ctx: &egui::Context) {
     // A modal is up: it owns the keyboard until it is answered.
     let busy = app.dialog.is_some() || app.pick.is_some();
     let action = if hit(Modifiers::COMMAND, Key::O) {
-        Some(Action::OpenDoohickey)
+        Some(Action::OpenPart)
     } else if hit(Modifiers::COMMAND, Key::W) {
-        Some(Action::CloseDoohickey)
+        Some(Action::ClosePart)
     } else if hit(Modifiers::COMMAND, Key::Enter) {
         Some(Action::FocusAgent)
     } else {
@@ -171,16 +171,16 @@ fn apply(app: &mut ViewerApp, action: Action) {
                 None => OpenDialog::browse(&super::cwd()),
             }))
         }
-        // Which doohickey to open in a new tab — the same picker the tab
+        // Which part to open in a new tab — the same picker the tab
         // strip's magnifier puts up.
-        Action::OpenDoohickey => {
+        Action::OpenPart => {
             if app.session.is_some() {
                 app.open_picker();
             }
         }
         // Whatever tab is in front; the last one may go, leaving the window
         // open on the project with nothing in it.
-        Action::CloseDoohickey => app.close_tab(app.active),
+        Action::ClosePart => app.close_tab(app.active),
         // The site opens on what the viewer is showing: the active tab's view.
         Action::ExportWeb => {
             if let Some(state) = &app.session {
