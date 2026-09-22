@@ -22,8 +22,10 @@ unless marked otherwise.
   (scene/objects) are ODM-owned API. Vendor only the three.js subset the
   framework actually uses.
 - Animation is build(t), NOT first-class animation tracks. Made cheap by
-  (a) dependency-tracked context reads — a part that never reads `t`
-  has a memo entry valid for all t; (b) content-addressed outputs — the same
+  (a) declaration-keyed deps — the scheduler records every declared
+  cascade input as a dep up front (reads are not tracked; 2026-09-22
+  correction: it was never the reads), so a part that never *declares*
+  `t` has a memo entry valid for all t; (b) content-addressed outputs — the same
   object at n transforms is one geometry blob + one stored subtree + n tiny
   wrapper nodes (IR children are hashes, so nothing is copied per placement);
   (c) per-environment memo entries (bounded MRU per key, 2026-08-17) — a

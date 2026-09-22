@@ -280,7 +280,7 @@ fn cascade_resolution_nearest_value_wins() {
     write(
         dir.path(),
         "mid.js",
-        "export default (ctx) => ctx.invoke('leaf.js', {}, { len: 5 })",
+        "export default (ctx) => ctx.invoke('leaf.js', {}, { cascade: { len: 5 } })",
     );
     write(
         dir.path(),
@@ -357,6 +357,30 @@ fn missing_part_lists_available() {
     let err = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap_err();
     assert!(err.message.contains("no part"), "{err:?}");
     assert!(err.message.contains("parts/wheel.js"), "should list files: {err:?}");
+}
+
+/// Module scope runs on every evaluation and never on a memo hit, so
+/// geometry built there is an error — at build time and at meta
+/// extraction alike, natively as in a web export.
+#[test]
+fn geometry_at_module_scope_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "root.js", "const b = odm.box(1);\nexport default () => b;");
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    let err = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap_err();
+    assert!(err.message.contains("inside build()"), "{err:?}");
+
+    // Any other import is an error too: the surface is the globals.
+    write(
+        dir.path(),
+        "root.js",
+        "import * as THREE from 'three';\nexport default () => odm.box(1);",
+    );
+    let sync = e.sync().unwrap();
+    let err = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap_err();
+    assert!(err.message.contains("parts cannot import"), "{err:?}");
 }
 
 #[test]

@@ -32,7 +32,7 @@ fn fall_through_names_reach_the_view() {
         export default function build(ctx) {
             return odm.group(
                 ctx.invoke('arm.js'),
-                ctx.invoke('arm.js', {}, { speed: 3 }).translate(0, 5, 0),
+                ctx.invoke('arm.js', {}, { cascade: { speed: 3 } }).translate(0, 5, 0),
                 odm.box(1).translate(0, -5, ctx.input('t')),
             );
         }
@@ -191,9 +191,9 @@ fn unread_cascade_values_are_warned() {
         r#"
         export default (ctx) => odm.group(
             // 'lift' is consumed; 'lft' is a typo nothing reads.
-            ctx.invoke('pillar.js', { radius: 2 }, { lift: 3, lft: 1 }),
+            ctx.invoke('pillar.js', { radius: 2 }, { cascade: { lift: 3, lft: 1 } }),
             // 'radius' is the child's *plain* input — wrong channel.
-            ctx.invoke('pillar.js', { radius: 2 }, { radius: 4 }).translate(5, 0, 0),
+            ctx.invoke('pillar.js', { radius: 2 }, { cascade: { radius: 4 } }).translate(5, 0, 0),
         );
         "#,
     );

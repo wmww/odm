@@ -110,7 +110,9 @@ globalThis.__odmWeb = {
         });
       }
       const ns = {};
-      d.fac(instantiate, ns); // fresh module scope, like a fresh isolate
+      // Fresh module scope, like a fresh isolate — and with the ops window
+      // closed as in one, even when this build nests inside another.
+      globalThis.__odm.moduleScope(() => d.fac(instantiate, ns));
       const ir = globalThis.__odm.runBuild(ns, JSON.parse(argsJson), JSON.parse(declsJson));
       return JSON.stringify({ ok: ir });
     } catch (e) {

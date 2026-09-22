@@ -41,10 +41,8 @@ export default function build() {
 
 const ASSERT_TEST: &str = r#"
 //! ODM API test
-import { apiProbe } from 'odm';
 export default function build() {
     if (odm.apiProbe() !== 'test') throw new Error('bad global probe');
-    if (apiProbe() !== 'test') throw new Error('bad imported probe');
     return odm.box(1);
 }
 "#;

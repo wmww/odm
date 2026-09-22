@@ -1,5 +1,4 @@
 use crate::session::SessionState;
-use odm_build::cascade_value_hash;
 use deno_core::{OpState, op2};
 use deno_error::JsErrorBox;
 use odm_ir::{Hash, Transform};
@@ -266,16 +265,14 @@ struct CtxRead {
     value: Value,
 }
 
+// Not a dep: the scheduler records every declared cascade input up front
+// (the declaration is the dep, read or not), and ctx.input only reads
+// declared names.
 #[op2]
 #[serde]
 pub fn op_cascade_read(state: &mut OpState, #[string] key: String) -> CtxRead {
     let s = sess(state);
     let value = s.cascade.get(&key).cloned();
-    let value_hash = cascade_value_hash(value.as_ref());
-    // Record each key once; within a build the value cannot change.
-    if !s.deps.iter().any(|d| matches!(d, Dep::Cascade { key: k, .. } if *k == key)) {
-        s.deps.push(Dep::Cascade { key, value: value_hash });
-    }
     match value {
         Some(v) => CtxRead { present: true, value: v },
         None => CtxRead { present: false, value: Value::Null },

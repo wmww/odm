@@ -45,12 +45,11 @@ silently ignored. The message lists the valid keys.
 (`'#rrggbb'`/`'#rrggbbaa'`/`'#rgb'`) and `[r, g, b]`/`[r, g, b, a]`
 arrays only.
 
-**"ODM engine ops unavailable: this code only runs inside a build"** —
-`odm.*` constructors were called where no build is running. You will not
-see this on the desktop engine, where module scope has the ops too — but
-a **web export** installs them per build, so geometry built at module
-top level throws there and nowhere else. Build geometry inside
-`build()`; module scope is for constants and helper functions.
+**"ODM engine ops unavailable: geometry can only be built inside
+build()"** — an `odm.*` constructor ran at module scope. Module scope is
+evaluated on every rebuild and never on a memo hit, so geometry there
+would go stale silently; build it inside `build()` and keep module scope
+for constants and helper functions.
 
 **Dependency cycle** — `ctx.invoke` chains may not loop back
 (a → b → a); the build fails with a cycle error rather than hanging.

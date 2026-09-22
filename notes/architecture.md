@@ -23,9 +23,11 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   args (defaults merged into memo identity), cascade inputs resolve up the
   invoke chain — nearest provided value wins, view outermost, declarations
   auto-provide their defaults for their subtree. `ctx.invoke(path, args?,
-  cascade?)`.
-  Extension types (solid/vector2/vector3/quaternion/matrix4/color) are
-  canonical JSON on the wire, hydrated to THREE instances by ctx.input.
+  { cascade }?)` — cascade is an option, not a third positional (2026-09-22).
+  Extension types (solid/vector2/vector3/quaternion/matrix4/color) have
+  exactly one wire form (arrays; THREE instances are converted JS-side
+  before any boundary, `{x, y, z}` etc. are rejected — 2026-09-22),
+  hydrated to THREE instances by ctx.input.
   Schemas are recursive (2026-08-17, was plans/structured-inputs.md):
   ext types at any depth (solid top-level-only), nested `default`s
   *applied* — an absent object property with a default is filled at
@@ -1160,9 +1162,10 @@ Contract: `docs/versioning.md`; rationale + implementation map:
 `notes/api-stability-and-docs.md`. The short version: every part
 carries `//! ODM API <version>` (parsed at sync time in odm-build/sources.rs,
 missing = unstable until API 1); `framework/versions/<v>` manifests register
-per-version installers in one shared snapshot, `run_build` installs the
-selected surface into each isolate before its module loads, and bare
-`'odm'`/`'three'` imports resolve per version. A test-only `test` version
+per-version installers in one shared snapshot, and `run_build` installs the
+selected surface into each isolate before its module loads. Parts import
+nothing (bare `'odm'`/`'three'` imports were cut 2026-09-22: one spelling,
+the globals). A test-only `test` version
 (feature `test-api-version`, dev-deps only) keeps the machinery honest.
 One snapshot per process is a hard V8 constraint, not a choice — see
 notes/spike-findings.md "Snapshot count/concurrency".
@@ -1290,7 +1293,7 @@ The web export has two native drift guards in the gate (odm-export
 `bundle.rs` tests): the `op_*` name sets in `odm-js/src/ops.rs` and
 `odm-web/src/executor.rs` must match, and this crate's mirror of odm-js's
 per-version manifest/bare-specifier tables must agree with the originals
-(`odm_js::{version_manifest, resolve_bare}` are public for exactly that).
+(`odm_js::version_manifest` is public for exactly that).
 The browser itself is the opt-in lane — `cargo xtask test-web`, see
 notes/web-export.md.
 

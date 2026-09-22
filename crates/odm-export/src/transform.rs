@@ -13,8 +13,8 @@
 //! statements found at top level. Unsupported forms (dynamic `import()`,
 //! `import.meta`, destructuring exports, live re-binding of imports) fail
 //! with an error naming the file. The transform assumes the module graph is
-//! acyclic — true by construction: parts import only 'three'/'odm',
-//! and the framework is checked at bundle time.
+//! acyclic — true by construction: parts import nothing, and the framework
+//! is checked at bundle time.
 
 /// Resolve an import specifier to a bundle module id.
 pub trait Resolve {

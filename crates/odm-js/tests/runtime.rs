@@ -122,8 +122,11 @@ fn determinism_same_code_same_hash() {
     assert_eq!(a.output, b.output, "two isolates, same code -> same IR hash");
 }
 
+/// Reads are not deps: the scheduler records every declared cascade input
+/// up front (the declaration is the dep), so the run itself records only
+/// invokes.
 #[test]
-fn cascade_reads_recorded_as_deps() {
+fn cascade_reads_record_no_deps() {
     let w = world();
     let mut ctx = HashMap::new();
     ctx.insert("t".to_string(), json!(1.5));
@@ -146,20 +149,7 @@ fn cascade_reads_recorded_as_deps() {
         None,
     )
     .unwrap();
-    let keys: Vec<&str> = out
-        .deps
-        .iter()
-        .map(|d| match d {
-            Dep::Cascade { key, .. } => key.as_str(),
-            other => panic!("unexpected dep {other:?}"),
-        })
-        .collect();
-    // Only cascade reads touch the environment; `depth` came from args.
-    assert_eq!(keys, vec!["width", "t"]);
-
-    // A build that reads nothing has no deps.
-    let out2 = build(&w, "export default () => odm.sphere(1)").unwrap();
-    assert!(out2.deps.is_empty());
+    assert!(out.deps.is_empty(), "{:?}", out.deps);
 }
 
 #[test]
@@ -536,7 +526,7 @@ fn solids_serialize_through_invoke_args() {
     assert!(node.mesh.is_some());
 }
 
-/// `ctx.invoke(path, args, cascade)`: cascade values reach the child's
+/// `ctx.invoke(path, args, { cascade })`: cascade values reach the child's
 /// environment and are recorded on the invoke dep.
 #[test]
 fn cascade_values_flow_to_the_nested_build() {
@@ -556,7 +546,7 @@ fn cascade_values_flow_to_the_nested_build() {
     };
     let out = build_full(
         &w,
-        "export default (ctx) => ctx.invoke('spinner.js', {}, { t: 0.5 })",
+        "export default (ctx) => ctx.invoke('spinner.js', {}, { cascade: { t: 0.5 } })",
         &json!({}),
         &json!({}),
         &HashMap::new(),

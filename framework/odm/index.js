@@ -10,7 +10,19 @@ import { parseColor } from './colors.js';
 
 // The engine-ops seam: the host (V8 isolate natively, the web export's
 // runtime in a browser) supplies one object with every op_* function.
+//
+// Ops are reachable only while a build() runs (`runBuild` opens the
+// window; a depth, since the web export nests builds in one realm).
+// Module scope is evaluated on every rebuild and never on a memo hit, so
+// geometry built there would be quietly stale — it is an error instead.
+let buildDepth = 0;
 function ops() {
+  if (buildDepth === 0) {
+    throw new Error(
+      'ODM engine ops unavailable: geometry can only be built inside build() — ' +
+        'module scope is for constants and helper functions',
+    );
+  }
   const o = globalThis.__odmOps ?? globalThis.Deno?.core?.ops;
   if (!o || !o.op_solid_box) {
     throw new Error('ODM engine ops unavailable: this code only runs inside a build');
@@ -711,7 +723,11 @@ const SOLID_TAG = '__odm_solid__';
 // see the canonical form.
 function serializeValue(v) {
   if (v === undefined) return null;
-  return JSON.parse(
+  return JSON.parse(serializeJson(v));
+}
+
+function serializeJson(v) {
+  return (
     JSON.stringify(v, function (key, value) {
       const raw = this[key];
       if (raw instanceof Solid) {
@@ -738,7 +754,7 @@ function serializeValue(v) {
         return raw.toArray();
       }
       return value;
-    }),
+    }) ?? 'null'
   );
 }
 
@@ -779,13 +795,12 @@ function hydrate(schema, v) {
     if (body) return hydrateObject(body.properties, v);
   }
   const type = schema.type;
+  // One wire form per extension type: an array of numbers. THREE
+  // instances are normalized to it before any boundary (serializeValue),
+  // and the engine validates values against it, so anything else here is
+  // a cascade value written by hand in the wrong shape.
   const nums = (v, n) => {
     if (Array.isArray(v) && v.length === n) return v;
-    // Tolerate the {x, y, z} object form (e.g. hand-written cascade values).
-    if (v && typeof v === 'object') {
-      const parts = ['x', 'y', 'z', 'w'].slice(0, n).map((k) => v[k]);
-      if (parts.every((p) => typeof p === 'number')) return parts;
-    }
     throw new TypeError(`expected ${n} numbers for a ${type}, got ${JSON.stringify(v)}`);
   };
   switch (type) {
@@ -796,7 +811,7 @@ function hydrate(schema, v) {
     case 'quaternion':
       return new THREE.Quaternion(...nums(v, 4));
     case 'matrix4':
-      return new THREE.Matrix4().fromArray(Array.isArray(v) ? v : v.elements);
+      return new THREE.Matrix4().fromArray(nums(v, 16));
   }
   if (type === 'array' && schema.items && Array.isArray(v)) {
     return v.map((el) => hydrate(schema.items, el));
@@ -862,12 +877,13 @@ function makeCtx(argsJson, decls) {
     /**
      * Build another part and get its output as an Instance.
      * `path` is project-relative, e.g. 'parts/wheel.js'. `args` go to that
-     * file's declared inputs; `cascade` values scope over its whole
+     * file's declared inputs; `opts.cascade` values scope over its whole
      * subtree (no declaration needed here).
      */
-    invoke(path, args = {}, cascade = {}) {
+    invoke(path, args = {}, opts) {
+      const o = checkOpts(opts, ['cascade'], 'invoke');
       return new Instance(
-        ops().op_invoke(String(path), serializeValue(args), serializeValue(cascade)),
+        ops().op_invoke(String(path), serializeValue(args), serializeValue(o.cascade ?? {})),
       );
     },
   };
@@ -920,7 +936,37 @@ export function installGlobals(g) {
           'part must have a default export: `export default function build(ctx) { ... }`',
         );
       }
-      return toIRNode(fn(makeCtx(argsJson ?? {}, declsJson ?? {})));
+      buildDepth += 1;
+      try {
+        return toIRNode(fn(makeCtx(argsJson ?? {}, declsJson ?? {})));
+      } finally {
+        buildDepth -= 1;
+      }
+    },
+    /**
+     * One export of a loaded module as JSON text (`undefined` if absent),
+     * through the same serializer as invoke args, so a THREE instance in
+     * a `meta` default reaches the engine in the wire form like any other
+     * value crossing the boundary.
+     */
+    exportJson(ns, name) {
+      const v = ns?.[name];
+      return v === undefined ? undefined : serializeJson(v);
+    },
+    /**
+     * Run `f` with the ops window closed, however deep the build nesting:
+     * the web runtime evaluates a nested part's module scope inside the
+     * invoking build, and it must fail there exactly as a fresh isolate's
+     * module scope does.
+     */
+    moduleScope(f) {
+      const saved = buildDepth;
+      buildDepth = 0;
+      try {
+        return f();
+      } finally {
+        buildDepth = saved;
+      }
     },
   };
 }

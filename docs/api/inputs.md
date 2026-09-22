@@ -66,9 +66,10 @@ Beyond the JSON types, `type` can name an ODM extension type:
 | `'matrix4'` | 16 numbers, column-major | `THREE.Matrix4` |
 | `'color'` | hex string or `[r, g, b]` | as sent — exactly what `.color()` takes |
 
-Senders may pass THREE instances or the JSON form; values are
+Senders may pass THREE instances or the wire form; instances are
 normalized to the wire form at the boundary (so hashing and
-memoization only ever see canonical JSON), at any depth. A `solid`
+memoization only ever see canonical JSON), at any depth, and no other
+spelling (`{x, y, z}`, say) is accepted. A `solid`
 input cannot have a `default` (and therefore cannot cascade).
 Extension types also drive the viewer's typed controls
 (vector/quaternion component rows, a matrix grid; a color picker is
@@ -212,18 +213,18 @@ A cascade input makes something declared deep inside a model settable
 at the top without threading it through every invoke in between. The
 declaration lives at the *reader*; values are provided from above.
 
-`ctx.invoke(path, args, cascade)` has two separate channels:
+`ctx.invoke(path, args, { cascade })` has two separate channels:
 
 - **args** target the invoked file's plain inputs (validated, defaults
   merged; cascade inputs cannot be passed here);
-- **cascade** values need no declaration on either side and scope over
-  the whole subtree of the invoke — they may target descendants the
-  invoker has never heard of.
+- **cascade** values (the `cascade` option) need no declaration on
+  either side and scope over the whole subtree of the invoke — they may
+  target descendants the invoker has never heard of.
 
 A reader's cascade input resolves to, in order:
 
 1. the **nearest explicitly provided value** above it — an invoke's
-   `cascade` argument, or the view's set values (the view is the
+   `cascade` option, or the view's set values (the view is the
    outermost layer);
 2. otherwise, the default from the **shallowest declaration on the
    reader's own invoke path** (including the reader itself).

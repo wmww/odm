@@ -715,17 +715,11 @@ impl BuildEngine {
     }
 }
 
-/// Combine the scheduler's pre-recorded declaration deps with the run's
-/// recorded deps; the pre-recorded cascade deps subsume the ops' own
-/// records of the same keys.
+/// The scheduler's pre-recorded declaration deps (every declared cascade
+/// input — reads are not tracked, the declaration is the dep) followed by
+/// the run's recorded invokes.
 fn merge_deps(mut deps: Vec<Dep>, run: Vec<Dep>) -> Vec<Dep> {
-    for d in run {
-        match &d {
-            Dep::Cascade { key, .. }
-                if deps.iter().any(|p| matches!(p, Dep::Cascade { key: k, .. } if k == key)) => {}
-            _ => deps.push(d),
-        }
-    }
+    deps.extend(run);
     deps
 }
 
@@ -779,8 +773,8 @@ pub(crate) fn effective_args(
         let input = &meta.inputs[name];
         if input.cascade {
             return Err(format!(
-                "{path}: {name:?} is a cascade input — it travels in the invoke's cascade \
-                 (third argument) or the view's set values, not args"
+                "{path}: {name:?} is a cascade input — it travels in the invoke's \
+                 `{{ cascade }}` option or the view's set values, not args"
             ));
         }
         let v = input.accept(name, value).map_err(|msg| format!("{path}: {msg}"))?;
@@ -830,7 +824,10 @@ fn cascade_note(meta: &Meta) -> String {
     if cascade.is_empty() {
         String::new()
     } else {
-        format!("; cascade inputs (set on the view or via cascade, not args): {}", cascade.join(", "))
+        format!(
+            "; cascade inputs (set on the view or via the `{{ cascade }}` option, not args): {}",
+            cascade.join(", ")
+        )
     }
 }
 

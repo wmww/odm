@@ -18,7 +18,7 @@ export default function build(ctx) {
   return odm.group(
     odm.box([w, d, h]).name('slab'),
     // The invoke's cascade value wins over pillar.js's own default (1)...
-    ctx.invoke('pillar.js', {}, { lift: 2 }).translate(50, 0, 0).name('provided'),
+    ctx.invoke('pillar.js', {}, { cascade: { lift: 2 } }).translate(50, 0, 0).name('provided'),
     // ...and this one falls through to the view, else the declared default.
     ctx.invoke('pillar.js').translate(100, 0, 0).name('fallthrough'),
   );

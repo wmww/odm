@@ -13,8 +13,9 @@ export default function build(ctx) {
 - Start every file with the `//! ODM API unstable` pragma (the JS API
   version it targets); the rest of the leading `//!` block is the
   file's description.
-- Code runs sandboxed with the `odm` and `THREE` globals: no other
-  imports, no file or network access, no shared state.
+- Code runs sandboxed with the `odm` and `THREE` globals: no imports,
+  no file or network access, no shared state. Build geometry inside
+  `build()` only (module scope is for constants and helpers).
 - Return a `Solid`, `Group`, `Instance`, an array of these (nested
   arrays become groups), or `null`.
 - **Everything is immutable** (unlike three.js): every method returns a
@@ -117,7 +118,7 @@ export default (ctx) => odm.box([ctx.input('width'), 10, 4]).rotateZ(ctx.input('
   view's `inputs`. **Cascade inputs** (`cascade: true`, default
   required) are settable from anywhere above without threading them
   through every invoke — the nearest value up the chain wins:
-  `ctx.invoke(path, args, cascade)`'s third argument, or the view's
+  `ctx.invoke(path, args, { cascade })`'s option, or the view's
   `inputs` outermost.
 - **Time is just an input**: a ranged cascade `t` gets a play button in
   the viewer (looping over the range), and `odm render '{"inputs":

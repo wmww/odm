@@ -5,8 +5,8 @@
 //! API versions: ONE snapshot holds every supported version's modules. Each
 //! version's manifest module (framework/versions/…) registers an installer
 //! in `__odmVersions`; isolate creation runs the installer selected by the
-//! file's `//! ODM API <version>` pragma, and bare 'odm'/'three' imports resolve
-//! per version. One-snapshot-per-version does NOT work: V8 shares one
+//! file's `//! ODM API <version>` pragma. Parts import nothing: the surface
+//! is the globals. One-snapshot-per-version does NOT work: V8 shares one
 //! read-only heap per process, seeded by the first snapshot blob used, and
 //! deserializing a structurally different blob dies on external-reference
 //! indexes (measured 2026-07-29 — see notes/spike-findings.md and
@@ -18,6 +18,12 @@ use deno_core::{
     ModuleResolveResponse, ModuleSourceCode, ModuleSpecifier, PollEventLoopOptions, RuntimeOptions,
     resolve_import,
 };
+
+/// The error a part's `import` gets. Parts have no imports at all — the
+/// framework is the `odm`/`THREE` globals and other parts are reached
+/// through `ctx.invoke` — so there is nothing to resolve.
+pub const PART_IMPORT_ERROR: &str = "parts cannot import modules: the framework is the `odm` \
+     and `THREE` globals, and other parts are built with ctx.invoke('path/to/other.js')";
 use deno_core::{ModuleLoader, ModuleSource, ModuleType, ResolutionKind};
 use deno_error::JsErrorBox;
 use include_dir::{Dir, include_dir};
@@ -52,30 +58,8 @@ pub fn version_manifest(version: ApiVersion) -> &'static str {
     }
 }
 
-/// Maps bare specifiers 'three' / 'odm' to this version's entry modules.
-/// This is where a stamped version pins its own surface (shims, its own
-/// three subset) once versions diverge.
-pub fn resolve_bare(version: ApiVersion, specifier: &str) -> Option<&'static str> {
-    match (version, specifier) {
-        (_, "three") => Some("file:///odm/framework/three/entry.js"),
-        (ApiVersion::Unstable, "odm") => Some("file:///odm/framework/odm/index.js"),
-        #[cfg(feature = "test-api-version")]
-        (ApiVersion::Test, "odm") => Some("file:///odm/framework/versions/test/odm.js"),
-        _ => None,
-    }
-}
-
-fn resolve_common(version: ApiVersion, specifier: &str, referrer: &str) -> ModuleResolveResponse {
-    if let Some(mapped) = resolve_bare(version, specifier) {
-        return ModuleSpecifier::parse(mapped).map_err(JsErrorBox::from_err);
-    }
-    resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
-}
-
 /// Snapshot-time loader: serves embedded framework files.
-struct EmbeddedFrameworkLoader {
-    version: ApiVersion,
-}
+struct EmbeddedFrameworkLoader;
 
 impl ModuleLoader for EmbeddedFrameworkLoader {
     fn resolve(
@@ -84,7 +68,7 @@ impl ModuleLoader for EmbeddedFrameworkLoader {
         referrer: &str,
         _kind: ResolutionKind,
     ) -> ModuleResolveResponse {
-        resolve_common(self.version, specifier, referrer)
+        resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
     }
 
     fn load(
@@ -108,17 +92,16 @@ impl ModuleLoader for EmbeddedFrameworkLoader {
     }
 }
 
-/// Runtime loader: serves exactly one part module; everything else must
-/// come from the snapshot module map (three/odm) or fail with a clear error.
+/// Runtime loader: serves exactly one part module, which imports nothing;
+/// framework-internal imports come from the snapshot module map.
 pub struct PartLoader {
-    version: ApiVersion,
     specifier: ModuleSpecifier,
     code: String,
 }
 
 impl PartLoader {
-    pub fn new(version: ApiVersion, specifier: ModuleSpecifier, code: String) -> Self {
-        PartLoader { version, specifier, code }
+    pub fn new(specifier: ModuleSpecifier, code: String) -> Self {
+        PartLoader { specifier, code }
     }
 }
 
@@ -129,7 +112,10 @@ impl ModuleLoader for PartLoader {
         referrer: &str,
         _kind: ResolutionKind,
     ) -> ModuleResolveResponse {
-        resolve_common(self.version, specifier, referrer)
+        if referrer.starts_with(PROJECT_ROOT) {
+            return Err(JsErrorBox::generic(format!("cannot import {specifier:?}: {PART_IMPORT_ERROR}")));
+        }
+        resolve_import(specifier, referrer).map_err(JsErrorBox::from_err)
     }
 
     fn load(
@@ -155,10 +141,7 @@ impl ModuleLoader for PartLoader {
                 None,
             ))
         } else {
-            Err(JsErrorBox::generic(format!(
-                "cannot import {module_specifier}: parts may only import 'three' and 'odm'; \
-                 use ctx.invoke('path/to/other.js') to use other parts"
-            )))
+            Err(JsErrorBox::generic(format!("cannot import {module_specifier}: {PART_IMPORT_ERROR}")))
         };
         ModuleLoadResponse::Sync(res)
     }
@@ -175,11 +158,7 @@ impl JsEnv {
     /// snapshot is created while another thread executes JS.
     pub fn new() -> Result<JsEnv, String> {
         let mut rt = JsRuntimeForSnapshot::new(RuntimeOptions {
-            // Snapshot-time resolution never sees a bare specifier (the
-            // manifests use relative imports), so any version works here.
-            module_loader: Some(Rc::new(EmbeddedFrameworkLoader {
-                version: ApiVersion::Unstable,
-            })),
+            module_loader: Some(Rc::new(EmbeddedFrameworkLoader)),
             extensions: vec![crate::ops::odm_ops::init()],
             ..Default::default()
         });

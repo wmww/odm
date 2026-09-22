@@ -57,13 +57,14 @@ export const checks = [
   // position filled from nested defaults) + the union default's branch
   // defaults (box [2, 2, 2]). 8 + 8.
   { volume: [16, 1e-9] },
-  // Deep normalize: a THREE-form position inside an array element
-  // canonicalizes; absent element properties fill from their defaults.
-  { set: { objects: [{ size: 3, position: { x: 10, y: 0, z: 0 } }] }, volume: [35, 1e-9] },
+  // Absent element properties fill from their defaults.
+  { set: { objects: [{ size: 3, position: [10, 0, 0] }] }, volume: [35, 1e-9] },
   // An empty element is legal: every property fills from its default.
   { set: { objects: [{}, {}] }, volume: [24, 1e-9] },
-  // Map values normalize and hydrate; entries are just entries.
-  { set: { anchors: { a: [5, 5, 0], b: { x: -5, y: 0, z: 0 } } }, volume: [18, 1e-9] },
+  // Map values hydrate; entries are just entries.
+  { set: { anchors: { a: [5, 5, 0], b: [-5, 0, 0] } }, volume: [18, 1e-9] },
+  // One wire form: the {x, y, z} spelling is rejected, naming the path.
+  { set: { anchors: { b: { x: -5, y: 0, z: 0 } } }, error: '/b' },
   // Union: switching the tag selects the other branch's schema.
   { set: { shape: { kind: 'sphere', radius: 2 } }, bounds: { min: [-2, -2, -1], max: [2, 2, 22], eps: 0.01 } },
   // Union errors name the tag; nested validation errors name the path.

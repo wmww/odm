@@ -13,7 +13,7 @@ pub use session::SessionState;
 pub use snapshot::JsEnv;
 /// The per-version surface tables. Public so the web export's mirror of
 /// them (odm-export `bundle.rs`) can be drift-tested against the originals.
-pub use snapshot::{resolve_bare, version_manifest};
+pub use snapshot::{PART_IMPORT_ERROR, version_manifest};
 
 // The executor seam's types live in odm-build; re-export the ones this
 // crate's callers use alongside the V8 implementation.
@@ -68,7 +68,7 @@ pub fn run_build(env: &JsEnv, input: BuildInput<'_>) -> Result<BuildOutput, Fail
     let specifier = snapshot::part_specifier(input.path)
         .map_err(|e| BuildError::Internal(format!("bad part path {:?}: {e}", input.path)))?;
 
-    let loader = snapshot::PartLoader::new(input.api, specifier.clone(), input.code.to_string());
+    let loader = snapshot::PartLoader::new(specifier.clone(), input.code.to_string());
     let mut rt = JsRuntime::new(RuntimeOptions {
         startup_snapshot: Some(env.snapshot()),
         module_loader: Some(Rc::new(loader)),
@@ -219,7 +219,7 @@ pub fn extract_export(
 ) -> Result<Option<Value>, BuildError> {
     let specifier = snapshot::part_specifier(path)
         .map_err(|e| BuildError::Internal(format!("bad part path {path:?}: {e}")))?;
-    let loader = snapshot::PartLoader::new(api, specifier.clone(), code.to_string());
+    let loader = snapshot::PartLoader::new(specifier.clone(), code.to_string());
     let mut rt = JsRuntime::new(RuntimeOptions {
         startup_snapshot: Some(env.snapshot()),
         module_loader: Some(Rc::new(loader)),
@@ -285,13 +285,33 @@ pub fn extract_export(
     let ns = v8::Local::new(scope, ns_global);
     let key = v8::String::new(scope, export)
         .ok_or_else(|| BuildError::Internal("export name to v8".into()))?;
-    let Some(value) = ns.get(scope, key.into()) else {
-        return Ok(None);
+
+    // Serialize in JS (`__odm.exportJson`), through the same replacer as
+    // invoke args: THREE instances become their wire form before the
+    // boundary, and the engine never sees another spelling.
+    let global = scope.get_current_context().global(scope);
+    let export_fn: v8::Local<v8::Function> = (|| {
+        let odm_key = v8::String::new(scope, "__odm")?;
+        let odm = global.get(scope, odm_key.into())?.to_object(scope)?;
+        let key = v8::String::new(scope, "exportJson")?;
+        let f = odm.get(scope, key.into())?;
+        v8::Local::<v8::Function>::try_from(f).ok()
+    })()
+    .ok_or_else(|| BuildError::Internal("__odm.exportJson missing from snapshot".into()))?;
+    v8::tc_scope!(let tc, scope);
+    let recv = v8::undefined(tc);
+    let Some(value) = export_fn.call(tc, recv.into(), &[ns.into(), key.into()]) else {
+        let message = match tc.exception() {
+            Some(exn) => format_js_error(&JsError::from_v8_exception(tc, exn)),
+            None => "unknown error".into(),
+        };
+        return Err(BuildError::BadOutput(format!("export {export:?} not serializable: {message}")));
     };
     if value.is_undefined() {
         return Ok(None);
     }
-    serde_v8::from_v8::<Value>(scope, value)
+    let text = value.to_rust_string_lossy(tc);
+    serde_json::from_str::<Value>(&text)
         .map(Some)
         .map_err(|e| BuildError::BadOutput(format!("export {export:?} not serializable: {e}")))
 }

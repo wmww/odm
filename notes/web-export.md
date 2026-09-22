@@ -75,12 +75,13 @@ Two halves with different lifecycles:
     templates/regex-heuristic, top-level depth tracking), NOT a parser; it
     handles the whole static import/export grammar over identifier
     bindings and errors (naming the file) on the rest (dynamic `import()`,
-    `import.meta`, destructuring exports). Imports resolve at export time
-    to bundle ids (parts: only 'three'/'odm', per API version —
-    same contract and error text as the engine loader). Also carries the
+    `import.meta`, destructuring exports). Framework imports resolve at
+    export time to bundle ids; a part's import is an error (same text as
+    the engine loader, `odm_js::PART_IMPORT_ERROR`). Also carries the
     determinism prelude as a re-runnable function and the per-version
-    bare-import tables (mirror of odm-js snapshot.rs — extend both when a
-    version is cut).
+    manifest table (mirror of odm-js snapshot.rs — extend both when a
+    version is cut). A part's module scope is evaluated under
+    `__odm.moduleScope` so geometry there fails as in a native isolate.
   - `manifest.json`: stamp, project name, initial view, and per file:
     content hash, api (or apiError), description, and the raw extracted
     `meta` export wrapped as `{"value": …}` (absent = no export;

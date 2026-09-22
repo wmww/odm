@@ -12,7 +12,6 @@ use std::process::Command;
 
 const ROOT_JS: &str = r#"//! ODM API unstable
 //! Node-test part.
-import * as THREE from 'three';
 export const meta = { inputs: { t: { type: 'number', minimum: 0, maximum: 1, default: 0.25, cascade: true } } };
 let perBuildState = 0;
 export default function build(ctx) {
@@ -63,6 +62,12 @@ if (ir.matrix[12] !== 1 || ir.matrix[13] !== 2 || ir.matrix[14] !== 3) throw new
 // A part the bundle does not carry: internal error envelope.
 const missing = JSON.parse(globalThis.__odmWeb.runBuild('nope.js', 'unstable', '{}', '{}'));
 if (!missing.error || missing.error.kind !== 'internal') throw new Error('missing-file envelope wrong');
+
+// Geometry at module scope fails here exactly as in a native isolate.
+const scoped = JSON.parse(globalThis.__odmWeb.runBuild('scoped.js', 'unstable', '{}', '{}'));
+if (!scoped.error || !scoped.error.message.includes('inside build()')) {
+  throw new Error('module-scope geometry did not fail: ' + JSON.stringify(scoped));
+}
 
 // A throwing build: js error envelope, console still restored.
 console.log('driver: all checks passed');
@@ -116,6 +121,11 @@ fn bundle_runs_in_node() {
     let project = dir.path().join("project");
     std::fs::create_dir(&project).unwrap();
     std::fs::write(project.join("root.js"), ROOT_JS).unwrap();
+    std::fs::write(
+        project.join("scoped.js"),
+        "//! ODM API unstable\nconst b = odm.box(1);\nexport default () => b;\n",
+    )
+    .unwrap();
     let snapshot = odm_build::scan_project(&project).unwrap();
     let bundle = odm_export::bundle_for_tests(&snapshot).unwrap();
 

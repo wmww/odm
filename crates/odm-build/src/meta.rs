@@ -19,11 +19,13 @@
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
-/// ODM's extension types: `type` values beyond JSON Schema's own. On the
-/// wire they are canonical JSON (vectors `[x, y, z]`, matrix4 = 16 numbers
-/// column-major, color = hex string or `[r, g, b]`); `ctx.input` hydrates them
-/// into real THREE instances, declaration-driven, at any depth. `solid` is
-/// top-level-only: an opaque handle with no authorable value.
+/// ODM's extension types: `type` values beyond JSON Schema's own. Each has
+/// exactly one wire form (vectors `[x, y, z]`, matrix4 = 16 numbers
+/// column-major, color = hex string or `[r, g, b]`): the framework turns
+/// THREE instances into it before any boundary, and nothing else is
+/// accepted. `ctx.input` hydrates the wire form into real THREE instances,
+/// declaration-driven, at any depth. `solid` is top-level-only: an opaque
+/// handle with no authorable value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtType {
     Solid,
@@ -77,33 +79,6 @@ impl ExtType {
             ExtType::Color => json!({ "anyOf": [ { "type": "string" }, nums(3) ] }),
         }
     }
-
-    /// Canonicalize the serialized-THREE-instance forms (`{x, y, z}`,
-    /// `{elements: [...]}`, `{r, g, b}`) to the wire form. Anything else
-    /// passes through untouched and validation reports it.
-    pub fn normalize(self, v: &Value) -> Value {
-        let get = |o: &Map<String, Value>, keys: &[&str]| -> Option<Value> {
-            keys.iter().find_map(|k| o.get(*k)).filter(|v| v.is_number()).cloned()
-        };
-        let Some(o) = v.as_object() else { return v.clone() };
-        let fields: &[&[&str]] = match self {
-            ExtType::Vector2 => &[&["x"], &["y"]],
-            ExtType::Vector3 => &[&["x"], &["y"], &["z"]],
-            ExtType::Quaternion => &[&["x", "_x"], &["y", "_y"], &["z", "_z"], &["w", "_w"]],
-            ExtType::Color => &[&["r"], &["g"], &["b"]],
-            ExtType::Matrix4 => {
-                return match o.get("elements") {
-                    Some(e @ Value::Array(a)) if a.len() == 16 => e.clone(),
-                    _ => v.clone(),
-                };
-            }
-            ExtType::Solid => return v.clone(),
-        };
-        match fields.iter().map(|keys| get(o, keys)).collect::<Option<Vec<Value>>>() {
-            Some(parts) => Value::Array(parts),
-            None => v.clone(),
-        }
-    }
 }
 
 /// The extension type a schema node's `type` names, if any.
@@ -127,8 +102,7 @@ pub struct Input {
     /// Top-level extension type, if the input's own `type` names one.
     pub extension: Option<ExtType>,
     /// The entry as authored, with every `default` in the tree normalized
-    /// (THREE forms canonicalized, nested defaults filled). The panel's and
-    /// the report's schema.
+    /// (nested defaults filled). The panel's and the report's schema.
     pub authored: Map<String, Value>,
     /// Normalized top-level default, if declared.
     pub default: Option<Value>,
@@ -136,9 +110,8 @@ pub struct Input {
 }
 
 impl Input {
-    /// Normalize a value for this input — THREE-instance forms → wire form
-    /// and absent defaulted object properties filled, at any depth — and
-    /// validate it against the schema.
+    /// Normalize a value for this input — absent defaulted object
+    /// properties filled, at any depth — and validate it against the schema.
     pub fn accept(&self, name: &str, value: &Value) -> Result<Value, String> {
         let v = normalize(&format!("input {name:?}"), &self.authored, value)?;
         match self.validator.validate(&v) {
@@ -587,9 +560,10 @@ fn desugar(entry: &Map<String, Value>) -> Value {
 }
 
 /// Deep normalize a value against a schema node: THREE-instance forms →
-/// wire form at every extension-typed position, absent object properties
-/// filled from their declared (already-normalized) defaults, union branches
-/// selected by tag. Anything off-schema passes through untouched for
+/// absent object properties filled from their declared (already-normalized)
+/// defaults, union branches selected by tag. Anything off-schema (an
+/// extension type in any spelling but its wire form included) passes
+/// through untouched for
 /// validation to report — except a bad or missing union tag, which errors
 /// here with a message naming the tag (the desugared schema's own error
 /// names everything but).
@@ -614,9 +588,6 @@ fn normalize(at: &str, entry: &Map<String, Value>, v: &Value) -> Result<Value, S
             ));
         };
         return normalize_object(at, body.get("properties").and_then(|p| p.as_object()), obj);
-    }
-    if let Some(ext) = ext_of(entry) {
-        return Ok(ext.normalize(v));
     }
     match entry.get("type").and_then(|t| t.as_str()) {
         Some("object") => {
@@ -758,22 +729,6 @@ pub fn synthesize_variant(entry: &Map<String, Value>, name: &str) -> Value {
 mod tests {
     use super::*;
 
-    #[test]
-    fn normalize_three_instance_forms() {
-        let v = ExtType::Vector3.normalize(&json!({"x": 1.0, "y": 2.0, "z": 3.0}));
-        assert_eq!(v, json!([1.0, 2.0, 3.0]));
-        let q = ExtType::Quaternion.normalize(&json!({"_x": 0.0, "_y": 0.0, "_z": 0.0, "_w": 1.0}));
-        assert_eq!(q, json!([0.0, 0.0, 0.0, 1.0]));
-        let m = ExtType::Matrix4.normalize(&json!({"elements": (vec![1.0f64; 16])}));
-        assert_eq!(m.as_array().map(|a| a.len()), Some(16));
-        let c = ExtType::Color.normalize(&json!({"isColor": true, "r": 1.0, "g": 0.5, "b": 0.0}));
-        assert_eq!(c, json!([1.0, 0.5, 0.0]));
-        // Canonical forms pass through.
-        assert_eq!(ExtType::Vector2.normalize(&json!([4, 5])), json!([4, 5]));
-        // Junk passes through for validation to report.
-        assert_eq!(ExtType::Vector3.normalize(&json!("no")), json!("no"));
-    }
-
     fn parse(v: Value) -> Result<Meta, String> {
         Meta::parse(&v)
     }
@@ -839,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn values_validate_and_normalize() {
+    fn values_validate_against_one_wire_form() {
         let m = parse(json!({
             "inputs": {
                 "w": { "type": "number", "minimum": 1, "default": 4 },
@@ -849,16 +804,16 @@ mod tests {
         }))
         .unwrap();
         assert!(m.inputs["w"].accept("w", &json!(0)).is_err(), "below minimum");
-        assert_eq!(
-            m.inputs["v"].accept("v", &json!({"x": 1.0, "y": 2.0, "z": 3.0})).unwrap(),
-            json!([1.0, 2.0, 3.0])
-        );
+        assert_eq!(m.inputs["v"].accept("v", &json!([1.0, 2.0, 3.0])).unwrap(), json!([1.0, 2.0, 3.0]));
+        // The {x, y, z} spelling is not a second wire form.
+        let err = m.inputs["v"].accept("v", &json!({"x": 1.0, "y": 2.0, "z": 3.0})).unwrap_err();
+        assert!(err.contains("declared type: vector3"), "{err}");
         assert_eq!(m.inputs["c"].accept("c", &json!([1, 0, 0])).unwrap(), json!([1, 0, 0]));
         assert!(m.inputs["c"].accept("c", &json!([1, 0])).is_err());
     }
 
     #[test]
-    fn nested_ext_types_normalize_at_depth() {
+    fn nested_ext_types_validate_at_depth() {
         let m = parse(json!({
             "inputs": {
                 "objects": { "type": "array", "default": [], "items": { "type": "object",
@@ -866,12 +821,14 @@ mod tests {
             },
         }))
         .unwrap();
-        let v = m.inputs["objects"]
-            .accept("objects", &json!([{ "position": {"x": 1.0, "y": 2.0, "z": 3.0} }]))
-            .unwrap();
+        let v = m.inputs["objects"].accept("objects", &json!([{ "position": [1.0, 2.0, 3.0] }])).unwrap();
         assert_eq!(v, json!([{ "position": [1.0, 2.0, 3.0] }]));
         // Validation errors name where in the value they are.
         let err = m.inputs["objects"].accept("objects", &json!([{ "position": [1, 2] }])).unwrap_err();
+        assert!(err.contains("/0/position"), "path in error: {err}");
+        let err = m.inputs["objects"]
+            .accept("objects", &json!([{ "position": {"x": 1.0, "y": 2.0, "z": 3.0} }]))
+            .unwrap_err();
         assert!(err.contains("/0/position"), "path in error: {err}");
     }
 
@@ -914,10 +871,10 @@ mod tests {
         .unwrap();
         // Union default synthesizes its branch's defaults.
         assert_eq!(m.inputs["shape"].default, Some(json!({ "kind": "box", "size": [10, 10, 10] })));
-        // The selected branch normalizes (THREE form at depth) and validates.
+        // The selected branch validates.
         assert_eq!(
             m.inputs["shape"]
-                .accept("shape", &json!({ "kind": "box", "size": {"x": 1.0, "y": 2.0, "z": 3.0} }))
+                .accept("shape", &json!({ "kind": "box", "size": [1.0, 2.0, 3.0] }))
                 .unwrap(),
             json!({ "kind": "box", "size": [1.0, 2.0, 3.0] })
         );
@@ -937,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_normalize_their_values() {
+    fn maps_validate_their_values() {
         let m = parse(json!({
             "inputs": {
                 "anchors": { "type": "object", "default": {},
@@ -946,9 +903,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(
-            m.inputs["anchors"]
-                .accept("anchors", &json!({ "lid": {"x": 0.0, "y": 0.0, "z": 9.0} }))
-                .unwrap(),
+            m.inputs["anchors"].accept("anchors", &json!({ "lid": [0.0, 0.0, 9.0] })).unwrap(),
             json!({ "lid": [0.0, 0.0, 9.0] })
         );
         let err = m.inputs["anchors"].accept("anchors", &json!({ "lid": 4 })).unwrap_err();

@@ -8,7 +8,7 @@
 
 use odm_build::{
     ApiVersion, BuildError, BuildInput, BuildOutput, Executor, FailedBuild, Invoker,
-    cascade_value_hash, node_from_json,
+    node_from_json,
 };
 use odm_ir::{Hash, Transform};
 use odm_kernel::{BoolOp, Kernel};
@@ -376,11 +376,8 @@ pub fn op_clearance(a: &str, b: &str) -> Result<String, JsError> {
 #[wasm_bindgen]
 pub fn op_cascade_read(key: &str) -> Result<String, JsError> {
     with_frame(|f| {
+        // Not a dep: the scheduler pre-records every declared cascade input.
         let value = f.cascade.get(key).cloned();
-        let value_hash = cascade_value_hash(value.as_ref());
-        if !f.deps.iter().any(|d| matches!(d, Dep::Cascade { key: k, .. } if k == key)) {
-            f.deps.push(Dep::Cascade { key: key.to_string(), value: value_hash });
-        }
         let v = match value {
             Some(v) => serde_json::json!({ "present": true, "value": v }),
             None => serde_json::json!({ "present": false, "value": Value::Null }),

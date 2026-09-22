@@ -76,6 +76,11 @@ is a seeded PRNG ([determinism.md](determinism.md)).
 `build()` must be pure: same file + same inputs → same output. The
 engine relies on this to memoize and to rebuild only what changed.
 
+Geometry is built inside `build()` only. Module scope runs on every
+evaluation of the file and never on a memoized rebuild, so an `odm.*`
+call there is an error; keep module scope for constants and helper
+functions.
+
 ## Console
 
 `console.log/info/debug/warn/error` are captured (arguments are

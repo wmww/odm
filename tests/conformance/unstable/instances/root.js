@@ -26,7 +26,7 @@ export default function build(ctx) {
 
   // A cascade value set on the outer invoke reaches the inner file, two
   // levels down: outer.js does not declare `size`, block.js does.
-  const cascaded = ctx.invoke('outer.js', {}, { size: 6 }).translate(0, 80, 0).name('cascaded');
+  const cascaded = ctx.invoke('outer.js', {}, { cascade: { size: 6 } }).translate(0, 80, 0).name('cascaded');
 
   return odm.group(twice, shared, nested, tinted, cascaded);
 }

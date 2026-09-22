@@ -458,7 +458,7 @@ fn unread_cascade_warning(
     if plain_input {
         format!(
             "{parent} provides {name:?} to {child}, but {name:?} is a plain input there — \
-             pass it in the invoke's args (second argument), not the cascade"
+             pass it in the invoke's args (second argument), not the `{{ cascade }}` option"
         )
     } else {
         format!(

@@ -150,7 +150,8 @@ pub trait Executor: Send + Sync {
 
     /// Load a part module (without calling its build()) and return one
     /// of its exports as JSON — `None` if the export is absent. The module's
-    /// top level runs, so it gets real ops. Callers have no cancel plumbing,
+    /// top level runs (with the framework's ops window closed, as in a
+    /// build: geometry there is an error). Callers have no cancel plumbing,
     /// so a watchdog bounds top-level evaluation by `timeout`.
     #[allow(clippy::too_many_arguments)]
     fn extract_export(

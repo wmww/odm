@@ -44,6 +44,27 @@ Rules to preserve in future API work:
 - Removed from the surface: `Solid.geometry`, `bake()` (content
   addressing makes it useless), `odm.parseColor`, auto-conversion of
   raw BufferGeometry (explicit `fromThreeGeometry` only).
+- **Pre-stabilization cuts (2026-09-22 big-picture review)** — each is
+  something that would have been permanent surface had API 1 shipped
+  with it, and each is cheap to add back later if ever wanted:
+  - Geometry at module scope is an error natively too (`ops()` is
+    gated on a build-depth counter that `runBuild` opens;
+    `__odm.moduleScope` lets the web runtime evaluate a nested part's
+    module with the window closed). Module scope re-runs on every
+    evaluation and never on a memo hit, so it was quietly wrong.
+  - Parts import nothing: bare `'odm'`/`'three'` imports are gone
+    (`PART_IMPORT_ERROR`); the surface is the globals, one spelling.
+  - `ctx.invoke(path, args, { cascade })`: cascade is an options-object
+    knob per the standing rule, not a third positional that reads like
+    args.
+  - One wire form per extension type: the engine no longer canonicalizes
+    `{x, y, z}` / `{_x, …}` / `{elements}` / `{r, g, b}`, and `ctx.input`
+    no longer tolerates `{x, y, z}`; the framework converts THREE
+    instances before any boundary, anything else fails validation.
+  - Memo deps are declarations, not reads: the scheduler pre-records
+    every declared cascade input; `op_cascade_read` records nothing. So
+    `ctx.input(name)` being a function is ergonomics (typo = error,
+    greppable), not a memo mechanism; keep it, don't add `ctx.inputs`.
 - Conformance pins all of this: `strict-errors.js` (mode-enum pattern
   for many error cases in one file), `transforms-about.js`,
   `extrude.js`.
@@ -83,7 +104,7 @@ Rules to preserve in future API work:
   declared inputs, `odm.toml` is the project marker, `root.js` the
   default-view convention. Part `meta` (inputs/presets) belongs to
   the versioned API surface (`ctx.input`, `ctx.invoke(path, args,
-  cascade)`).
+  { cascade })`).
 
 ## Implementation map (all built, tested)
 
@@ -97,10 +118,9 @@ Rules to preserve in future API work:
 - **One snapshot, per-isolate surface selection**:
   `framework/versions/<v>` manifests register installers in
   `__odmVersions`; `run_build` executes
-  `__odmVersions[v].install(globalThis)` before the part loads;
-  bare `'odm'`/`'three'` imports resolve per version
-  (`odm-js/src/snapshot.rs`). One snapshot per version does NOT work —
-  see "V8 constraints" below.
+  `__odmVersions[v].install(globalThis)` before the part loads
+  (`odm-js/src/snapshot.rs`); a part's `import` of anything is an error.
+  One snapshot per version does NOT work — see "V8 constraints" below.
 - **Test-only version** `test` (surface diff: `odm.apiProbe`) behind
   the odm-js cargo feature `test-api-version`, enabled by
   dev-dependencies only; release engines reject the id. Keeps routing,

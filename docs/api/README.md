@@ -20,9 +20,8 @@ case.
 
 ## The globals
 
-Parts see three globals. (`import`ing `'odm'` or `'three'` also
-works and resolves to the same surface; any other import is an error —
-use `ctx.invoke` to reach other parts.)
+Parts see three globals and import nothing — an `import` of any kind
+is an error; use `ctx.invoke` to reach other parts.
 
 - **`odm`** — the framework:
   classes `Solid`, `Group`, `Instance` (usable for `instanceof`);

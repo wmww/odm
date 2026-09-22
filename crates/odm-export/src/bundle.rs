@@ -1,6 +1,6 @@
 //! Assembles `bundle.js` — the project-specific half of a web export: every
 //! framework module and part factory-wrapped (see `transform`), plus
-//! the determinism prelude and the per-version bare-specifier tables. The
+//! the determinism prelude and the per-version manifest table. The
 //! module registry consuming this lives in the template's `runtime.js`.
 
 use crate::transform::{Resolve, transform};
@@ -26,14 +26,6 @@ fn version_manifest(v: ApiVersion) -> Result<&'static str, String> {
     }
 }
 
-fn resolve_bare(v: ApiVersion, spec: &str) -> Result<&'static str, String> {
-    match (v, spec) {
-        (_, "three") => Ok("three/entry.js"),
-        (ApiVersion::Unstable, "odm") => Ok("odm/index.js"),
-        _ => Err(format!("cannot resolve bare import {spec:?} for API version {v}")),
-    }
-}
-
 /// Resolver for a framework module: relative imports against its own
 /// directory (framework files never use bare specifiers).
 struct FrameworkResolve<'a> {
@@ -50,21 +42,13 @@ impl Resolve for FrameworkResolve<'_> {
     }
 }
 
-/// Resolver for a part: exactly 'three'/'odm', per its API version.
-/// Same contract as the engine's module loader.
-struct PartResolve {
-    api: ApiVersion,
-}
+/// Resolver for a part: parts import nothing. Same contract (and message)
+/// as the engine's module loader.
+struct PartResolve;
 
 impl Resolve for PartResolve {
     fn resolve(&self, spec: &str) -> Result<String, String> {
-        if spec == "three" || spec == "odm" {
-            return Ok(fw_id(resolve_bare(self.api, spec)?));
-        }
-        Err(format!(
-            "cannot import {spec:?}: parts may only import 'three' and 'odm'; \
-             use ctx.invoke('path/to/other.js') to use other parts"
-        ))
+        Err(format!("cannot import {spec:?}: {}", odm_js::PART_IMPORT_ERROR))
     }
 }
 
@@ -116,14 +100,13 @@ pub fn bundle(snapshot: &ProjectSnapshot) -> Result<Bundle, String> {
         versions.insert(ApiVersion::Unstable); // empty project: still a page
     }
 
-    // Framework modules, DFS from each version's manifest + bare entries.
+    // Framework modules, DFS from each version's manifest (which imports
+    // the whole surface it installs).
     let mut fw: Vec<Entry> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut stack: Vec<String> = Vec::new();
     for &v in &versions {
         stack.push(version_manifest(v)?.to_string());
-        stack.push(resolve_bare(v, "three")?.to_string());
-        stack.push(resolve_bare(v, "odm")?.to_string());
     }
     while let Some(rel) = stack.pop() {
         if !seen.insert(rel.clone()) {
@@ -151,7 +134,7 @@ pub fn bundle(snapshot: &ProjectSnapshot) -> Result<Bundle, String> {
     let mut broken: Vec<(String, String)> = Vec::new();
     for (path, source) in &snapshot.sources {
         let Ok(api) = source.api else { continue };
-        match transform(path, &source.code, &PartResolve { api }) {
+        match transform(path, &source.code, &PartResolve) {
             Ok(t) => dh.push((
                 path.clone(),
                 api,
@@ -185,11 +168,9 @@ pub fn bundle(snapshot: &ProjectSnapshot) -> Result<Bundle, String> {
     for &v in &versions {
         writeln!(
             js,
-            "B.versions[{}] = {{ manifest: {}, bare: {{ three: {}, odm: {} }} }};",
+            "B.versions[{}] = {{ manifest: {} }};",
             json(v.name()),
             json(&fw_id(version_manifest(v)?)),
-            json(&fw_id(resolve_bare(v, "three")?)),
-            json(&fw_id(resolve_bare(v, "odm")?)),
         )
         .unwrap();
     }
@@ -257,9 +238,9 @@ mod tests {
         );
     }
 
-    /// This file's version tables are a mirror of odm-js's, in relative-path
-    /// form. They must name the same files for every supported version, or
-    /// an export would bundle a different surface than the engine built.
+    /// This file's manifest table is a mirror of odm-js's, in relative-path
+    /// form. It must name the same file for every supported version, or an
+    /// export would bundle a different surface than the engine built.
     #[test]
     fn the_version_tables_agree() {
         const PREFIX: &str = "file:///odm/framework/";
@@ -278,16 +259,6 @@ mod tests {
                 native,
                 "{v}: manifest"
             );
-            for spec in ["three", "odm"] {
-                let native = odm_js::resolve_bare(v, spec)
-                    .unwrap_or_else(|| panic!("{v}: odm-js resolves no {spec:?}"));
-                let native = native.strip_prefix(PREFIX).unwrap_or_else(|| panic!("{native}"));
-                assert_eq!(
-                    super::resolve_bare(v, spec).unwrap_or_else(|e| panic!("{v}: {e}")),
-                    native,
-                    "{v}: bare {spec:?}"
-                );
-            }
         }
         assert!(checked > 0, "no real API version was compared");
     }
@@ -328,18 +299,18 @@ mod tests {
     }
 
     #[test]
-    fn part_bad_import_ships_as_broken() {
+    fn part_import_ships_as_broken() {
         let snap = snapshot(&[
             (
                 "root.js",
-                "//! ODM API unstable\nimport x from './other.js';\nexport default () => null;\n",
+                "//! ODM API unstable\nimport * as THREE from 'three';\nexport default () => null;\n",
             ),
             ("ok.js", "//! ODM API unstable\nexport default () => null;\n"),
         ]);
         let b = bundle(&snap).unwrap();
         assert_eq!(b.broken.len(), 1);
         assert_eq!(b.broken[0].0, "root.js");
-        assert!(b.broken[0].1.contains("may only import 'three' and 'odm'"), "{}", b.broken[0].1);
+        assert!(b.broken[0].1.contains("parts cannot import"), "{}", b.broken[0].1);
         assert!(b.js.contains(r#"B.broken.set("root.js""#));
         assert!(!b.js.contains(r#"B.part("root.js""#));
         assert!(b.js.contains(r#"B.part("ok.js""#));
