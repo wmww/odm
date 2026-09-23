@@ -70,8 +70,9 @@ below. Cache as the Linux lanes, keyed per lane.
      `node <dir>/node_modules/<package>/<bin.js>`. One code path on every
      platform, no shims. Test: a fake package dir with a `bin` entry
      resolves to the node invocation.
-   - The `real-adapters` opt-in job (`ci.md`) is the end-to-end check on
-     the lane.
+   - `test.yml -f real_adapters=true` (`agent::real_adapters`, which
+     calls `table::npm_command`) is the end-to-end check on the lane; its
+     leftover-process check is Linux-only (`/proc`) — add a Windows one.
 4. **User directories** — `odm-config`: `config_path()` → `%APPDATA%\odm\
    config.toml`, `data_dir()` → `%LOCALAPPDATA%\odm`; on Unix unchanged.
    `viewer/open.rs`'s `~` expansion reads `USERPROFILE` when `HOME` is

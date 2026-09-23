@@ -259,9 +259,26 @@ Measured locally in the image (24 cores, 2026-09-22): cold `cargo test
 4.2 GiB; trimmed 2.4 GiB raw / 0.9 GB zstd with the registry; warm from the
 trimmed cache 24 s (15 crates recompile). All tests pass as root, on glibc 2.35
 and lavapipe (`llvmpipe (LLVM 15.0.7, 256 bits)`), real_adapters included.
-Runner timings: not yet measured. wgpu prints `XDG_RUNTIME_DIR not set`
-while probing Wayland; harmless.
+wgpu prints `XDG_RUNTIME_DIR not set` while probing Wayland; harmless.
+
+On GitHub (2026-09-22, first runs; both green first time, arm64 included —
+no tolerance changes needed): image build 2 min per arch (native runners).
+Cold: build 8m34 x86_64 / 5m53 arm64, tests 17 s / 25 s. Saved cache 0.91 /
+0.89 GB each. Warm job ~2 min: restore 20 s, build ~50 s, tests ~10 s,
+real_adapters ~15 s. The real_adapters step re-"compiles" 4 workspace crates
+in 0.5 s (fresh-checkout mtimes, presumably); harmless, not reproduced
+locally. The GHCR package came out public without touching its settings.
 
 ### Windows lane
 
+`windows-latest` (2026-09-22 self-test): 4 cores, 147 GB free on `D:` (the
+workspace), MINGW64 bash, node 22.23, cmake 4.4; rustup auto-installs the
+pinned 1.93.0 msvc toolchain from `rust-toolchain.toml`. `cargo build
+--workspace` cold got through V8/Manifold and failed ~15 min in at
+odm-agent's `process.rs` (`process_group`, `libc::SIGKILL`: Unix-only).
+
 ### macOS lane
+
+`macos-15` (2026-09-22 self-test): arm64 (`aarch64-apple-darwin`), 43 GiB
+free, no `nproc` (use `sysctl -n hw.ncpu`), node 22.23, cmake 4.4. `cargo
+build --workspace` cold succeeds as is: 7m49.

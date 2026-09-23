@@ -120,9 +120,9 @@ All decided (see Decisions). Remaining paperwork:
 
 ## Checklist: release mechanics
 
-- [ ] **Container and test lanes**: built by `ci.md` (Ubuntu 22.04 image
-      for both Linux lanes, glibc 2.35 floor), extended by `windows.md`
-      and `macos.md`. The release workflow runs on the same four lanes.
+- [ ] **Container and test lanes**: Linux done (Ubuntu 22.04 image, glibc
+      2.35 floor; architecture.md "CI"), extended by `windows.md` and
+      `macos.md`. The release workflow runs on the same four lanes.
 - [ ] **`release.yml`** (`workflow_dispatch`, input: version): a Linux
       x86_64 job builds the web template once (wasm, host-independent)
       and uploads it as an artifact; each lane then downloads it, builds
