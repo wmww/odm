@@ -1,0 +1,62 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -272,3 +272,7 @@
+     "Win32_UI",
+     "Win32_UI_Shell",
+ ]
++
++# ODM PATCH: a path dependency, so cargo would show (and replay) its lints.
++[lints.rust]
++warnings = "allow"
+--- a/runtime/jsruntime.rs
++++ b/runtime/jsruntime.rs
+@@ -1783,13 +1783,22 @@
+       ) {
+       }
+ 
++      // ODM PATCH (patches/deno_core-0.408.0.patch): a snapshotting runtime
++      // drops ContextState in prepare_for_snapshot, before create_blob
++      // serializes these arrays, so they must not point into it: give them
++      // leaked memory instead (18 bytes, once per snapshot).
++      //
+       // Create a shared Uint8Array backed by ContextState::tick_info and
+       // pass it to JS via __setTickInfo so JS can read/write
+       // hasTickScheduled without crossing the JS-to-Rust boundary.
+       {
+         let state_rc = realm.0.state();
+         let tick_info_ptr =
+-          state_rc.tick_info.as_ptr() as *mut std::ffi::c_void;
++          if will_snapshot {
++            Box::leak(Box::new(<[u8; 2]>::default())).as_mut_ptr() as *mut std::ffi::c_void
++          } else {
++            state_rc.tick_info.as_ptr() as *mut std::ffi::c_void
++          };
+         let backing_store = unsafe {
+           v8::ArrayBuffer::new_backing_store_from_ptr(
+             tick_info_ptr,
+@@ -1820,7 +1829,11 @@
+       {
+         let state_rc = realm.0.state();
+         let imm_info_ptr =
+-          state_rc.immediate_info.as_ptr() as *mut std::ffi::c_void;
++          if will_snapshot {
++            Box::leak(Box::new(<[u32; 3]>::default())).as_mut_ptr() as *mut std::ffi::c_void
++          } else {
++            state_rc.immediate_info.as_ptr() as *mut std::ffi::c_void
++          };
+         let imm_byte_len = 3 * std::mem::size_of::<u32>();
+         let backing_store = unsafe {
+           v8::ArrayBuffer::new_backing_store_from_ptr(
+@@ -1851,7 +1864,11 @@
+       {
+         let state_rc = realm.0.state();
+         let timer_info_ptr =
+-          state_rc.timer_info.as_ptr() as *mut std::ffi::c_void;
++          if will_snapshot {
++            Box::leak(Box::new(<[i32; 1]>::default())).as_mut_ptr() as *mut std::ffi::c_void
++          } else {
++            state_rc.timer_info.as_ptr() as *mut std::ffi::c_void
++          };
+         let timer_byte_len = std::mem::size_of::<i32>();
+         let backing_store = unsafe {
+           v8::ArrayBuffer::new_backing_store_from_ptr(

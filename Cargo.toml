@@ -6,11 +6,16 @@ members = ["crates/*"]
 # `cargo build --workspace` would build it with static libstd and every
 # consumer would fail with "cannot satisfy dependencies so `std` only shows
 # up once". It still builds as a path dep of odm and of the test binaries.
-exclude = ["crates/odm-dylib"]
+exclude = ["crates/odm-dylib", "vendor"]
 # So plain `cargo run` runs the odm binary instead of failing on the ambiguity
 # with xtask. Also narrows bare `cargo build`/`cargo test` to this one package —
 # use --workspace (as CLAUDE.md says) to cover everything.
 default-members = ["crates/odm"]
+
+# Patched crates.io releases, materialized by scripts/patch-deps.sh from
+# patches/ (run it once after cloning).
+[patch.crates-io]
+deno_core = { path = "vendor/deno_core" }
 
 [workspace.package]
 # 1.N.0, where N is THE engine version: one integer, bumped every release

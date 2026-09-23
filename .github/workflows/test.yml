@@ -71,6 +71,7 @@ jobs:
       # where the cache step looks.
       - if: matrix.container != ''
         run: echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+      - run: scripts/patch-deps.sh
       # Keyed on everything that changes dep artifacts, saved only on a miss:
       # workspace crates are trimmed out, so a hit stays valid across commits.
       - id: cache

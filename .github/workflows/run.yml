@@ -63,6 +63,7 @@ jobs:
         with: { ref: '${{ inputs.ref }}' }
       - if: fromJSON(needs.plan.outputs.lane).container != ''
         run: echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+      - run: scripts/patch-deps.sh
       # test.yml's cache, restore-only: arbitrary commands don't get to write it.
       - uses: actions/cache/restore@v4
         with:

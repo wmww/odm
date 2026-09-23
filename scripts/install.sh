@@ -15,7 +15,10 @@ set -eu
 top=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 bindir=${BINDIR:-$HOME/.local/bin}
 
-# Template first: the odm build embeds target/web-template.bin.
+# Patched deps first (vendor/, see the script), then the template: the odm
+# build embeds target/web-template.bin.
+sh "$top/scripts/patch-deps.sh"
+
 cargo run -q --release --manifest-path "$top/Cargo.toml" -p xtask -- build-web-template
 # --no-default-features: the default `dynamic` feature links against
 # libodm_dylib.so in the target dir; an installed binary must be self-contained.

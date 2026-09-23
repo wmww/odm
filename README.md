@@ -21,7 +21,7 @@ Runs on Linux and macOS (Apple silicon). Config lives in `~/.config/odm/config.t
 
 ## Developing
 
-`cargo test --workspace` is the gate. CI is GitHub Actions, manual trigger only (push the commit first):
+After cloning, run `scripts/patch-deps.sh` once: it materializes the patched crates (`patches/`) that `Cargo.toml` points at in the gitignored `vendor/` (install.sh runs it too). `cargo test --workspace` is the gate. CI is GitHub Actions, manual trigger only (push the commit first):
 
 ```sh
 gh workflow run test.yml -f ref=$(git rev-parse HEAD)            # both Linux lanes; -f lanes=all|windows|…

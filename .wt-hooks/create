@@ -1,5 +1,8 @@
 #!/usr/bin/env sh
 # Runs in a new worktree right after it's created.
-# Give it its own cargo target dir, seeded from the main checkout, so the first
+# Materialize the patched crates (vendor/, see scripts/patch-deps.sh), then give
+# it its own cargo target dir, seeded from the main checkout, so the first
 # build is ~6 s instead of a ~4 GiB cold build. See notes/build-environment.md.
-exec sh "$(git rev-parse --show-toplevel)/scripts/seed-target.sh"
+top=$(git rev-parse --show-toplevel)
+sh "$top/scripts/patch-deps.sh" || echo "create hook: patch-deps failed; run scripts/patch-deps.sh before building" >&2
+exec sh "$top/scripts/seed-target.sh"
