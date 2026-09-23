@@ -1199,10 +1199,11 @@ notes/spike-findings.md "Snapshot count/concurrency".
 
 ## Testing
 
-`cargo test --workspace` before every commit is the gate. There is no CI
-and none is planned (user decision, reaffirmed 2026-09-17): releases are
-cut by a script on the dev machine (`plans/release.md`). The suite must
-stay fast (a few seconds) and honest.
+`cargo test --workspace` before every commit is the gate. CI is planned
+but not built: manual-trigger GitHub Actions lanes for Linux x86_64/arm64,
+Windows and macOS (`plans/ci.md`, `windows.md`, `macos.md`, decided
+2026-09-22, reversing the earlier no-CI decision); until then the gate is
+local. The suite must stay fast (a few seconds) and honest.
 
 ### What earns a test here
 

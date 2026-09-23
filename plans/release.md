@@ -4,6 +4,11 @@ How ODM goes from a private repo to a public, versioned, installable
 release, and how every release after the first is cut. Written 2026-09-17
 from a release-process discussion; decisions marked (user) are theirs.
 
+**Order (2026-09-22):** `transport.md` → `ci.md` → `windows.md` →
+`macos.md` → **this plan last**. The release workflow reuses the test
+lanes, container and `run.yml` loop those plans build; nothing here starts
+until all four lanes are green.
+
 ## Decisions
 
 - **One repo, made public at first release** (user). Distribution is
@@ -117,38 +122,18 @@ All decided (see Decisions). Remaining paperwork:
 
 ## Checklist: release mechanics
 
-- [ ] **Build container (Linux lanes).** The dev machine's glibc is
-      bleeding-edge, so a binary built on it will not run on an Ubuntu
-      LTS. Both Linux lanes build inside a container of the oldest
-      supported distro (Ubuntu 22.04 → glibc 2.35) on `ubuntu-latest` /
-      `ubuntu-24.04-arm` runners — the container, not the runner image,
-      sets the glibc floor, so GitHub retiring runner images never moves
-      it. Toolchain in the image: rust, cmake, ninja, clang + wasm-ld +
-      libc++ headers, wasm-bindgen-cli (see `notes/web-export.md`), and
-      mesa's lavapipe for headless render tests. A `Containerfile` in
-      `scripts/` makes the same build reproducible locally. musl is out
-      (prebuilt V8). Both build-time network fetches (Manifold clone in
-      manifold-csg-sys, V8 prebuilt in rusty_v8; both have aarch64
-      prebuilts/sources) are pinned; cache the cargo target dir per lane so
-      the 180 MiB V8 download happens once per cache miss.
-- [ ] **Workflows** (`.github/workflows/`), all `workflow_dispatch`:
-      - `test`: `cargo test --workspace` on all four lanes. macOS on
-        `macos-15` (Apple silicon; its paravirtual GPU has Metal, so
-        render tests run). Windows on `windows-latest` (MSVC Build Tools
-        and cmake preinstalled; no GPU → wgpu WARP fallback, which the
-        render path must enable when no hardware adapter exists).
-      - `release`: takes the version as an input; per lane, builds the
-        web template once (Linux x86_64 job, uploaded as an artifact — it
-        is wasm and host-independent) and then the static
-        `--no-default-features` binary, runs the release-profile test
-        invocation, packages, and a final job creates the draft release
-        with all assets. Replaces the "in the container on the dev
-        machine" parts of `release.sh` below; the script keeps the
-        local-only steps (version bump, CHANGELOG check, tag) and
-        triggers the workflow.
-      - Golden-image render tests differ per GPU backend (Metal, DX12
-        WARP, lavapipe): per-platform goldens or a tolerance before the
-        macOS/Windows test lanes can be green.
+- [ ] **Container and test lanes**: built by `ci.md` (Ubuntu 22.04 image
+      for both Linux lanes, glibc 2.35 floor), extended by `windows.md`
+      and `macos.md`. The release workflow runs on the same four lanes.
+- [ ] **`release.yml`** (`workflow_dispatch`, input: version): a Linux
+      x86_64 job builds the web template once (wasm, host-independent)
+      and uploads it as an artifact; each lane then downloads it, builds
+      the static `--no-default-features` binary in the release profile,
+      runs `cargo test --release --workspace --no-default-features` (the
+      exact binary that ships), ad-hoc signs on macOS (`codesign -s -`
+      after strip), packages; a final job creates the draft release with
+      every asset. Golden-image tests are not a concern (the suite has
+      none; render asserts are analytic).
 - [ ] `scripts/release.sh <version>`: refuses unless on `main` with a clean
       tree and a CHANGELOG entry; bumps the workspace version (`1.N.0`, and odm-dylib's copy) and commits;
       runs `cargo deny check`; tags `v<version>` and triggers the
