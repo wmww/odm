@@ -186,6 +186,8 @@ pub struct ViewerApp {
     pick: Option<pick::Picker>,
     /// File ▸ Quit; acted on by the event loop (see `idle.rs`).
     quit: Quit,
+    /// `ODM_VIEWER_SMOKE=1`: the line to print once frames are painted, then quit.
+    smoke: Option<String>,
 }
 
 impl ViewerApp {
@@ -213,6 +215,7 @@ impl ViewerApp {
             feedback_notices: Vec::new(),
             pick: None,
             quit,
+            smoke: smoke_report(cc),
         };
         if app.session.is_some() {
             app.init_tabs();
@@ -861,8 +864,35 @@ impl ViewerApp {
     }
 }
 
+/// A hidden mode for tests and CI lanes: `odm run` with `ODM_VIEWER_SMOKE=1`
+/// paints a couple of frames, prints the adapter and window system, exits 0.
+fn smoke_report(cc: &eframe::CreationContext<'_>) -> Option<String> {
+    use winit::raw_window_handle::HasWindowHandle;
+    if std::env::var("ODM_VIEWER_SMOKE").as_deref() != Ok("1") {
+        return None;
+    }
+    let info = cc.wgpu_render_state.as_ref()?.adapter.get_info();
+    // The variant name: Wayland, Xlib, AppKit, Win32, ...
+    let window = match cc.window_handle() {
+        Ok(h) => format!("{:?}", h.as_raw()).split('(').next().unwrap_or_default().to_string(),
+        Err(e) => format!("unknown ({e})"),
+    };
+    Some(format!(
+        "viewer smoke: adapter {} ({:?}, {:?}); window {window}",
+        info.name, info.backend, info.device_type
+    ))
+}
+
 impl eframe::App for ViewerApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if let Some(report) = &self.smoke {
+            // Frame 0 may be painted hidden (eframe shows the window after it).
+            if ui.ctx().cumulative_frame_nr() >= 2 {
+                println!("{report}");
+                self.quit.request();
+            }
+            ui.ctx().request_repaint();
+        }
         menu::shortcuts(self, ui.ctx());
         if self.session.is_none() {
             return self.no_project_ui(ui);
