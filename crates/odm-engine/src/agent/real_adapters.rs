@@ -79,6 +79,7 @@ fn real_adapters_start_logged_out_and_die_cleanly() {
         }
         launch.exit_grace = scaled(Duration::from_secs(2));
         let (live, events) = Agent::spawn(launch, SessionOptions::default(), std::sync::Arc::new(|| {})).unwrap();
+        #[cfg(any(target_os = "linux", windows))]
         let pid = live.pid();
 
         let mut seen = until(&events, "initialize", |e| matches!(e, Event::Initialized(_)));
