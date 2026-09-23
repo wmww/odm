@@ -279,7 +279,7 @@ fn render_writes_a_deterministic_png() {
     let dir = project(&[("root.js", BOX10)]);
     let _engine = Engine::start(dir.path());
     let out = dir.path().join("a.png");
-    let req = format!(r#"{{"out": "{}", "width": 64, "height": 64}}"#, out.display());
+    let req = json!({"out": out, "width": 64, "height": 64}).to_string();
 
     odm(dir.path(), &["render", &req]).ok_json();
     let first = std::fs::read(&out).expect("render wrote its file");
