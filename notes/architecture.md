@@ -1371,6 +1371,21 @@ in-process egui frame dump (`egui_kittest`, or an engine flag) would still be
 the way to get deterministic UI snapshot *tests*; this is for looking, not
 asserting.
 
+## Platforms
+
+Linux x86_64 is the only platform that has ever run. The ports are
+planned (`plans/windows.md`, `plans/macos.md`, executed in parallel); each
+port fills in its own subsection below — nothing else in this file should
+grow platform sections, so the two merges never touch the same lines.
+
+### Windows
+
+Planned: `plans/windows.md`.
+
+### macOS
+
+Planned: `plans/macos.md`.
+
 ## Remaining manual checks
 
 In-window interaction has never had a human look: viewport feel

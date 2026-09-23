@@ -209,3 +209,16 @@ other way still wants
 `pacman -S libc++ lld` with root and drop both vars). Keep `MANIFOLD_CSG_NO_SCCACHE=1` (sccache stays
 off on this machine). The sys build script clones manifold/Clipper2/
 wasm-cxx-shim from GitHub on first build.
+
+## CI lanes
+
+Planned (`plans/ci.md`); each lane's facts (toolchain versions, disk,
+cold/warm timings) go under its own heading below, filled in by whichever
+plan brings the lane up — separate headings so parallel merges don't
+collide.
+
+### Linux x86_64 / aarch64 lanes
+
+### Windows lane
+
+### macOS lane

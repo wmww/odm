@@ -144,3 +144,23 @@ every ~500 ms, `try_lock` on `engine.lock` — success means no engine
 
 Out of scope: any other platform work (see the port discussion; this plan
 only makes the transport not be one of the items).
+
+## Parallel with ci.md
+
+Runs alongside the CI agent, in its own worktree. Ownership:
+
+- **This agent edits:** `crates/odm-engine/src/{server,session,lib}.rs`
+  and its `Cargo.toml`, `crates/odm-cli/**`, `crates/odm/tests/e2e.rs`,
+  `Cargo.lock`, `docs/cli.md`, the comment in `odm-agent/src/table.rs`
+  (one line), `notes/agent-integration-research-2026-09.md`, and in
+  `notes/architecture.md` only the transport paragraph under "Crates"
+  and the `.odm/` inventory under "Project format".
+- **This agent does not edit:** workflow files, the Containerfile,
+  `crates/odm-agent/tests/**`, `crates/odm-engine/src/agent/**`, the
+  Testing section of architecture.md, `notes/build-environment.md`.
+- The rewritten e2e harness reads `ODM_TEST_TIMEOUT_SCALE` (default 1,
+  multiply every deadline: `await_engine`'s 10 s, `await_published`) with
+  a local helper — same env var the CI agent introduces elsewhere, so
+  the lanes can set one value.
+- Step 4's `await_engine` (poll `odm status` until exit 0) is what the
+  CI lanes will run; keep it free of anything Unix.

@@ -4,8 +4,8 @@ How ODM goes from a private repo to a public, versioned, installable
 release, and how every release after the first is cut. Written 2026-09-17
 from a release-process discussion; decisions marked (user) are theirs.
 
-**Order (2026-09-22):** `transport.md` → `ci.md` → `windows.md` →
-`macos.md` → **this plan last**. The release workflow reuses the test
+**Order (2026-09-22):** `transport.md` + `ci.md` (in parallel) →
+`windows.md` + `macos.md` (in parallel) → **this plan last**. The release workflow reuses the test
 lanes, container and `run.yml` loop those plans build; nothing here starts
 until all four lanes are green.
 

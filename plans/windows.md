@@ -1,10 +1,12 @@
 # Plan: Windows support (x86_64-pc-windows-msvc)
 
-Written 2026-09-22. Order: after `transport.md` and `ci.md`; before
-`macos.md` (the process-lifetime module and the platform-agnostic test
-changes made here are what macOS inherits). Done means: a `windows` lane
-in `test.yml` runs `cargo test --workspace` green on `windows-latest`,
-and the viewer opens on a real Windows desktop.
+Written 2026-09-22. Order: after `transport.md` and `ci.md`; **in
+parallel with `macos.md`** (two agents, own worktrees; see "Parallel with
+macos.md" at the end — this agent owns nearly all the shared,
+platform-agnostic changes, the macOS agent owns the rpath and the viewer
+smoke mode). Done means: the `windows` lane `ci.md` already declared in
+`test.yml` runs `cargo test --workspace` green on `windows-latest`, and
+the viewer opens on a real Windows desktop.
 
 There is no Windows machine. Every iteration goes through `run.yml`
 (`ci.md`): commit, `gh workflow run run.yml -f lane=windows -f
@@ -27,12 +29,13 @@ below. Cache as the Linux lanes, keyed per lane.
    - `crates/odm-agent/src/process.rs` uses
      `std::os::unix::process::CommandExt` unconditionally → item 2.
    - `crates/odm/build.rs` emits `-Wl,-rpath` link args; MSVC's linker
-     rejects them. Emit only when `CARGO_CFG_TARGET_OS` is linux/macos
-     (build scripts see the *target* cfg via env, not `cfg!`). On Windows
-     the dev binary finds `odm_dylib.dll` because cargo puts
-     `target/debug/deps` on PATH for `cargo run`/`cargo test`; running
-     `target\debug\odm.exe` by hand needs that dir on PATH — document,
-     don't fix.
+     rejects them. **The macOS agent owns this file** (it needs
+     `@loader_path` there) and makes it emit per `CARGO_CFG_TARGET_OS`:
+     nothing on Windows. Until that merges, work around it locally in the
+     worktree without committing the file. On Windows the dev binary
+     finds `odm_dylib.dll` because cargo puts `target/debug/deps` on PATH
+     for `cargo run`/`cargo test`; running `target\debug\odm.exe` by hand
+     needs that dir on PATH — document, don't fix.
    - `crates/odm-prompt/src/fs.rs`: the `#[cfg(not(unix))]` branch
      exists; check what it does (a copy of AGENTS.md? nothing?) and make
      it a copy that the marker update keeps in step. Test: the existing
@@ -98,14 +101,13 @@ below. Cache as the Linux lanes, keyed per lane.
    analytic (no pixel goldens), so they pass on WARP. The e2e
    `render_writes_a_deterministic_png` asserts same-bytes across two runs
    on one machine, which holds on WARP.
-7. **Viewer.** Add a hidden `ODM_VIEWER_SMOKE=1` mode: `odm run` (viewer)
-   paints one frame, prints the adapter and window backend, exits 0. e2e
-   test `viewer_paints_a_frame`, skipped only when no display is
-   available (Linux CI has none; Windows and macOS runners have a desktop
-   session). Also check by eye once, through `run.yml` uploading a
-   screenshot: PowerShell `System.Drawing` capture of the primary screen
-   after launching the viewer with a 5 s sleep — crude, but it is the one
-   time a human looks at Windows chrome before release.
+7. **Viewer.** The `ODM_VIEWER_SMOKE=1` mode and its test
+   (`crates/odm/tests/viewer_smoke.rs`) are **the macOS agent's**; once
+   merged, run it on the Windows lane. What is this agent's: check by eye
+   once, through `run.yml` uploading a screenshot — PowerShell
+   `System.Drawing` capture of the primary screen after launching the
+   viewer with a 5 s sleep — crude, but it is the one time a human looks
+   at Windows chrome before release.
 8. **Tests that are Unix-shaped.** `odm-agent/tests/client.rs`
    `the_agents_odm_is_ours` runs `sh -c`: make the fake agent able to
    report `PATH` and cwd (`{"print_env": ["PATH"]}` step) and drop the
@@ -125,11 +127,36 @@ real-adapters job first runs there.
 
 ## Steps
 
-1. Add the `windows` lane to `run.yml`; self-test with `cargo --version`.
+1. `run.yml -f lane=windows -f command='cargo build --workspace 2>&1'`
+   (the lane exists since `ci.md`); read the whole log.
 2. Items 1–2 until `cargo build --workspace` is green.
 3. Items 3–6, 8; `cargo test --workspace` green via `run.yml`.
-4. Item 7; one screenshot.
-5. Add `windows` to `test.yml`'s matrix and lane choices.
-6. Notes: architecture.md (process module, launcher, dirs, the
-   case-check), build-environment.md (Windows lane facts, timings).
-   Delete this plan.
+4. Item 7's screenshot; after the macOS merge, the smoke test on this
+   lane.
+5. Notes: the **Windows** stub under "Platforms" in architecture.md
+   (process module, launcher, dirs, the case-check) and the **Windows
+   lane** stub in build-environment.md (facts, timings). Delete this
+   plan.
+
+## Parallel with macos.md
+
+Two agents, two worktrees; merge this one first (it is the larger
+change), the macOS agent rebases. Ownership:
+
+- **This agent edits:** `crates/odm-agent/src/process/**` (new split),
+  `crates/odm-agent/src/bin/fake_agent.rs` (`spawn_child`, `print_env`
+  steps), `crates/odm-agent/tests/client.rs` (grandchild-kill test, the
+  EOF-exit test from macos.md item 2 — same file, same module, so it is
+  written here), `crates/odm-engine/src/agent/table.rs`,
+  `crates/odm-config/**`, `crates/odm-engine/src/viewer/open.rs`,
+  `crates/odm-engine/src/watcher.rs`, `crates/odm-build/src/sources.rs`
+  (case check), `crates/odm-prompt/src/fs.rs`, `crates/odm-render/src/
+  gpu.rs`, `crates/odm/tests/e2e.rs`, workspace `Cargo.toml`/`Cargo.lock`
+  (windows-sys), and the Windows stubs in both notes.
+- **This agent does not edit:** `crates/odm/build.rs`,
+  `crates/odm-engine/src/viewer/{mod,idle}.rs`, `crates/odm-engine/src/
+  lib.rs` (viewer entry), `crates/odm/tests/viewer_smoke.rs`, workflow
+  files, the macOS stubs in the notes.
+- Everything this agent writes is platform-agnostic or cfg'd per OS with
+  the Unix branch unchanged, so the macOS agent's tree keeps building
+  throughout.

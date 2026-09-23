@@ -1,8 +1,10 @@
 # Plan: CI on GitHub Actions (Linux x86_64 + aarch64)
 
-Written 2026-09-22. Order: `transport.md` → **this** → `windows.md` →
-`macos.md` → `release.md`. This plan is independent of the transport work
-(nothing here is Unix-specific) but the later plans build on both.
+Written 2026-09-22. Order: `transport.md` + **this** (in parallel, two
+agents, own worktrees) → `windows.md` + `macos.md` (in parallel) →
+`release.md`. This plan is independent of the transport work (nothing
+here is Unix-specific); see "Parallel with transport.md" at the end for
+the file ownership that keeps the two merges clean.
 
 ## Decisions (user, 2026-09-22)
 
@@ -46,13 +48,22 @@ on the dev box — write that invocation into `notes/build-environment.md`.
 ### `.github/workflows/test.yml`
 
 `workflow_dispatch` inputs: `ref` (branch/sha, default the branch the
-workflow is run from) and `lanes` (choice: `all`, `linux-x86_64`,
-`linux-arm64`; Windows/macOS plans add theirs). Matrix:
+workflow is run from) and `lanes` (choice: `linux` = both Linux lanes,
+the default; `all`; or one lane name). **All four lanes are declared
+here from the start**, so the Windows and macOS plans never edit a
+workflow file (they run in parallel and would collide on these lines);
+their lanes are simply red until those ports land. Matrix:
 
 | lane          | runs-on            | container            |
 |---------------|--------------------|----------------------|
 | linux-x86_64  | `ubuntu-latest`    | `ghcr.io/…/odm-build`|
 | linux-arm64   | `ubuntu-24.04-arm` | same image, arm64    |
+| windows       | `windows-latest`   | none                 |
+| macos         | `macos-15`         | none                 |
+
+Non-Linux lanes: no container, `cargo test --workspace` straight on the
+runner (rustup honours `rust-toolchain.toml`), same cache scheme keyed per
+lane. Also: `ODM_TEST_TIMEOUT_SCALE=4` on every lane.
 
 Steps: checkout `ref`; restore cache (`~/.cargo/registry`, `~/.cargo/git`,
 `target/`) keyed on lane + `Cargo.lock` + `rust-toolchain.toml` +
@@ -90,12 +101,15 @@ to x86_64 only.
 
 ### `.github/workflows/run.yml` — the debugging lane
 
-The tool the Windows and macOS plans lean on, defined here so the Linux
-lanes get it first: `workflow_dispatch` with inputs `lane`, `ref`, and
-`command` (a shell line). Runs the command in the lane's environment
-(inside the container on Linux), captures stdout+stderr to a log, uploads
-the log and `target/ci-out/` as artifacts, and exits with the command's
-status. Driving it from the dev box:
+The tool the Windows and macOS plans lean on, so it carries **all four
+lanes from day one** (a Windows or macOS runner needs no port work to
+run `cargo --version` or a build and upload the log): `workflow_dispatch`
+with inputs `lane`, `ref`, and `command` (a shell line; on Windows it
+runs under bash, which the runner has, so one command syntax everywhere).
+Runs the command in the lane's environment (inside the container on
+Linux), captures stdout+stderr to a log, uploads the log and
+`target/ci-out/` as artifacts, and exits with the command's status.
+Driving it from the dev box:
 
 ```
 gh workflow run run.yml -f lane=linux-arm64 -f ref=$(git rev-parse HEAD) \
@@ -131,11 +145,14 @@ Optional for interactive sessions: an `ssh` input that starts
 
 ## Tests to add or change for CI
 
-- **Deadlines.** Runner cores are slow and shared. Audit every fixed wait
-  in tests (`Engine::start` 10 s in e2e, `recv_timeout(10 s)` in
-  odm-agent, `wait_until` in engine agent tests, the fake agent's pauses)
-  and scale them by `ODM_TEST_TIMEOUT_SCALE` (default 1; the workflow sets
-  4). A deadline that only ever fires on a slow runner is noise, not a
+- **Deadlines.** Runner cores are slow and shared. Scale every fixed
+  wait in tests by `ODM_TEST_TIMEOUT_SCALE` (default 1; the workflow sets
+  4): `recv_timeout(10 s)` in odm-agent's tests, `wait_until` in the
+  engine's agent tests, the fake agent's pauses. Each test crate gets its
+  own five-line helper (no shared test-support crate; e2e links nothing
+  from the workspace anyway). **Not e2e.rs**: its harness is being
+  rewritten by the transport agent, who applies the same env var there.
+  A deadline that only ever fires on a slow runner is noise, not a
   finding.
 - **aarch64 first run.** Nothing has run on arm64. Expect: V8 prebuilt for
   `aarch64-unknown-linux-gnu` (rusty_v8 ships it), Manifold builds from
@@ -145,8 +162,11 @@ Optional for interactive sessions: an `ssh` input that starts
 - **Adapter announcement.** The render tests print the adapter once; the
   workflow greps the log for `llvmpipe` on Linux lanes and fails if it is
   absent — a silent switch to no-GPU skipping would otherwise pass green.
-- **`run.yml` self-test:** run it once with `cargo --version` per lane
-  before relying on it.
+- **`run.yml` self-test:** run it once with `cargo --version` on all
+  four lanes before relying on it — this is also the first-ever look at
+  the Windows and macOS runners (toolchain versions, disk, whether
+  `cargo build --workspace` even starts), which the port agents will
+  want in `notes/build-environment.md`.
 
 ## Docs and notes
 
@@ -171,3 +191,23 @@ Optional for interactive sessions: an `ssh` input that starts
 4. `run.yml`; self-test.
 5. `real_adapters.rs` and the opt-in job.
 6. Notes and docs; commit; delete this plan.
+
+## Parallel with transport.md
+
+Two agents, two worktrees (`.wt-hooks/create` seeds the target dir),
+merged in either order; the second to merge rebases. Ownership, so the
+rebase is trivial:
+
+- **This agent edits:** `rust-toolchain.toml`, `scripts/Containerfile`,
+  `.github/workflows/*`, `crates/odm-engine/tests/real_adapters.rs`
+  (new), the timeout helpers in `crates/odm-agent/tests/client.rs` and
+  `crates/odm-engine/src/agent/tests.rs`, README/DEVELOPING,
+  `notes/build-environment.md`, and only the **Testing** section of
+  `notes/architecture.md`.
+- **This agent does not edit:** `crates/odm/tests/e2e.rs`, anything in
+  `crates/odm-cli`, `crates/odm-engine/src/{server,session,lib}.rs`,
+  `docs/cli.md`, the transport section of architecture.md — all the
+  transport agent's.
+- The CI lanes test whatever is on `main` at trigger time; before the
+  transport merge that is the Unix-socket suite, which is fine (the
+  container has `/tmp`).
