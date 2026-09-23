@@ -1,6 +1,6 @@
 //! End to end through the shipped binary: spawn `odm run --headless`, then
 //! drive it with the same `odm <cmd>` invocations an agent types. This is the
-//! only place arg dispatch, engine startup, the socket lifecycle and the
+//! only place arg dispatch, engine startup, the transport lifecycle and the
 //! inotify watcher run as shipped.
 //!
 //! Assertions are structural — exit codes, JSON fields, substrings that name
@@ -8,7 +8,6 @@
 //! diffs docs/cli.md against the parser), so nothing here pins prose.
 
 use serde_json::{Value, json};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -19,11 +18,19 @@ const BIN: &str = env!("CARGO_BIN_EXE_odm");
 const BOX10: &str = "//! ODM API unstable\nexport default () => odm.box(10);\n";
 const BOX20: &str = "//! ODM API unstable\nexport default () => odm.box(20);\n";
 
-/// A project directory under `/tmp`: the socket lives at
-/// `<project>/.odm/engine.sock` and unix socket paths cap out around 104
-/// bytes, so a deep scratch path would not fit.
+/// `ODM_TEST_TIMEOUT_SCALE` (default 1) stretches every deadline, for slow
+/// CI machines.
+fn deadline(secs: u64) -> Instant {
+    let scale: f64 = std::env::var("ODM_TEST_TIMEOUT_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    Instant::now() + Duration::from_secs(secs).mul_f64(scale)
+}
+
+fn tempdir() -> TempDir {
+    tempfile::Builder::new().prefix("odm-e2e-").tempdir().unwrap()
+}
+
 fn project(files: &[(&str, &str)]) -> TempDir {
-    let dir = tempfile::Builder::new().prefix("odm-e2e-").tempdir_in("/tmp").unwrap();
+    let dir = tempdir();
     write(dir.path(), "odm.toml", "name = \"e2e\"\nengine = 0\n");
     for (name, body) in files {
         write(dir.path(), name, body);
@@ -33,7 +40,7 @@ fn project(files: &[(&str, &str)]) -> TempDir {
 
 /// A project seeded from one of the repo's examples.
 fn example_project(name: &str) -> TempDir {
-    let dir = tempfile::Builder::new().prefix("odm-e2e-").tempdir_in("/tmp").unwrap();
+    let dir = tempdir();
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name);
     copy_dir(&src, dir.path());
     dir
@@ -49,7 +56,7 @@ fn copy_dir(from: &Path, to: &Path) {
             copy_dir(&entry.path(), &dst);
         } else if kind.is_file() {
             std::fs::copy(entry.path(), &dst).unwrap();
-        } // else: a stale engine socket under .odm/ — not copyable, not wanted
+        }
     }
 }
 
@@ -57,10 +64,6 @@ fn write(dir: &Path, name: &str, body: &str) {
     let path = dir.join(name);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, body).unwrap();
-}
-
-fn sock(project: &Path) -> PathBuf {
-    project.join(".odm/engine.sock")
 }
 
 /// A headless engine, killed when the guard drops. One per test: tests are
@@ -79,14 +82,16 @@ impl Engine {
             .spawn()
             .expect("spawn odm run");
         let mut engine = Engine { child, project: project.to_path_buf() };
-        engine.await_socket();
+        engine.await_engine();
         engine
     }
 
-    fn await_socket(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+    /// Up once `odm status` answers: the real client path, nothing
+    /// platform-specific.
+    fn await_engine(&mut self) {
+        let deadline = deadline(10);
         while Instant::now() < deadline {
-            if UnixStream::connect(sock(&self.project)).is_ok() {
+            if odm(&self.project, &["status"]).code == 0 {
                 return;
             }
             if let Some(status) = self.child.try_wait().unwrap() {
@@ -94,7 +99,7 @@ impl Engine {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        panic!("engine never opened its socket:\n{}", self.drain_stderr());
+        panic!("engine never answered `status`:\n{}", self.drain_stderr());
     }
 
     fn drain_stderr(&mut self) -> String {
@@ -109,8 +114,8 @@ impl Engine {
 
 impl Drop for Engine {
     /// SIGKILL: the headless engine installs no signal handler, so this is
-    /// also what a crash looks like — the stale socket it leaves behind is
-    /// what `stale_socket_is_reclaimed` exercises.
+    /// also what a crash looks like — the stale files it leaves behind are
+    /// what `stale_state_is_reclaimed` exercises.
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -170,7 +175,7 @@ fn engine_starts_and_answers_status() {
 /// background build loop publishes the default slot shortly after startup.
 /// Poll until it has settled (or the deadline calls it a hang).
 fn await_published(project: &Path) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = deadline(10);
     loop {
         let status = odm(project, &["status"]).ok_json();
         if status["views"][0]["build"] != "pending" {
@@ -329,7 +334,7 @@ fn a_second_engine_refuses_and_leaves_the_first_serving() {
         .args(["run", &dir.path().display().to_string(), "--headless"])
         .output()
         .expect("run odm");
-    assert!(!out.status.success(), "a second engine must refuse the socket");
+    assert!(!out.status.success(), "a second engine must refuse the project");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("already running"), "{stderr}");
 
@@ -401,51 +406,77 @@ fn bad_commands_and_bad_json_fail_with_something_to_read() {
     assert_eq!(field.json()["ok"], Value::Bool(false), "{}", field.stdout);
 }
 
-// ---------------------------------------------------------- 8. stale socket
+// ------------------------------------------------------ 8. transport state
 
-/// The crashed-engine restart every user eventually needs: SIGKILL leaves the
-/// socket file behind, and `bind()` must probe and remove it.
+/// Run the client with extra environment.
+fn odm_env(project: &Path, args: &[&str], env: &[(&str, &str)]) -> Out {
+    let out = Command::new(BIN).arg("--project").arg(project).args(args).envs(env.iter().copied()).output().unwrap();
+    Out {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
 /// What a CLI inside a sandbox that denies `connect` (Codex's) falls back to.
 #[test]
 fn the_mailbox_answers_when_the_socket_is_denied() {
     let dir = project(&[("root.js", BOX10)]);
-    let mailed = |args: &[&str]| {
-        let out = Command::new(BIN)
-            .arg("--project")
-            .arg(dir.path())
-            .args(args)
-            .env("ODM_TRANSPORT", "mailbox")
-            .output()
-            .unwrap();
-        (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
-    };
-    let (code, _, stderr) = mailed(&["status"]);
-    assert_eq!(code, Some(2));
-    assert!(stderr.contains("no engine at"), "{stderr}");
+    let mailed = |args: &[&str]| odm_env(dir.path(), args, &[("ODM_TRANSPORT", "mailbox")]);
+    let out = mailed(&["status"]);
+    assert_eq!(out.code, 2);
+    assert!(out.stderr.contains("no engine at"), "{}", out.stderr);
 
     let engine = Engine::start(dir.path());
-    let (code, stdout, stderr) = mailed(&["inspect"]);
-    assert_eq!(code, Some(0), "{stdout}\n{stderr}");
-    assert!(stdout.contains("\"ok\": true"), "{stdout}");
-    // The client takes its FIFO with it.
+    let v = mailed(&["inspect"]).ok_json();
+    assert_eq!(v["ok"], Value::Bool(true));
+    // The client takes its files with it.
     let left: Vec<_> = std::fs::read_dir(dir.path().join(".odm/mailbox")).unwrap().map(|e| e.unwrap().file_name()).collect();
-    assert_eq!(left, ["in"]);
+    assert!(left.is_empty(), "{left:?}");
 
-    // A killed engine leaves its FIFO behind, unread.
+    // A killed engine leaves its mailbox behind, unread.
     drop(engine);
-    let (code, _, stderr) = mailed(&["status"]);
-    assert_eq!(code, Some(2));
-    assert!(stderr.contains("no engine at"), "{stderr}");
+    let out = mailed(&["status"]);
+    assert_eq!(out.code, 2);
+    assert!(out.stderr.contains("no engine at"), "{}", out.stderr);
 }
 
+/// A socket that won't take the client's token (here: the wrong one in
+/// `engine.json`) is just another socket failure — the mailbox answers.
 #[test]
-fn stale_socket_is_reclaimed() {
+fn a_rejected_token_falls_back_to_the_mailbox() {
     let dir = project(&[("root.js", BOX10)]);
+    let _engine = Engine::start(dir.path());
+    let info = dir.path().join(".odm/engine.json");
+    let mut v: Value = serde_json::from_str(&std::fs::read_to_string(&info).unwrap()).unwrap();
+    v["token"] = json!("0".repeat(64));
+    std::fs::write(&info, v.to_string()).unwrap();
+
+    assert_eq!(root_volume(dir.path()), 1000.0);
+
+    // With the mailbox gone too, nothing answers: the socket really refused.
+    std::fs::remove_dir_all(dir.path().join(".odm/mailbox")).unwrap();
+    let out = odm(dir.path(), &["status"]);
+    assert_eq!(out.code, 2, "{}", out.stdout);
+    assert!(out.stderr.contains("socket") && out.stderr.contains("mailbox"), "{}", out.stderr);
+}
+
+/// The crashed-engine restart every user eventually needs: SIGKILL leaves
+/// the lock file, `engine.json` and the mailbox behind, and the next engine
+/// must take them over.
+#[test]
+fn stale_state_is_reclaimed() {
+    let dir = project(&[("root.js", BOX10)]);
+    let odm_dir = dir.path().join(".odm");
     drop(Engine::start(dir.path()));
-    assert!(sock(dir.path()).exists(), "a killed engine leaves its socket file");
+    for left in ["engine.lock", "engine.json", "mailbox"] {
+        assert!(odm_dir.join(left).exists(), "a killed engine leaves {left}");
+    }
+    let before = std::fs::read_to_string(odm_dir.join("engine.json")).unwrap();
 
     let _engine = Engine::start(dir.path());
     assert_eq!(root_volume(dir.path()), 1000.0);
+    assert_ne!(std::fs::read_to_string(odm_dir.join("engine.json")).unwrap(), before, "a fresh token");
 }
 
 // ------------------------------------------------------------------ 9. docs

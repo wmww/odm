@@ -124,9 +124,6 @@ flows, gemini, cancel.
   in-project edits *do* ask). Solved by the CLI's mailbox fallback
   (architecture.md). Also: a reject option of kind `reject_once` named
   "No, and tell Codex what to do differently" ends the turn `cancelled`.
-- Unix socket paths cap at ~108 bytes (`SUN_LEN`): the engine refuses to
-  start in a deeply nested project dir ("path must be shorter than
-  SUN_LEN").
 - **Rust crate**: `agent-client-protocol` 2.2.0 is a smol-family async
   stack (async-io, async-process, blocking, futures-concurrency). The
   types live separately in `agent-client-protocol-schema` (serde +

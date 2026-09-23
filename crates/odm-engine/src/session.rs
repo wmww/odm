@@ -1,13 +1,13 @@
 //! Which project the viewer is serving, and swapping it for another.
 //!
-//! An engine serves one project: its store, its socket, its build loop, its
+//! An engine serves one project: its store, its CLI server, its build loop, its
 //! watcher. File ▸ Open therefore doesn't reconfigure the engine — it stands up
 //! a whole second one and retires the first. The V8 snapshot is the one thing
 //! that carries over, because building it is a once-per-process job (~40 ms,
 //! and `JsEnv::new` says so).
 //!
 //! Nothing is torn down until the replacement is known to work: the new
-//! project's socket is claimed first, so a project that is already being
+//! project's lock is claimed first, so a project that is already being
 //! served (or a directory that isn't one) leaves the current session running.
 //!
 //! There may also be no session at all: the viewer starts that way when it was
@@ -19,10 +19,6 @@ pub use odm_build::is_project;
 use odm_js::JsEnv;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-
-fn socket_of(project: &Path) -> PathBuf {
-    project.join(".odm/engine.sock")
-}
 
 /// The viewer's handle on the current project, if there is one.
 pub struct Sessions {
@@ -91,9 +87,9 @@ impl Sessions {
             return Ok(old.clone());
         }
 
-        // Claim the new socket before retiring the old session: this is the
+        // Claim the new project before retiring the old session: this is the
         // step that fails when another engine already has the project.
-        let listener = server::bind(&socket_of(&project)).map_err(|e| e.to_string())?;
+        let claim = server::claim(&project).map_err(|e| e.to_string())?;
         let scan = sync_on_open(&project);
         let state = EngineState::new(project, self.env.clone()).map_err(|e| e.to_string())?;
         state.set_agent_questions(scan.questions);
@@ -108,7 +104,7 @@ impl Sessions {
         if let Some(old) = old {
             old.stop();
         }
-        spawn_threads(&state, listener);
+        spawn_threads(&state, claim);
         state.rebuild_active();
         Ok(state)
     }
@@ -177,14 +173,13 @@ pub(crate) fn spawn_background(state: &Arc<EngineState>) {
     }
 }
 
-/// Socket server, build loop and watcher for one session. Each returns when
+/// CLI server, build loop and watcher for one session. Each returns when
 /// the session stops, dropping its `EngineState` share with it.
-fn spawn_threads(state: &Arc<EngineState>, listener: std::os::unix::net::UnixListener) {
-    let sock = socket_of(state.project());
+fn spawn_threads(state: &Arc<EngineState>, claim: server::Claim) {
     {
         let state = state.clone();
         std::thread::spawn(move || {
-            if let Err(e) = server::serve_on(state.clone(), listener, &sock) {
+            if let Err(e) = server::serve_on(state.clone(), claim) {
                 eprintln!("server error: {e}");
                 state.engine_warning(format!(
                     "CLI server died: {e} — agent commands will fail until the engine restarts"

@@ -1,9 +1,9 @@
-//! Agent-facing CLI commands: a thin JSON pipe to a running engine over the
-//! project's unix socket. The project is the nearest one at or above cwd
+//! Agent-facing CLI commands: a thin JSON pipe to a running engine over its
+//! local socket, or its file mailbox when the socket fails. The project is the nearest one at or above cwd
 //! (walking up like git), or `--project <dir>` said outright. `odm run` lives
 //! in the `odm` binary crate; everything else lands here.
 //!
-//! One grammar: `odm <cmd> ['{…json}']` — the JSON object *is* the socket
+//! One grammar: `odm <cmd> ['{…json}']` — the JSON object *is* the engine
 //! request body (minus `cmd`), so the engine's field validation and errors
 //! are the CLI's too. The only command with its own argument parsing is the
 //! one whose arguments aren't a request: `docs` (engineless).
@@ -12,9 +12,10 @@ mod docs;
 
 use anyhow::{Context, bail};
 use serde_json::{Map, Value, json};
+use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 // No `\`-continuation after the quote: it would eat this block's first indent.
 /// The command list, for the binary's `--help`.
@@ -94,7 +95,6 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         Some(p) => project_dir(p)?,
         None => find_project(std::env::current_dir()?)?,
     };
-    let sock = project.join(".odm/engine.sock");
 
     // Resolve `out` relative to the CLI's cwd before sending: the one
     // client-side pass over the body (the engine's cwd is not ours).
@@ -104,39 +104,32 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         request["out"] = json!(abs.display().to_string());
     }
 
-    let no_engine = || {
-        anyhow::anyhow!(
+    let dir = project.join(".odm");
+    if !engine_alive(&dir)? {
+        bail!(
             "no engine at {} — start one with: odm run {} --headless",
-            sock.display(),
+            project.display(),
             project.display()
-        )
-    };
+        );
+    }
+    // Any socket failure goes by the mailbox, whose lock probe is the ground
+    // truth for "is there an engine": no per-platform error sorting.
     // ODM_TRANSPORT=mailbox skips the socket (tests).
     let socket = match std::env::var_os("ODM_TRANSPORT") {
-        Some(v) if v == "mailbox" => Err(std::io::ErrorKind::PermissionDenied.into()),
-        _ => UnixStream::connect(&sock),
+        Some(v) if v == "mailbox" => Err(anyhow::anyhow!("skipped (ODM_TRANSPORT=mailbox)")),
+        _ => by_socket(&dir, &request),
     };
     let value = match socket {
-        Ok(mut stream) => {
-            let mut reader = BufReader::new(stream.try_clone()?);
-            send(&mut stream, &request)?;
-            read_response(&mut reader)?
-        }
-        // A sandboxed agent shell (Codex's, say) denies the connect itself:
-        // go by the mailbox, which takes only file access to the project.
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            match mailbox(&project.join(".odm/mailbox"), &request) {
-                Ok(Some(value)) => value,
-                Ok(None) => return Err(no_engine()),
-                Err(mail) => bail!(
-                    "connecting to the engine at {} was denied ({e}), and so was its \
-                     mailbox ({mail:#}) — a sandbox is blocking both; rerun this command \
-                     outside it",
-                    sock.display()
-                ),
-            }
-        }
-        Err(_) => return Err(no_engine()),
+        Ok(value) => value,
+        Err(sock) => match mailbox(&dir, &request) {
+            Ok(value) => value,
+            Err(mail) => bail!(
+                "the engine at {} could not be reached by its socket ({sock:#}) nor its \
+                 mailbox ({mail:#}) — if a sandbox is blocking both, rerun this command \
+                 outside it",
+                project.display()
+            ),
+        },
     };
     println!("{}", pretty(&value));
     Ok(if value.get("ok").and_then(|v| v.as_bool()) == Some(true) { 0 } else { 1 })
@@ -174,76 +167,80 @@ fn json_arg(cmd: &str, rest: &[String]) -> anyhow::Result<Map<String, Value>> {
     Ok(body)
 }
 
-/// One request by the engine's mailbox (see its `server.rs`); `None` if no
-/// engine is reading it.
-fn mailbox(dir: &Path, request: &Value) -> anyhow::Result<Option<Value>> {
-    use rustix::fs::{FileType, Mode, OFlags};
-    use std::os::unix::fs::OpenOptionsExt;
-    let nonblock = OFlags::NONBLOCK.bits() as i32;
-    // ENXIO: a FIFO nobody reads. NotFound: no FIFO at all.
-    let post = || match std::fs::OpenOptions::new().write(true).custom_flags(nonblock).open(dir.join("in")) {
-        Ok(file) => Ok(Some(file)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(rustix::io::Errno::NXIO.raw_os_error()) => Ok(None),
-        Err(e) => Err(e),
+/// Is an engine holding the project's lock? Taking it means there isn't
+/// one (and it is let go again at once).
+fn engine_alive(dir: &Path) -> anyhow::Result<bool> {
+    let lock = match std::fs::File::open(dir.join("engine.lock")) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e).context("cannot open .odm/engine.lock"),
     };
-    let Some(mut inbox) = post()? else { return Ok(None) };
-
-    let nanos = std::time::UNIX_EPOCH.elapsed().map_or(0, |d| d.subsec_nanos());
-    let id = format!("{}-{nanos}", std::process::id());
-    let res = dir.join(format!("{id}.res"));
-    let _cleanup = Cleanup(res.clone());
-    rustix::fs::mknodat(rustix::fs::CWD, &res, FileType::Fifo, Mode::from_raw_mode(0o600), 0)?;
-    // Open before posting, so the engine always finds a reader.
-    let mut reader = std::fs::OpenOptions::new().read(true).custom_flags(nonblock).open(&res)?;
-    // Locked: a write over PIPE_BUF isn't atomic, and clients share the FIFO.
-    // The leading newline ends whatever a client killed mid-write left.
-    rustix::fs::fcntl_setfl(&inbox, OFlags::empty())?;
-    rustix::fs::flock(&inbox, rustix::fs::FlockOperation::LockExclusive)?;
-    inbox.write_all(format!("\n{id} {request}\n").as_bytes())?;
-    drop(inbox);
-
-    // Wait for the response, checking now and then that the engine lives.
-    loop {
-        let mut fds = [rustix::event::PollFd::new(&reader, rustix::event::PollFlags::IN)];
-        let timeout = rustix::event::Timespec { tv_sec: 1, tv_nsec: 0 };
-        if rustix::event::poll(&mut fds, Some(&timeout))? > 0 {
-            break;
-        }
-        if post()?.is_none() {
-            bail!("the engine went away before responding");
-        }
-    }
-    rustix::fs::fcntl_setfl(&reader, OFlags::empty())?;
-    let mut response = String::new();
-    std::io::Read::read_to_string(&mut reader, &mut response)?;
-    if response.trim().is_empty() {
-        bail!("engine closed the mailbox without responding");
-    }
-    serde_json::from_str(&response).context("engine sent invalid JSON").map(Some)
-}
-
-struct Cleanup(PathBuf);
-
-impl Drop for Cleanup {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+    match lock.try_lock() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(e)) => Err(e).context("cannot probe .odm/engine.lock"),
     }
 }
 
-fn send(stream: &mut UnixStream, request: &Value) -> anyhow::Result<()> {
-    let mut line = request.to_string();
-    line.push('\n');
-    stream.write_all(line.as_bytes())?;
-    Ok(())
-}
-
-fn read_response(reader: &mut BufReader<UnixStream>) -> anyhow::Result<Value> {
+/// One request over the engine's local socket, named in `engine.json`.
+fn by_socket(dir: &Path, request: &Value) -> anyhow::Result<Value> {
+    let info = std::fs::read_to_string(dir.join("engine.json")).context("reading engine.json")?;
+    let info: Value = serde_json::from_str(&info).context("parsing engine.json")?;
+    let (Some(name), Some(token)) = (info["name"].as_str(), info["token"].as_str()) else {
+        bail!("engine.json has no name/token");
+    };
+    let stream = Stream::connect(name.to_ns_name::<GenericNamespaced>()?)?;
+    let mut reader = BufReader::new(stream);
+    reader.get_mut().write_all(format!("{token}\n{request}\n").as_bytes())?;
     let mut response = String::new();
     reader.read_line(&mut response)?;
     if response.trim().is_empty() {
         bail!("engine closed the connection without responding");
     }
     serde_json::from_str(&response).context("engine sent invalid JSON")
+}
+
+/// One request by the engine's file mailbox (see its `server.rs`).
+fn mailbox(dir: &Path, request: &Value) -> anyhow::Result<Value> {
+    let mailbox = dir.join("mailbox");
+    let nanos = std::time::UNIX_EPOCH.elapsed().map_or(0, |d| d.as_nanos());
+    let id = format!("{}-{nanos}", std::process::id());
+    let file = |ext: &str| mailbox.join(format!("{id}.{ext}"));
+    let (tmp, req, res) = (file("req.tmp"), file("req"), file("res"));
+    let _cleanup = Cleanup(vec![tmp.clone(), req.clone(), res.clone()]);
+    std::fs::write(&tmp, format!("{request}\n")).context("posting the request")?;
+    std::fs::rename(&tmp, &req).context("posting the request")?;
+
+    // Wait for the response, checking now and then that the engine lives.
+    let mut wait = Duration::from_millis(2);
+    let mut probed = Instant::now();
+    let response = loop {
+        match std::fs::read_to_string(&res) {
+            Ok(text) => break text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).context("reading the response"),
+        }
+        if probed.elapsed() > Duration::from_millis(500) {
+            if !engine_alive(dir)? {
+                bail!("the engine went away before responding");
+            }
+            probed = Instant::now();
+        }
+        std::thread::sleep(wait);
+        wait = (wait * 2).min(Duration::from_millis(20));
+    };
+    serde_json::from_str(&response).context("engine sent invalid JSON")
+}
+
+/// Removes the mailbox client's files, whichever of them are still there.
+struct Cleanup(Vec<PathBuf>);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// Indented JSON, except that anything short enough stays on one line: a
@@ -351,7 +348,7 @@ pub fn is_project(dir: &Path) -> bool {
 }
 
 /// Which project a command targets when none was named: the nearest one at or
-/// above `start` (cwd), walking up like git. Its socket is then where the
+/// above `start` (cwd), walking up like git. Its `.odm/` is then where the
 /// engine has to be — so a subdirectory of a project nobody is serving says
 /// "no engine, start one" instead of reaching past it to whichever project
 /// further up happens to be running.

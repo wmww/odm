@@ -44,7 +44,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   the path (`at /0/position`).
 - The `//!` comment block doubles as prose description (summary line +
   body), parsed at sync time without evaluating the module.
-- `.odm/` is engine-owned (socket `.odm/engine.sock`, `mailbox/`, `renders/`,
+- `.odm/` is engine-owned (`engine.lock` + `engine.json` + `mailbox/` — the
+  CLI transport, see odm-engine below —, `renders/`,
   `viewer.json` tab persistence, `config.toml` + `agent.json` — see
   "Talking to the agent" —, `feedback/` pending reports — see
   "Feedback" below). Excluded from generation hashing.
@@ -52,8 +53,8 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   dir — `odm run <dir>`, `--project <dir>` — is taken exactly as given and
   must hold `odm.toml` (`project_dir`); **nothing ever walks up from a path
   someone named**. Only the cwd fallback walks: client commands take the
-  nearest project at or above cwd, git-style, and talk to *its* socket
-  (`find_project`). Marker, not socket: a subdirectory of an unserved
+  nearest project at or above cwd, git-style, and talk to *its* engine
+  (`find_project`). Marker, not engine: a subdirectory of an unserved
   project then says "no engine, start one" instead of reaching past it to
   whichever project further up happens to be running. `run` does not walk
   at all — it serves the dir named or cwd, which must be a project; the one
@@ -384,17 +385,26 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   no content hashes and no `generation` (status keeps it) — see
   notes/agent-surface.md. CLI one-off views build without publishing;
   viewer slots publish into a per-slot map (all live roots pinned together
-  for GC). Protocol: ndjson over unix socket,
-  `{ok: bool, ...}` responses. Fallback transport, the **mailbox**
-  (`.odm/mailbox/`, `server.rs`): Codex's sandbox (seccomp) denies every
-  `connect()`, unix sockets included, but allows file access in the
-  project — so on `PermissionDenied` the CLI makes and opens a FIFO `<id>.res`
-  and posts `<id> <request>` down the engine's FIFO `in`, under `flock`
-  (shared FIFO; writes over PIPE_BUF aren't atomic; flock passes the
-  sandbox). Per-client response FIFOs are the minimum: FIFOs have no
-  `accept()`, so a shared one can't demultiplex concurrent clients.
-  `ODM_TRANSPORT=mailbox` forces it (e2e test). Verified with
-  `codex sandbox -c 'sandbox_mode="workspace-write"' -- odm status`.
+  for GC). **Transport** (`server.rs`, no `cfg` anywhere): ndjson, one
+  `{ok: bool, ...}` line per request line. `.odm/engine.lock`, held via
+  `File::try_lock` for the engine's life, is the one liveness primitive:
+  it refuses a second engine, and the CLI probes it first ("no engine at
+  …") and while waiting on the mailbox. It is never deleted (unlock-then-
+  remove would race a new engine). `engine.json` = `{name, token}`, fresh
+  per start. Default path: an `interprocess` local socket, name
+  `odm-<16 hex of blake3(project path)>` as `GenericNamespaced` (Linux
+  abstract namespace, Windows named pipe, `/tmp/odm-…` elsewhere); names
+  carry no permissions, so the client's first line must be the token
+  (`render` writes arbitrary paths). Fallback on *any* socket failure,
+  the **mailbox** (`.odm/mailbox/`): client writes `<id>.req.tmp` →
+  renames to `<id>.req`; engine (notify watcher + 100 ms rescan) reads and
+  deletes it, answers `<id>.res.tmp` → `<id>.res`; client polls for it and
+  cleans up. Exists because Codex's sandbox (seccomp) denies every
+  `connect()` but allows file access in the project. Teardown drops
+  listener, mailbox watcher, then files, lock last (Windows can't delete
+  open files). `ODM_TRANSPORT=mailbox` forces the mailbox (e2e). The FIFO
+  mailbox (pre-2026-09-22) was verified with `codex sandbox -c
+  'sandbox_mode="workspace-write"' -- odm status`; the file one is not yet.
   Dead ends: codex-acp sends an explicit `sandboxPolicy` every turn, so
   `CODEX_CONFIG` permission profiles (`network.unix_sockets`) never
   apply; exec-policy rules are files under `~/.codex/rules` only. Files: `state.rs` (slot-keyed published map,
@@ -636,21 +646,22 @@ the pointer is over — decided before any title draws, so two menus are never
 painted at once.
 
 File ▸ Open opens **another engine**, it does not reconfigure this one: an
-engine is bound to one project's store, socket, build loop and watcher.
+engine is bound to one project's store, CLI server, build loop and watcher.
 `session.rs` holds the current `EngineState` (there may be none — see below)
 and swaps it:
 
 - The V8 snapshot (`Arc<JsEnv>`) is the one thing shared across sessions —
   `JsEnv::new` is a once-per-process job, and building a second one on the UI
   thread while a build thread holds isolates is asking for trouble.
-- The new project's socket is claimed *first*. Binding is what fails when the
-  project is already served, so a failed open leaves the running one untouched
+- The new project is claimed (`server::claim`: lock, socket) *first*. The
+  lock is what fails when the project is already served, so a failed open leaves the running one untouched
   and the dialog up saying why.
 - The old session is then `stop()`ed: a flag plus wake-up hooks registered by
   whoever can block (`server.rs` connects to its own socket to break `accept`,
   `watcher.rs` sends on its channel, the build loop gets a condvar notify).
-  Each thread returns and drops its `EngineState` share; the retired socket
-  file is removed so the CLI fails fast instead of hanging on a dead engine.
+  Each thread returns and drops its `EngineState` share; the server removes
+  `engine.json` and the mailbox and releases the lock, so the CLI fails
+  fast instead of hanging on a dead engine.
   Verified: two swaps leave the same 45 threads and idle CPU as a fresh start.
 - The viewer then blanks itself — scene, tree, selection, timeline, GPU mesh
   cache — and reframes on the first build, exactly as at startup.

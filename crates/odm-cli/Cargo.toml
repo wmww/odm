@@ -13,8 +13,8 @@ test = true
 odm-prompt = { path = "../odm-prompt" }
 serde_json = "1"
 anyhow.workspace = true
-# FIFOs for the mailbox transport (server.rs / the CLI's fallback).
-rustix = { version = "1", features = ["fs", "event"] }
+# The engine's local socket (odm-engine's server.rs).
+interprocess = "2"
 # `odm docs` compiles the docs/ tree in (same idea as prompt.rs's include_str).
 include_dir = "0.7"
 

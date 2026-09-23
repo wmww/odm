@@ -1,5 +1,5 @@
 //! ODM engine: one long-lived process per project, started by `odm run`. Serves
-//! the agent CLI over a unix socket at `<project>/.odm/engine.sock`; opens the
+//! the agent CLI over a local socket and a file mailbox (see server.rs); opens the
 //! viewer unless headless. Every command syncs (rescans + hashes sources) first,
 //! so CLI results always reflect the files on disk.
 
@@ -28,16 +28,15 @@ pub use feedback::build_string;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Serve `project` over its socket until the server dies. `project` must
+/// Serve `project` to the CLI until the server dies. `project` must
 /// already be canonical.
 pub fn run_headless(project: PathBuf) -> anyhow::Result<()> {
     // One project, no viewer to switch it: no session machinery needed.
     let env =
         Arc::new(odm_js::JsEnv::new().map_err(|e| anyhow::anyhow!("js snapshot: {e}"))?);
-    // Claim the socket first: an already-served project must fail before
+    // Claim the project first: an already-served project must fail before
     // anything touches its files.
-    let sock = project.join(".odm/engine.sock");
-    let listener = server::bind(&sock)?;
+    let claim = server::claim(&project)?;
     // Questions need a UI; headless gets the silent half (marker + marked
     // agent files), drops the questions, and keeps the warnings in the transcript.
     let scan = session::sync_on_open(&project);
@@ -52,7 +51,7 @@ pub fn run_headless(project: PathBuf) -> anyhow::Result<()> {
     // and background rebuilds keep the memo cache warm for agent queries.
     session::spawn_background(&state);
     state.rebuild_active();
-    server::serve_on(state, listener, &sock)
+    server::serve_on(state, claim)
 }
 
 /// Open the viewer on `project` (canonical), or on no project at all — which

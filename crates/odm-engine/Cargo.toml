@@ -34,8 +34,9 @@ serde_path_to_error = "0.1"
 # Sync, and the send runs on its own thread anyway.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 anyhow.workspace = true
-# FIFOs for the mailbox transport (server.rs / the CLI's fallback).
-rustix = { version = "1", features = ["fs", "event"] }
+# The CLI's local socket (server.rs): abstract namespace / named pipe, no cfg.
+interprocess = "2"
+blake3.workspace = true
 
 [dev-dependencies]
 # The conformance runner stages single-file suite tests as temp projects.

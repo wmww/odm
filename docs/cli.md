@@ -4,7 +4,8 @@ The full reference for the `odm` CLI. The short version — the core
 loop — is in the agent prompt (`odm docs prompt`); everything the CLI
 can do is here.
 
-The CLI talks to a running engine over the project's unix socket. Run it
+The CLI talks to a running engine over a local socket, with a file
+mailbox (under `.odm/`) as the fallback when a sandbox blocks the socket. Run it
 from anywhere inside the project — it walks up from cwd to the nearest
 `odm.toml`, git-style, and talks to that project's engine — or pass
 `--project <dir>` first, which is taken exactly as given (no walking up
