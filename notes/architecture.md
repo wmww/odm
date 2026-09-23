@@ -1210,11 +1210,40 @@ notes/spike-findings.md "Snapshot count/concurrency".
 
 ## Testing
 
-`cargo test --workspace` before every commit is the gate. CI is planned
-but not built: manual-trigger GitHub Actions lanes for Linux x86_64/arm64,
-Windows and macOS (`plans/ci.md`, `windows.md`, `macos.md`, decided
-2026-09-22, reversing the earlier no-CI decision); until then the gate is
-local. The suite must stay fast (a few seconds) and honest.
+`cargo test --workspace` before every commit is the gate. The suite must
+stay fast (a few seconds) and honest.
+
+### CI
+
+GitHub Actions, manual trigger only (decided 2026-09-22). No LLM keys on
+runners, ever. Setup details (image, cache, local reproduction) in
+build-environment.md, "CI lanes".
+
+| lane          | runs-on            | container                   |
+|---------------|--------------------|-----------------------------|
+| linux-x86_64  | `ubuntu-latest`    | `ghcr.io/wmww/odm-build`    |
+| linux-arm64   | `ubuntu-24.04-arm` | same image, arm64           |
+| windows       | `windows-latest`   | none (red until the port)   |
+| macos         | `macos-15`         | none (red until the port)   |
+
+- `test.yml` (`ref`, `lanes`, `real_adapters`): `cargo test --workspace`
+  per lane — the same invocation as locally.
+- `run.yml` (`lane`, `ref`, `command`, `ssh`): the debugging loop. Runs one
+  bash line in a lane's environment, uploads `run.log` + `target/ci-out/`,
+  exits with its status. Commit, push, `gh workflow run run.yml -f
+  lane=… -f ref=$(git rev-parse HEAD) -f command='…'`, `gh run watch`,
+  `gh run view --log-failed`. `ssh=true` opens a tmate session afterwards
+  (public relay; only when asked).
+- `container.yml`: rebuilds the Linux image.
+- Tests that want to leave evidence on failure write to `target/ci-out/`
+  (nothing does yet).
+- Agent coverage is the fake agent on every lane, plus the opt-in
+  `agent::real_adapters` test (`#[ignore]`d; `cargo test --workspace
+  real_adapters -- --ignored`): npm-installs the pinned claude-agent-acp
+  and codex-acp into a temp dir, spawns each with an empty HOME and no
+  keys, asserts the logged-out outcome (codex: session/new → auth_required;
+  claude: a session, then the first prompt ends `error: Authentication
+  required`) and that shutdown leaves no live process in the group.
 
 ### What earns a test here
 
@@ -1314,7 +1343,9 @@ silently pass. Two hatches exist, both off by default: `ODM_TEST_NO_GPU=1`
 skips the render tests (`crates/odm-render/tests/common/mod.rs`; on success
 it prints the adapter once, so a silent fall back to a software rasterizer
 is visible under `--nocapture`) and `ODM_TEST_NO_NODE=1` skips
-`node_bundle.rs`. Without them a missing GPU or `node` is a panic.
+`node_bundle.rs`. Without them a missing GPU or `node` is a panic. The
+converse, `ODM_TEST_EXPECT_ADAPTER=<substring>` (CI: `llvmpipe`), fails any
+render test on another adapter.
 
 Useful invocations: `cargo test -p odm-build`, `cargo test --test render`,
 `cargo test <substring>`, `cargo test -q` (dots instead of one line per test).

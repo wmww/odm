@@ -20,7 +20,8 @@
 //! `odm-fake-agent --chat` is a canned conversationalist instead: every
 //! prompt gets a thought, a tool call and a reply. Words in the prompt pick
 //! extras: `plan`, `permission`, `slow` (a turn long enough to Stop),
-//! `crash`. `ODM_FAKE_AGENT_FAST=1` cuts its pauses to a tenth, for tests.
+//! `crash`. `ODM_FAKE_AGENT_FAST=1` cuts its pauses to a tenth, for tests;
+//! `ODM_TEST_TIMEOUT_SCALE` (CI) multiplies them back up.
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -253,6 +254,8 @@ fn chat(wire: &mut Wire) {
 /// Wait out `ms`, watching for a cancel or a steering message. True = cancelled.
 fn idle(wire: &mut Wire, turn: u32, ms: u64) -> bool {
     let ms = if std::env::var_os("ODM_FAKE_AGENT_FAST").is_some() { ms / 10 } else { ms };
+    let scale = std::env::var("ODM_TEST_TIMEOUT_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    let ms = ms * scale;
     let deadline = std::time::Instant::now() + Duration::from_millis(ms);
     loop {
         let left = deadline.saturating_duration_since(std::time::Instant::now());

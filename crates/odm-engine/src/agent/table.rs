@@ -144,7 +144,7 @@ pub fn resolve(id: &str, config: &AgentConfig) -> Result<Resolved, Problem> {
         Source::Npm { package, bin, .. } => {
             let dir = install_dir(id).ok_or(Problem::NotInstalled(agent.title))?;
             installed_version(&dir, package).ok_or(Problem::NotInstalled(agent.title))?;
-            vec![dir.join("node_modules/.bin").join(bin).display().to_string()]
+            npm_command(&dir, bin)
         }
         Source::Path { program, args } => {
             if !on_path(program) {
@@ -154,6 +154,11 @@ pub fn resolve(id: &str, config: &AgentConfig) -> Result<Resolved, Problem> {
         }
     };
     Ok(Resolved { command, env: Default::default(), meta: session_meta(id) })
+}
+
+/// How to run an npm adapter's `bin` installed under `dir`.
+pub fn npm_command(dir: &Path, bin: &str) -> Vec<String> {
+    vec![dir.join("node_modules/.bin").join(bin).display().to_string()]
 }
 
 /// `odm` commands and in-project edits never ask: allow rules handed to the
@@ -199,15 +204,18 @@ pub fn node_problem() -> Option<String> {
 /// `npm install --prefix <dir> <package>@<version>`. Blocks for the length
 /// of a ~300 MB download; run it off the UI thread.
 pub fn install(id: &str) -> Result<(), String> {
+    install_into(id, &install_dir(id).ok_or("no home directory to install into")?)
+}
+
+pub fn install_into(id: &str, dir: &Path) -> Result<(), String> {
     let agent = built_in(id).ok_or_else(|| format!("`{id}` is not installable"))?;
     let Source::Npm { package, version, .. } = &agent.source else {
         return Err(format!("{} is not installed by ODM", agent.title));
     };
-    let dir = install_dir(id).ok_or("no home directory to install into")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let out = std::process::Command::new("npm")
         .args(["install", "--no-fund", "--no-audit", "--prefix"])
-        .arg(&dir)
+        .arg(dir)
         .arg(format!("{package}@{version}"))
         .stdin(std::process::Stdio::null())
         .output()

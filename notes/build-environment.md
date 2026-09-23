@@ -212,12 +212,55 @@ wasm-cxx-shim from GitHub on first build.
 
 ## CI lanes
 
-Planned (`plans/ci.md`); each lane's facts (toolchain versions, disk,
-cold/warm timings) go under its own heading below, filled in by whichever
-plan brings the lane up — separate headings so parallel merges don't
-collide.
+GitHub Actions, `workflow_dispatch` only (`.github/workflows/`; lane table and
+the `run.yml` loop in architecture.md, Testing). Each lane's facts go under its
+own heading below — separate headings so parallel merges don't collide.
+
+**Image**: `scripts/Containerfile` (Ubuntu 22.04: pinned rustup toolchain +
+wasm32, cmake/ninja, clang/lld/libc++ 20 from apt.llvm.org for the wasm lane,
+node 22, prebuilt wasm-bindgen-cli, lavapipe). `container.yml` builds it
+natively per arch and publishes `ghcr.io/wmww/odm-build:<hashFiles(Containerfile,
+rust-toolchain.toml)>`; test/run compute the same hash from their checkout, so
+editing either file means rerunning container.yml before the Linux lanes can
+pull. The GHCR package is public (no pull credentials anywhere).
+
+**Reproduce a Linux lane on the dev box** (own target + cargo home, never the
+checkout's `target/`):
+
+```sh
+podman build -f scripts/Containerfile -t odm-build .
+S=<scratch dir>; mkdir -p $S/ci-target $S/ci-cargo
+podman run --rm -v $PWD:/src:Z -v $S/ci-target:/src/target:Z -v $S/ci-cargo:/root/.cargo:Z \
+  -w /src -e CARGO_HOME=/root/.cargo -e ODM_TEST_TIMEOUT_SCALE=4 -e ODM_TEST_EXPECT_ADAPTER=llvmpipe \
+  odm-build cargo test --workspace
+```
+
+(or `podman pull ghcr.io/wmww/odm-build:<tag>` for the exact CI image).
+
+**Cache**: key = lane + hash(Cargo.lock, rust-toolchain.toml) + image tag (or
+`runner`), saved only on a miss, after `scripts/ci-trim-target.sh` drops
+incremental/, uplifted files and workspace-crate artifacts (the seed-target
+purge). A hit therefore stays valid across commits until a dep, toolchain or
+image changes. The build is a separate `cargo test --workspace --no-run` step
+(same invocation shape, same artifacts) so a failing test still saves a warm
+cache. `run.yml` only restores. The trim's extensionless-binary rule is
+Unix-shaped: Windows test exes (`.exe`) and `.pdb`s survive it; the Windows
+plan should extend it if that lane's cache is too big.
+
+`ODM_TEST_TIMEOUT_SCALE=4` stretches fixed test deadlines (odm-agent's client
+tests, the engine's agent tests, the fake agent's pauses);
+`ODM_TEST_EXPECT_ADAPTER=llvmpipe` makes the render tests fail on any other
+adapter.
 
 ### Linux x86_64 / aarch64 lanes
+
+Measured locally in the image (24 cores, 2026-09-22): cold `cargo test
+--workspace` 2m28 (373 crates, V8 prebuilt download, Manifold cmake), target
+4.2 GiB; trimmed 2.4 GiB raw / 0.9 GB zstd with the registry; warm from the
+trimmed cache 24 s (15 crates recompile). All tests pass as root, on glibc 2.35
+and lavapipe (`llvmpipe (LLVM 15.0.7, 256 bits)`), real_adapters included.
+Runner timings: not yet measured. wgpu prints `XDG_RUNTIME_DIR not set`
+while probing Wayland; harmless.
 
 ### Windows lane
 

@@ -3,7 +3,7 @@
 - `architecture.md` — the system as built: project format, crate map with
   per-crate gotchas, viewer fonts/icons/tree, the managed agent panel (ACP
   client, config, transcript, diagnostics push), feedback, STL export,
-  invariants, testing (what earns a test here, the suites, the opt-in lanes), seeing
+  invariants, testing (what earns a test here, the suites, the opt-in lanes, CI), seeing
   the viewer. Start here.
 - `api-stability-and-docs.md` — versioning (JS API + the integer engine
   version): the rationale behind
@@ -32,7 +32,8 @@
   stacks, and web-viewer options (July 2026, with sources). The evidence base
   behind design-decisions.
 - `build-environment.md` — machine facts; per-checkout target dirs (seeding,
-  why sharing corrupts), sweeping stale artifacts, why mold/sccache stay off.
+  why sharing corrupts), sweeping stale artifacts, why mold/sccache stay off,
+  the CI image/cache and reproducing a lane with podman, per-lane facts.
 - `agent-integration-research-2026-09.md` — ACP as the agent-agnostic
   protocol for an ODM-managed agent panel, which agents speak it and how,
   and the (paused) Anthropic Agent SDK billing change that makes the

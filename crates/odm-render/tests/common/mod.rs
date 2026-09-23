@@ -8,12 +8,18 @@ use odm_render::Renderer;
 use std::sync::OnceLock;
 
 /// The test renderer. Panics without a GPU adapter unless `ODM_TEST_NO_GPU=1`
-/// (then returns `None` so the caller skips).
+/// (then returns `None` so the caller skips). `ODM_TEST_EXPECT_ADAPTER=<substring>`
+/// (CI sets `llvmpipe`) fails any other adapter, so a lane can't silently
+/// switch rasterizers.
 pub fn renderer() -> Option<Renderer> {
     match Renderer::new() {
         Ok(r) => {
+            let adapter = r.adapter_description();
             static ANNOUNCED: OnceLock<()> = OnceLock::new();
-            ANNOUNCED.get_or_init(|| eprintln!("render tests on adapter: {}", r.adapter_description()));
+            ANNOUNCED.get_or_init(|| eprintln!("render tests on adapter: {adapter}"));
+            if let Ok(want) = std::env::var("ODM_TEST_EXPECT_ADAPTER") {
+                assert!(adapter.contains(&want), "adapter {adapter:?} is not ODM_TEST_EXPECT_ADAPTER={want:?}");
+            }
             Some(r)
         }
         Err(e) if std::env::var("ODM_TEST_NO_GPU").as_deref() == Ok("1") => {

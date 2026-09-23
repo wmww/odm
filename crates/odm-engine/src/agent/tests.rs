@@ -35,8 +35,15 @@ fn project() -> (tempfile::TempDir, Files) {
     (dir, files)
 }
 
+/// `d` stretched by `ODM_TEST_TIMEOUT_SCALE` (CI sets 4: runner cores are
+/// slow and shared).
+fn scaled(d: Duration) -> Duration {
+    let scale = std::env::var("ODM_TEST_TIMEOUT_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    d * scale
+}
+
 fn wait_until(what: &str, done: impl Fn() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + scaled(Duration::from_secs(10));
     while !done() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(5));

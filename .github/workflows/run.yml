@@ -1,0 +1,93 @@
+# The debugging lane: run one shell line in a lane's environment, upload its
+# log (and target/ci-out/), exit with its status. Commit, push, then:
+#   gh workflow run run.yml -f lane=linux-arm64 -f ref=$(git rev-parse HEAD) \
+#     -f command='cargo test --workspace --test e2e 2>&1 | tail -100'
+#   gh run watch $(gh run list --workflow=run.yml -L1 --json databaseId -q '.[0].databaseId')
+#   gh run view --log-failed
+name: run
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        type: choice
+        options: [linux-x86_64, linux-arm64, windows, macos]
+        default: linux-x86_64
+      ref:
+        description: Branch, tag or sha (default the branch run from)
+        default: ''
+      command:
+        description: Shell line (bash on every lane)
+        default: cargo --version
+      ssh:
+        description: Afterwards, open a tmate session (public relay) until it is closed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      lane: ${{ steps.plan.outputs.lane }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.ref }}' }
+      - id: plan
+        env:
+          LANE: ${{ inputs.lane }}
+          TAG: ${{ hashFiles('scripts/Containerfile', 'rust-toolchain.toml') }}
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/odm-build:$TAG
+          jq -nc --arg image "$image" --arg tag "$TAG" --arg lane "$LANE" '[
+            {lane: "linux-x86_64", os: "ubuntu-latest", container: $image, env_key: $tag},
+            {lane: "linux-arm64", os: "ubuntu-24.04-arm", container: $image, env_key: $tag},
+            {lane: "windows", os: "windows-latest", container: "", env_key: "runner"},
+            {lane: "macos", os: "macos-15", container: "", env_key: "runner"}]
+            | map(select(.lane == $lane))[0]' | sed 's/^/lane=/' >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: plan
+    name: ${{ inputs.lane }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.lane).os }}
+    container: ${{ fromJSON(needs.plan.outputs.lane).container }}
+    timeout-minutes: 180
+    defaults:
+      run: { shell: bash }
+    env:
+      CARGO_TERM_COLOR: always
+      ODM_TEST_TIMEOUT_SCALE: 4
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.ref }}' }
+      - if: fromJSON(needs.plan.outputs.lane).container != ''
+        run: echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+      # test.yml's cache, restore-only: arbitrary commands don't get to write it.
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ inputs.lane }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ fromJSON(needs.plan.outputs.lane).env_key }}
+          restore-keys: ${{ inputs.lane }}-
+      - name: ${{ inputs.command }}
+        env:
+          COMMAND: ${{ inputs.command }}
+        run: |
+          set -o pipefail
+          bash -c "$COMMAND" 2>&1 | tee run.log
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-${{ inputs.lane }}
+          path: |
+            run.log
+            target/ci-out/
+          if-no-files-found: ignore
+      - if: always() && inputs.ssh
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true

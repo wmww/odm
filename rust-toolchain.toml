@@ -1,0 +1,5 @@
+# Pinned so CI runners and dev boxes compile the same thing. Bumping it
+# rebuilds every target dir from scratch; do it deliberately.
+[toolchain]
+channel = "1.93.0"
+targets = ["wasm32-unknown-unknown"]

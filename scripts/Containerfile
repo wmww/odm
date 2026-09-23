@@ -1,0 +1,48 @@
+# The CI/release build environment: Ubuntu 22.04 (glibc 2.35 floor), one file
+# for amd64 and arm64. Build context is the repo root (it reads
+# rust-toolchain.toml):
+#   podman build -f scripts/Containerfile -t odm-build .
+# notes/build-environment.md has the lane-reproduction recipe.
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg git python3 pkg-config \
+        build-essential cmake ninja-build \
+        libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+        mesa-vulkan-drivers libvulkan1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# clang, wasm-ld and libc++ headers for the Manifold wasm lane (web template;
+# notes/web-export.md). 22.04's own clang 14 is too old, so apt.llvm.org.
+ARG LLVM=20
+RUN curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /usr/share/keyrings/llvm.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-$LLVM main" \
+        > /etc/apt/sources.list.d/llvm.list \
+    && apt-get update && apt-get install -y --no-install-recommends clang-$LLVM lld-$LLVM libc++-$LLVM-dev \
+    && rm -rf /var/lib/apt/lists/*
+ENV WASM_CXX_SHIM_LIBCXX_HEADERS=/usr/lib/llvm-$LLVM/include/c++/v1 \
+    WASM_CXX_SHIM_WASM_LD=/usr/lib/llvm-$LLVM/bin/wasm-ld \
+    PATH=/usr/lib/llvm-$LLVM/bin:$PATH
+
+# node 22 (odm-export's node_bundle test, agent adapter installs).
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Toolchains live outside $HOME; jobs point CARGO_HOME at ~/.cargo so the
+# registry lands where the cache step looks, while the rustup proxies here
+# keep working.
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+COPY rust-toolchain.toml /tmp/toolchain/
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none \
+    && ch="$(sed -n 's/^channel = "\(.*\)"/\1/p' /tmp/toolchain/rust-toolchain.toml)" \
+    && rustup toolchain install "$ch" --profile minimal --target wasm32-unknown-unknown \
+    && rustup default "$ch" && rustc --version
+
+# wasm-bindgen-cli must match the crate in Cargo.lock (xtask checks).
+ARG WASM_BINDGEN=0.2.126
+RUN arch="$(uname -m)" && case "$arch" in x86_64) t=x86_64-unknown-linux-musl;; *) t=aarch64-unknown-linux-gnu;; esac \
+    && curl -fsSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$WASM_BINDGEN/wasm-bindgen-$WASM_BINDGEN-$t.tar.gz" \
+        | tar -xz -C /usr/local/bin --strip-components=1 "wasm-bindgen-$WASM_BINDGEN-$t/wasm-bindgen" \
+    && wasm-bindgen --version

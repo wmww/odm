@@ -16,3 +16,15 @@ Features:
 - Fully open source and permissively licensed
 
 To build and install under `$HOME/.local/bin` clone this repo and run `scripts/install.sh`. Official release and pre-built binaries coming soon.
+
+## Developing
+
+`cargo test --workspace` is the gate. CI is GitHub Actions, manual trigger only (push the commit first):
+
+```sh
+gh workflow run test.yml -f ref=$(git rev-parse HEAD)            # both Linux lanes; -f lanes=all|windows|…
+gh workflow run run.yml -f lane=linux-arm64 -f ref=$(git rev-parse HEAD) -f command='cargo test --workspace --test e2e'
+gh run watch $(gh run list -L1 --json databaseId -q '.[0].databaseId')
+```
+
+Editing `scripts/Containerfile` or `rust-toolchain.toml` needs `gh workflow run container.yml` first (the Linux lanes pull the image matching those files).

@@ -17,6 +17,13 @@ const NEW: &str = r#"
 {"reply": "session/new", "result": {"sessionId": "s1", "configOptions": [{"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": "default", "options": [{"value": "default", "name": "Manual"}, {"value": "plan", "name": "Plan"}]}]}}
 "#;
 
+/// `d` stretched by `ODM_TEST_TIMEOUT_SCALE` (CI sets 4: runner cores are
+/// slow and shared).
+fn scaled(d: Duration) -> Duration {
+    let scale = std::env::var("ODM_TEST_TIMEOUT_SCALE").ok().and_then(|s| s.parse().ok()).unwrap_or(1);
+    d * scale
+}
+
 struct Run {
     agent: Agent,
     events: Receiver<Event>,
@@ -29,8 +36,8 @@ fn run_with(script: &str, options: SessionOptions, tune: impl FnOnce(&mut Launch
     std::fs::write(&path, script).unwrap();
     let mut launch =
         Launch::new(vec![FAKE.to_owned(), path.display().to_string()], dir.path().to_owned());
-    launch.cancel_grace = Duration::from_millis(300);
-    launch.exit_grace = Duration::from_millis(300);
+    launch.cancel_grace = scaled(Duration::from_millis(300));
+    launch.exit_grace = scaled(Duration::from_millis(300));
     tune(&mut launch);
     let (agent, events) = Agent::spawn(launch, options, Arc::new(|| {})).unwrap();
     Run { agent, events, _dir: dir }
@@ -48,7 +55,7 @@ impl Run {
         loop {
             let event = self
                 .events
-                .recv_timeout(Duration::from_secs(10))
+                .recv_timeout(scaled(Duration::from_secs(10)))
                 .unwrap_or_else(|_| panic!("timed out; saw {seen:#?}"));
             let done = last(&event);
             if let Event::Exited { reason: ExitReason::Crashed(status), stderr } = &event
@@ -285,7 +292,7 @@ fn the_agents_odm_is_ours() {
     launch.path_prepend = Some(bin.clone());
     let (_agent, events) = Agent::spawn(launch, SessionOptions::default(), Arc::new(|| {})).unwrap();
     let stderr = loop {
-        if let Event::Exited { stderr, .. } = events.recv_timeout(Duration::from_secs(10)).unwrap() {
+        if let Event::Exited { stderr, .. } = events.recv_timeout(scaled(Duration::from_secs(10))).unwrap() {
             break stderr;
         }
     };

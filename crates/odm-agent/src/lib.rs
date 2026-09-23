@@ -362,6 +362,11 @@ impl Agent {
         self.shared.send_all(out.into_iter().collect());
     }
 
+    /// The child's pid — also its process group's id.
+    pub fn pid(&self) -> u32 {
+        self.shared.pgid as u32
+    }
+
     /// Ask the agent to go: close its stdin, and kill its process group if
     /// it has not exited `exit_grace` later. Returns at once.
     pub fn shutdown(&self) {

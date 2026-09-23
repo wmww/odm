@@ -990,3 +990,5 @@ fn fold(items: &mut Vec<Item>, update: Update, actions: u64) {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod real_adapters;

@@ -1,0 +1,46 @@
+# Builds scripts/Containerfile natively per arch and publishes
+# ghcr.io/<owner>/odm-build:<hash of Containerfile + rust-toolchain.toml>
+# (+ :latest). test.yml and run.yml pull the tag matching their checkout, so
+# rerun this after editing either file.
+name: container
+on: workflow_dispatch
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, os: ubuntu-latest }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push
+        env:
+          TAG: ${{ hashFiles('scripts/Containerfile', 'rust-toolchain.toml') }}
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/odm-build
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build -f scripts/Containerfile \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            -t "$image:$TAG-${{ matrix.arch }}" .
+          docker push "$image:$TAG-${{ matrix.arch }}"
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Multi-arch tags
+        env:
+          TAG: ${{ hashFiles('scripts/Containerfile', 'rust-toolchain.toml') }}
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/odm-build
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker buildx imagetools create -t "$image:$TAG" -t "$image:latest" \
+            "$image:$TAG-amd64" "$image:$TAG-arm64"
+          echo "published $image:$TAG" >> "$GITHUB_STEP_SUMMARY"

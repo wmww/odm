@@ -1,0 +1,110 @@
+# The gate on CI runners: `cargo test --workspace`, one lane per platform.
+# Manual only. Linux lanes run in the container.yml image; the others straight
+# on the runner. Windows and macOS stay red until their ports land.
+#   gh workflow run test.yml -f ref=$(git rev-parse HEAD) -f lanes=linux
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or sha (default the branch run from)
+        default: ''
+      lanes:
+        type: choice
+        options: [linux, all, linux-x86_64, linux-arm64, windows, macos]
+        default: linux
+      real_adapters:
+        description: Also run the real_adapters test (npm-installs the real ACP adapters; no keys)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.ref }}' }
+      - id: plan
+        env:
+          LANES: ${{ inputs.lanes }}
+          TAG: ${{ hashFiles('scripts/Containerfile', 'rust-toolchain.toml') }}
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/odm-build:$TAG
+          all=$(jq -nc --arg image "$image" --arg tag "$TAG" '[
+            {lane: "linux-x86_64", os: "ubuntu-latest", container: $image, env_key: $tag, adapter: "llvmpipe"},
+            {lane: "linux-arm64", os: "ubuntu-24.04-arm", container: $image, env_key: $tag, adapter: "llvmpipe"},
+            {lane: "windows", os: "windows-latest", container: "", env_key: "runner", adapter: ""},
+            {lane: "macos", os: "macos-15", container: "", env_key: "runner", adapter: ""}]')
+          case "$LANES" in
+            all) pick='.' ;;
+            linux) pick='map(select(.lane | startswith("linux")))' ;;
+            *) pick="map(select(.lane == \"$LANES\"))" ;;
+          esac
+          echo "matrix=$(jq -c "$pick" <<<"$all")" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: plan
+    name: ${{ matrix.lane }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    timeout-minutes: 120
+    defaults:
+      run: { shell: bash }
+    env:
+      CARGO_TERM_COLOR: always
+      ODM_TEST_TIMEOUT_SCALE: 4
+      # A lane that silently switched rasterizer (or to no GPU) must fail.
+      ODM_TEST_EXPECT_ADAPTER: ${{ matrix.adapter }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.ref }}' }
+      # The image keeps its toolchain in /usr/local/cargo; the registry goes
+      # where the cache step looks.
+      - if: matrix.container != ''
+        run: echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+      # Keyed on everything that changes dep artifacts, saved only on a miss:
+      # workspace crates are trimmed out, so a hit stays valid across commits.
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ matrix.lane }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}-${{ matrix.env_key }}
+          restore-keys: ${{ matrix.lane }}-
+      # Same invocation shape as the test run (notes/build-environment.md):
+      # --no-run builds exactly its artifacts, so the cache is warm even when
+      # a test fails.
+      - id: build
+        run: cargo test --workspace --no-run
+      - run: cargo test --workspace
+      - if: inputs.real_adapters
+        run: cargo test --workspace real_adapters -- --ignored
+      - if: always() && steps.build.outcome == 'success' && steps.cache.outputs.cache-hit != 'true'
+        run: scripts/ci-trim-target.sh
+      - if: always() && steps.build.outcome == 'success' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-out-${{ matrix.lane }}
+          path: target/ci-out/
+          if-no-files-found: ignore
