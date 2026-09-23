@@ -184,9 +184,9 @@ Optional for interactive sessions: an `ssh` input that starts
 1. `rust-toolchain.toml`; Containerfile; build it locally with podman and
    get `cargo test --workspace` green inside it on the dev box (this is
    also the first time the suite runs against glibc 2.35 and lavapipe).
-2. `container.yml`, push the image to GHCR (repo is private today: GHCR
-   packages inherit repo visibility, and the workflow's `GITHUB_TOKEN` can
-   pull it).
+2. `container.yml`, push the image to GHCR (the repo is public, so make
+   the package public too: no pull auth anywhere, including podman on the
+   dev box).
 3. `test.yml` with the two Linux lanes; timeout scaling; adapter grep.
 4. `run.yml`; self-test.
 5. `real_adapters.rs` and the opt-in job.

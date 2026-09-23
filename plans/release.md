@@ -1,7 +1,7 @@
 # Release plan
 
-How ODM goes from a private repo to a public, versioned, installable
-release, and how every release after the first is cut. Written 2026-09-17
+How ODM (public on GitHub since before 2026-09-22) gets its first
+versioned, installable release, and how every release after it is cut. Written 2026-09-17
 from a release-process discussion; decisions marked (user) are theirs.
 
 **Order (2026-09-22):** `transport.md` + `ci.md` (in parallel) →
@@ -11,10 +11,9 @@ until all four lanes are green.
 
 ## Decisions
 
-- **One repo, made public at first release** (user). Distribution is
-  GitHub Releases on this repo. A private repo cannot serve binaries to
-  outsiders without also giving them the source, so "release" and "go
-  public" are the same event.
+- **One public repo, GitHub Releases on it** (user). The repo is already
+  public (the "flip" this plan once scheduled has happened); the release
+  is just the first tagged build.
 - **MIT, everything** (user, 2026-09-17, reversing an earlier copyleft
   lean). `LICENSE` written (holder: "the ODM authors" — swap in a name if
   wanted). No CLA needed: MIT contributions are inbound=outbound. The
@@ -29,9 +28,8 @@ until all four lanes are green.
   (Actions tab or `gh workflow run`), never on push or PR. Reason: four
   targets, two of which cannot be built or tested on the dev machine (a
   macOS VM is both against Apple's license and Metal-less; Windows needs
-  a VM either way). Public-repo runners are free; until the flip the
-  macOS lane costs 10× Linux minutes, so it can wait for the flip. The
-  local test gate stays `cargo test --workspace`.
+  a VM either way). The repo is public, so hosted runners on every OS
+  are free. The local test gate stays `cargo test --workspace`.
 - **Four targets** (user, 2026-09-22): x86_64 Linux, aarch64 Linux, arm64
   macOS, x86_64 Windows. Intel macOS skipped (cross-target from the arm64
   runner later if asked). Prerequisite: `plans/transport.md` (the
@@ -63,7 +61,7 @@ All decided (see Decisions). Remaining paperwork:
 - [ ] `CONTRIBUTING.md` (optional): whether PRs are wanted; no CLA either
       way. Disable PRs in repo settings if not.
 
-## Checklist: repo hygiene (the repo becomes public with its history)
+## Checklist: repo hygiene (the repo is public with its history)
 
 - [x] Private-data review (done 2026-09-17, tree + full history, all
       refs). No secrets, emails, or personal content. Known and accepted
@@ -143,7 +141,7 @@ All decided (see Decisions). Remaining paperwork:
       LICENSE, THIRD_PARTY_LICENSES, README, `install.sh` (not on
       Windows), plus `.sha256` and the split debug info (`.dwp` on Linux,
       `.dSYM` on macOS, `.pdb` on Windows). The user publishes the draft. Pre-releases (`v4-alpha.1`, cargo `1.4.0-alpha.1`) use
-      `--prerelease` and are how testers get builds before the flip.
+      `--prerelease` and are how testers get builds before v1.
 - [ ] User installer: the tarball's `install.sh` places the binary and
       warns about PATH; a `curl -fsSL <release-url>/install.sh
       | sh` form fetches the latest release, verifies the sha256, and
@@ -162,9 +160,7 @@ All decided (see Decisions). Remaining paperwork:
 ## First release only
 
 - [ ] Everything in "decide" and "repo hygiene" done.
-- [ ] Flip the repo public, then publish the release draft, in that order
-      (a release on a private repo is invisible; assets attach fine either
-      way).
+- [ ] Publish the release draft.
 
 ## Later, not blocking
 

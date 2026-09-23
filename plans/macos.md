@@ -23,9 +23,8 @@ Apple's paravirtual GPU, which supports Metal, so wgpu should find a
 hardware-class adapter — confirm from the render tests' adapter line on
 the first run. If it does not, there is no software Metal; the lane would
 have to run with `ODM_TEST_NO_GPU=1` and lose the render tests, which is
-worth knowing before anything else. Cache as the other lanes. Cost: free
-once the repo is public; 10× Linux minutes on the free tier before, so
-this plan can wait for the flip if minutes matter.
+worth knowing before anything else. Cache as the other lanes. Runner
+minutes are free (public repo), so iterate freely.
 
 ## Port items, each with its test
 
