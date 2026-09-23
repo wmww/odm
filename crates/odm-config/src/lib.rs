@@ -60,7 +60,8 @@ fn env(var: &str) -> Option<OsString> {
 /// (config file, data dir), from the environment `var` reads.
 fn dirs(windows: bool, var: impl Fn(&str) -> Option<OsString>) -> (Option<PathBuf>, Option<PathBuf>) {
     // An absolute value only: the XDG spec says to ignore relative ones.
-    let dir = |name: &str| var(name).map(PathBuf::from).filter(|d| d.is_absolute() || windows);
+    // (has_root, so the Unix branch's test passes on Windows too.)
+    let dir = |name: &str| var(name).map(PathBuf::from).filter(|d| d.has_root() || windows);
     if windows {
         return (
             dir("APPDATA").map(|d| d.join("odm").join("config.toml")),

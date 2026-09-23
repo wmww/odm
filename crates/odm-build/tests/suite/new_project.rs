@@ -11,10 +11,13 @@ fn a_new_project_is_a_project_that_builds() {
     create_project(&project, "widget", Units::Mm).unwrap();
 
     assert!(is_project(&project));
-    // The agent files: the block in AGENTS.md, CLAUDE.md a link to it.
+    // The agent files: the block in AGENTS.md, CLAUDE.md a link to it (a
+    // copy where there are no symlinks).
     let agents = std::fs::read_to_string(project.join("AGENTS.md")).unwrap();
     assert!(agents.contains(odm_prompt::BEGIN) && agents.contains(odm_prompt::END), "{agents}");
     assert!(agents.contains("ODM"), "{agents}");
+    assert_eq!(std::fs::read_to_string(project.join("CLAUDE.md")).unwrap(), agents);
+    #[cfg(unix)]
     assert_eq!(
         std::fs::read_link(project.join("CLAUDE.md")).unwrap(),
         std::path::Path::new("AGENTS.md")

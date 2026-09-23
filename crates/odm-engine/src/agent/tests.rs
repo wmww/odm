@@ -11,7 +11,7 @@ use odm_build::View;
 /// --workspace` (it is another package's bin, so cargo hands us no path).
 fn fake_agent() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
-    let path = exe.parent().and_then(Path::parent).unwrap().join("odm-fake-agent");
+    let path = exe.parent().and_then(Path::parent).unwrap().join(format!("odm-fake-agent{}", std::env::consts::EXE_SUFFIX));
     assert!(path.is_file(), "{} is missing: run `cargo test --workspace`", path.display());
     path
 }

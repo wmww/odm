@@ -1,2 +1,6 @@
-# Applied byte-exact by scripts/patch-deps.sh; no CRLF conversion on Windows.
+# LF everywhere, Windows checkouts included: sources are embedded with
+# include_str! (framework JS, prompts, docs), so a CRLF checkout would build
+# different bytes than every other platform.
+* text=auto eol=lf
+# Applied byte-exact by scripts/patch-deps.sh.
 patches/*.patch -text

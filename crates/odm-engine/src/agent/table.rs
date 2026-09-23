@@ -289,9 +289,10 @@ mod tests {
         std::fs::write(root.join("package.json"), r#"{"bin": {"pkg-acp": "dist/index.js", "other": "x.js"}}"#).unwrap();
         let command = npm_command(dir.path(), "@scope/pkg", "pkg-acp").unwrap();
         assert!(Path::new(&command[0]).file_stem().is_some_and(|s| s == "node"), "{command:?}");
-        assert_eq!(command[1..], [root.join("dist/index.js").display().to_string()]);
+        assert_eq!(command.len(), 2);
+        assert_eq!(Path::new(&command[1]), root.join("dist/index.js"));
         std::fs::write(root.join("package.json"), r#"{"bin": "cli.js"}"#).unwrap();
-        assert_eq!(npm_command(dir.path(), "@scope/pkg", "pkg-acp").unwrap()[1], root.join("cli.js").display().to_string());
+        assert_eq!(Path::new(&npm_command(dir.path(), "@scope/pkg", "pkg-acp").unwrap()[1]), root.join("cli.js"));
         assert_eq!(npm_command(dir.path(), "@scope/pkg-missing", "pkg-acp"), None);
     }
 }
