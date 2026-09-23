@@ -1,2 +1,9 @@
 [alias]
 xtask = "run -q -p xtask --"
+
+# rusty_v8's prebuilt (its libc++, exception.obj) and Manifold's oneTBB
+# (task_group_context.obj, MSVC STL inlines) both define std::exception_ptr's
+# members. Both wrap the same vcruntime __ExceptionPtr* calls, so keeping
+# either copy is fine; the linker would otherwise stop at LNK2005.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/FORCE:MULTIPLE"]

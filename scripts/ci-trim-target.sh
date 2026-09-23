@@ -13,12 +13,15 @@ for prof in "$target"/*/ "$target"/*/*/; do
   rm -rf "$prof/incremental" "$prof/examples"
   for c in $locals; do
     u=$(printf '%s' "$c" | tr - _)
-    rm -rf "$prof/deps/$c"-* "$prof/deps/$u"-* "$prof/deps/lib$u"-* "$prof/deps/lib$u".* \
+    rm -rf "$prof/deps/$c"-* "$prof/deps/$u"-* "$prof/deps/lib$u"-* "$prof/deps/lib$u".* "$prof/deps/$u".* \
            "$prof/.fingerprint/$c"-* "$prof/build/$c"-*
   done
   # Integration-test binaries are named after the test file; external deps
-  # never produce extensionless files.
+  # never produce extensionless files, nor .exe (Windows), whose .pdb goes too.
   find "$prof/deps" -maxdepth 1 -type f ! -name '*.*' -delete
+  for exe in "$prof"/deps/*.exe; do
+    if [ -f "$exe" ]; then rm -f "$exe" "${exe%.exe}.pdb"; fi
+  done
   find "$prof/deps" -maxdepth 1 -name '*.d' -delete
 done
 du -sh "$target"

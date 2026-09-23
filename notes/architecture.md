@@ -835,12 +835,14 @@ freely with the managed agent.
   checked against the schema crate's v1 source. Rules:
   - Never write to the child with the state lock held (a full pipe
     blocks, and the reader needs the lock to make the agent drain it).
-  - Process: own process group (`process_group(0)`), `PR_SET_PDEATHSIG`
-    — which fires when the spawning *thread* dies, so the child is
-    spawned on the reader thread, which lives as long as its stdout.
-    PATH gets `current_exe()`'s dir prepended (the agent's `odm` is this
-    one). Shutdown: close stdin (both adapters exit 0 on it), 2 s, then
-    SIGKILL the group; the group is swept after every exit.
+  - Process (`process/{unix,windows}.rs`, one `Group` type): Unix = own
+    process group (`process_group(0)`) + Linux `PR_SET_PDEATHSIG` —
+    which fires when the spawning *thread* dies, so the child is spawned
+    on the reader thread, which lives as long as its stdout. Windows = a
+    Job Object (see Platforms). PATH gets `current_exe()`'s dir prepended
+    (the agent's `odm` is this one). Shutdown: close stdin (both adapters
+    exit 0 on it), 2 s, then kill the group; the group is swept after
+    every exit.
   - A turn ends with the `session/prompt` response, full stop — no timer
     watchdog (it would fake "done" during long thinking). Stop =
     `session/cancel` (+ open permission requests answered `cancelled`,
@@ -926,10 +928,13 @@ freely with the managed agent.
   - `table.rs`: built-in agents with pinned versions (bump per release;
     no registry fetch, no auto-update). claude-acp/codex-acp are npm
     adapters ODM installs — `npm install --prefix
-    ~/.local/share/odm/agents/<id>/`, only after a yes in a question box
+    <data_dir>/agents/<id>/`, only after a yes in a question box
     naming package@version and size, node ≥ 22 checked first; launched
-    from the installed bin, never `npx`. opencode/gemini run the user's
-    own binary from PATH. Custom = system-config command, run as given.
+    as `node <package's bin script>` (read from its package.json — no
+    `.bin` shims, which are sh on Unix and `.cmd` on Windows), never
+    `npx`. opencode/gemini run the user's own binary from PATH.
+    Custom = system-config command, run as given. Bare program names
+    resolve through `table::which` (PATHEXT on Windows) to a full path.
   - Tests (`agent/tests.rs`) drive the host against `odm-fake-agent
     --chat`, found next to the test binary — which only exists under
     `cargo test --workspace`. Test engines use `AgentHost::detached` so
@@ -1422,14 +1427,40 @@ asserting.
 
 ## Platforms
 
-Linux x86_64 is the only platform that has ever run. The ports are
-planned (`plans/windows.md`, `plans/macos.md`, executed in parallel); each
-port fills in its own subsection below — nothing else in this file should
-grow platform sections, so the two merges never touch the same lines.
+Linux (x86_64, aarch64), Windows (x86_64 MSVC) and macOS (Apple silicon)
+each have a CI lane running `cargo test --workspace`. Platform differences
+live in the subsections below, not scattered through this file.
 
 ### Windows
 
-Planned: `plans/windows.md`.
+`x86_64-pc-windows-msvc`. What differs from Unix:
+
+- **Agent lifetime**: `odm-agent/src/process/windows.rs`. A Job Object with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, created before the spawn; the child
+  is assigned right after `spawn()` returns. Kill = `TerminateJobObject`;
+  the handle lives in `Group`, and the OS closing it when the engine dies
+  kills the whole tree (stronger than Linux's PDEATHSIG, which reaches only
+  the direct child). Test: `the_agents_children_die_with_it` (grandchild via
+  the fake agent's `spawn_child`).
+- **Launching**: `table::which` tries each `PATHEXT` extension and returns
+  the full path — std runs a `.cmd`/`.bat` through cmd.exe given the full
+  path, but `Command::new("npm")` never finds `npm.cmd`. npm adapters run
+  as `node <bin script>` everywhere (no `.bin` shims).
+- **Dirs**: `%APPDATA%\odm\config.toml`, `%LOCALAPPDATA%\odm` (odm-config
+  `dirs()`, both branches unit-tested on every OS). `~` in Open Project
+  falls back to `USERPROFILE`.
+- **rpath**: none; `odm_dylib.dll` is found because cargo puts
+  `target\debug\deps` on PATH for `cargo run`/`cargo test`. Running
+  `target\debug\odm.exe` by hand needs that dir on PATH.
+- **Agent files**: `CLAUDE.md` is a second regular file, kept in step by
+  the marker update (not a symlink). A repo with the symlink cloned with
+  `core.symlinks=false` gets a text file reading `AGENTS.md`, which sync
+  reports unmarked. The splice keeps a CRLF file CRLF (autocrlf).
+- **Watcher**: event paths are matched against the root as given and
+  canonicalized (`\\?\` prefix; also macOS's /private/var).
+- **Case**: part names are exact on every OS (the scan's map); a
+  wrong-case `invoke` fails with both spellings named, so a project made on
+  NTFS/APFS does not break only on Linux.
 
 ### macOS
 
