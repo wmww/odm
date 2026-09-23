@@ -1224,7 +1224,7 @@ build-environment.md, "CI lanes".
 | linux-x86_64  | `ubuntu-latest`    | `ghcr.io/wmww/odm-build`    |
 | linux-arm64   | `ubuntu-24.04-arm` | same image, arm64           |
 | windows       | `windows-latest`   | none (red until the port)   |
-| macos         | `macos-15`         | none (red until the port)   |
+| macos         | `macos-15`         | none                        |
 
 - `test.yml` (`ref`, `lanes`, `real_adapters`): `cargo test --workspace`
   per lane — the same invocation as locally.
@@ -1330,6 +1330,13 @@ reclaim after a SIGKILL, and `odm docs`. ~13 engine spawns, under a second.
 Assert structure and exit codes only; wording is `cli_reference_is_current`'s
 job.
 
+`crates/odm/tests/viewer_smoke.rs` runs the viewer for real: `odm run` with
+the hidden `ODM_VIEWER_SMOKE=1` paints two frames, prints `viewer smoke:
+adapter …; window <Wayland|AppKit|Win32…>` and exits 0 (hook at the top of
+`ViewerApp::ui`). Always on for macOS/Windows (runners have a desktop); on
+Linux only with `ODM_TEST_VIEWER=1`, because the ambient display is usually
+the developer's own — run it inside a guibox session (~0.2 s).
+
 The web export has two native drift guards in the gate (odm-export
 `bundle.rs` tests): the `op_*` name sets in `odm-js/src/ops.rs` and
 `odm-web/src/executor.rs` must match, and this crate's mirror of odm-js's
@@ -1426,7 +1433,49 @@ Planned: `plans/windows.md`.
 
 ### macOS
 
-Planned: `plans/macos.md`.
+Apple silicon only (`aarch64-apple-darwin`; Intel is release.md's "later").
+The Unix code paths apply unchanged; everything below is what differs.
+
+- **rpath**: `crates/odm/build.rs` emits `@loader_path` (+`/deps`) and the
+  toolchain libdir per `CARGO_CFG_TARGET_OS` (`$ORIGIN` on Linux, nothing on
+  Windows). `libstd-*.dylib` is `@rpath/…`, so the libdir entry is what makes
+  `target/debug/odm` run standalone. `libodm_dylib.dylib`'s install name is
+  its absolute build path (rustc sets no `@rpath` name for `dylib` crates),
+  so the dev binary is not relocatable at all; irrelevant, since shipping is
+  static.
+- **Dirs**: the XDG layout (`~/.config/odm`, `~/.local/share/odm`), not
+  `~/Library`; odm-config's `xdg()` already falls back to `$HOME` paths, and
+  the README says so.
+- **Agent lifetime**: no `PR_SET_PDEATHSIG`. A clean shutdown kills the
+  process group; a *killed* engine relies on the adapters exiting on stdin
+  EOF. The Windows port adds the test that pins that contract
+  (odm-agent/tests/client.rs); not yet run on this lane.
+- **Transport**: `GenericNamespaced` → `/tmp/<name>`; e2e's tempdirs live
+  under the long per-user `$TMPDIR`, which the path-length-free transport
+  handles (e2e green on the lane).
+- **GPU**: the runner's `Apple Paravirtual device (Metal, IntegratedGpu)` is
+  a real Metal adapter, so render tests run (the macOS lane sets no
+  `ODM_TEST_EXPECT_ADAPTER`).
+- **Viewer**: winit reports `AppKit`. Checked on the lane (2026-09-23) with
+  `screencapture` and System Events via `osascript`: renders correctly,
+  0% CPU idle, ~0 CPU while hidden (`SlowIdle` is harmless here), the close
+  button exits 0 at once. winit adds a native app menu (Quit/Hide); egui's
+  own menu bar is inside the window. No `.app` bundle, so a generic Dock
+  icon.
+- **deno_core snapshot use-after-free** (fixed by `patches/`, see
+  build-environment.md "Patched crates"): `JsRuntimeForSnapshot::snapshot`
+  drops `ContextState` in `prepare_for_snapshot`, then `create_blob`
+  serializes the tick/immediate/timer typed arrays whose external backing
+  stores point into it (no-op deleters). On Linux nothing noticed (clean even
+  under preloaded ASan); on macOS ~8% of `odm-js runtime` / `odm-build suite`
+  runs aborted at some later isolate teardown in `~BackingStore` with
+  `malloc: pointer being freed was not allocated`, on a random test.
+  Guard Malloc (`DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib`) faults
+  deterministically in `SerializeBackingStore` during `JsEnv::new`. Found via
+  nimbus/nimbus#365, which hit the same bug. Unfixed upstream as of
+  deno_core 0.412. Debugging recipe that worked on the lane: lldb batch
+  with `MallocStackLogging=1`, at the abort read x19 in `~BackingStore`
+  (buffer_start_, byte_length…) and run `malloc_history <pid> <addr>`.
 
 ## Remaining manual checks
 

@@ -168,6 +168,25 @@ Hard-won constraints, in dependency order:
   third feature universe; sweep-target.py enumerates it explicitly so a sweep
   doesn't GC the installed flavor's artifacts.
 
+## Patched crates (`patches/`, `vendor/`)
+
+Stable cargo can't apply patch files (`-Zpatch-files` is nightly), and the
+user wants only the patch committed, not the crate. So `[patch.crates-io]`
+points at gitignored `vendor/<name>`, and `scripts/patch-deps.sh`
+materializes it: downloads the exact `.crate` from static.crates.io, checks
+the sha256 (the old Cargo.lock checksum, hardcoded in the script), `git
+apply`s `patches/<name>-<version>.patch`, writes a stamp (patch hash +
+version) so reruns are no-ops. Called by `.wt-hooks/create`, install.sh and
+both workflows; a fresh clone that skips it fails at resolution with a
+missing `vendor/<name>/Cargo.toml`. `vendor` is in the workspace `exclude`
+(path deps under the root would otherwise become members), and each patch
+adds `[lints.rust] warnings = "allow"` (cargo shows and replays lints of path
+deps). To bump a patched crate: new patch file named for the new version,
+update the script's line, `cargo update -p`.
+
+Current: **deno_core 0.408.0** — snapshot use-after-free (architecture.md,
+Platforms ▸ macOS). Drop it when an upstream release fixes it (0.412 hasn't).
+
 ## mold / sccache: installed, deliberately unused
 
 Both would force a full rebuild to adopt: `RUSTFLAGS` and `RUSTC_WRAPPER` are
@@ -281,4 +300,15 @@ odm-agent's `process.rs` (`process_group`, `libc::SIGKILL`: Unix-only).
 
 `macos-15` (2026-09-22 self-test): arm64 (`aarch64-apple-darwin`), 43 GiB
 free, no `nproc` (use `sysctl -n hw.ncpu`), node 22.23, cmake 4.4. `cargo
-build --workspace` cold succeeds as is: 7m49.
+build --workspace` cold succeeds as is: 7m49 (9m13 on a later run).
+GPU: `Apple Paravirtual device (Metal, IntegratedGpu)`, real Metal.
+
+Debugging on it (2026-09-23): lldb works in `--batch` mode, but test
+binaries run outside cargo need
+`DYLD_LIBRARY_PATH=$(rustc --print target-libdir):target/debug/deps` (via
+`settings set target.env-vars …`; dyld otherwise aborts on `@rpath/libstd`).
+Crash reports land in `~/Library/Logs/DiagnosticReports/*.ips` (JSON after
+the first line). `screencapture -x` works, and so does `osascript` driving
+System Events (hide/show/click a window's AXCloseButton): the runner grants
+accessibility. Intermittent failures need loops: the deno_core abort hit
+~1 run in 12, so a fix needs ~60 clean runs to count.

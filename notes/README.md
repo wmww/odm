@@ -32,7 +32,8 @@
   stacks, and web-viewer options (July 2026, with sources). The evidence base
   behind design-decisions.
 - `build-environment.md` — machine facts; per-checkout target dirs (seeding,
-  why sharing corrupts), sweeping stale artifacts, why mold/sccache stay off,
+  why sharing corrupts), sweeping stale artifacts, patched crates (`patches/` +
+  `scripts/patch-deps.sh`), why mold/sccache stay off,
   the CI image/cache and reproducing a lane with podman, per-lane facts.
 - `agent-integration-research-2026-09.md` — ACP as the agent-agnostic
   protocol for an ODM-managed agent panel, which agents speak it and how,

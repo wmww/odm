@@ -1,0 +1,2 @@
+# Applied byte-exact by scripts/patch-deps.sh; no CRLF conversion on Windows.
+patches/*.patch -text
