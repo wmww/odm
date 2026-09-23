@@ -28,15 +28,16 @@
 //! `ODM_TEST_TIMEOUT_SCALE` (CI) multiplies them back up.
 
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::Duration;
 
 struct Wire {
     incoming: Receiver<Option<Value>>,
-    /// method → id of the client's last request of it.
-    requests: HashMap<String, Value>,
+    /// method → ids of the client's unanswered requests of it, oldest first
+    /// (steering messages can pile up before the script answers them).
+    requests: HashMap<String, VecDeque<Value>>,
     next_id: u64,
     eof: bool,
 }
@@ -63,7 +64,7 @@ impl Wire {
 
     fn note(&mut self, msg: &Value) {
         if let (Some(method), Some(id)) = (msg.get("method").and_then(Value::as_str), msg.get("id")) {
-            self.requests.insert(method.to_owned(), id.clone());
+            self.requests.entry(method.to_owned()).or_default().push_back(id.clone());
         }
     }
 
@@ -98,10 +99,11 @@ impl Wire {
     }
 
     fn reply(&mut self, method: &str, body: (&str, Value)) {
-        if !self.requests.contains_key(method) {
-            self.wait_for(|w, _| w.requests.contains_key(method), method);
+        let pending = |w: &Wire| w.requests.get(method).is_some_and(|ids| !ids.is_empty());
+        if !pending(self) {
+            self.wait_for(|w, _| pending(w), method);
         }
-        let id = self.requests.remove(method).expect("just seen");
+        let id = self.requests.get_mut(method).and_then(VecDeque::pop_front).expect("just seen");
         self.send(json!({"jsonrpc": "2.0", "id": id, body.0: body.1}));
     }
 

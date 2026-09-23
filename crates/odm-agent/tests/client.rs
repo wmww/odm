@@ -323,6 +323,14 @@ fn the_agents_children_die_with_it() {
 /// Polled: a killed process lingers briefly (a zombie until reaped).
 #[cfg(unix)]
 fn alive(pid: u32) -> bool {
+    // A zombie is dead. It may stay one for good: in a container, PID 1 need
+    // not reap orphans.
+    #[cfg(target_os = "linux")]
+    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        && let Some((_, rest)) = stat.rsplit_once(')')
+    {
+        return rest.split_whitespace().next() != Some("Z");
+    }
     // SAFETY: signal 0 only checks; a gone pid fails with ESRCH.
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }

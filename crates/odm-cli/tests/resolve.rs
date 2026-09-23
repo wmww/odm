@@ -5,7 +5,7 @@ use odm_cli::{find_project, is_project, project_dir};
 /// `root/proj/{odm.toml,a/b}` in a fresh tempdir, canonicalized.
 fn project_tree() -> (tempfile::TempDir, std::path::PathBuf) {
     let root = tempfile::tempdir().unwrap();
-    let proj = root.path().canonicalize().unwrap().join("proj");
+    let proj = odm_config::canonical(root.path()).unwrap().join("proj");
     std::fs::create_dir_all(proj.join("a/b")).unwrap();
     std::fs::write(proj.join("odm.toml"), "name = \"p\"\nengine = 0\n").unwrap();
     (root, proj)
