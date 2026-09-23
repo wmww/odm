@@ -262,9 +262,8 @@ incremental/, uplifted files and workspace-crate artifacts (the seed-target
 purge). A hit therefore stays valid across commits until a dep, toolchain or
 image changes. The build is a separate `cargo test --workspace --no-run` step
 (same invocation shape, same artifacts) so a failing test still saves a warm
-cache. `run.yml` only restores. The trim's extensionless-binary rule is
-Unix-shaped: Windows test exes (`.exe`) and `.pdb`s survive it; the Windows
-plan should extend it if that lane's cache is too big.
+cache. `run.yml` only restores. The trim also drops `deps/*.exe` (+ their
+`.pdb`) and the workspace crates' unhashed `deps/<crate>.*` (Windows).
 
 `ODM_TEST_TIMEOUT_SCALE=4` stretches fixed test deadlines (odm-agent's client
 tests, the engine's agent tests, the fake agent's pauses);
@@ -290,11 +289,31 @@ locally. The GHCR package came out public without touching its settings.
 
 ### Windows lane
 
-`windows-latest` (2026-09-22 self-test): 4 cores, 147 GB free on `D:` (the
-workspace), MINGW64 bash, node 22.23, cmake 4.4; rustup auto-installs the
-pinned 1.93.0 msvc toolchain from `rust-toolchain.toml`. `cargo build
---workspace` cold got through V8/Manifold and failed ~15 min in at
-odm-agent's `process.rs` (`process_group`, `libc::SIGKILL`: Unix-only).
+`windows-latest`: 4 cores, 147 GB free on `D:` (the workspace), MINGW64 bash,
+node 22.23, cmake 4.4, MSVC 14.51 (VS 18); rustup auto-installs the pinned
+msvc toolchain. GPU: none — wgpu picks WARP on its own (`Microsoft Basic
+Render Driver (Dx12, Cpu)`, pinned by `ODM_TEST_EXPECT_ADAPTER`); the viewer
+runs on it too (winit `Win32`, 1024×768 desktop). Timings (2026-09-23): cold
+`cargo test --workspace --no-run` 17 min, warm ~3 min; tests ~20 s;
+real_adapters ~1.5 min; trimmed cache 0.74 GB.
+
+- **Link**: rusty_v8's prebuilt and Manifold's oneTBB both define
+  `std::exception_ptr`'s members (LNK2005); `.cargo/config.toml` passes
+  `/FORCE:MULTIPLE` for the msvc target (both copies wrap the same vcruntime
+  calls). Revisit if either dep changes how it links its C++ runtime.
+- **Line endings**: `.gitattributes` forces LF everywhere; a CRLF checkout
+  embedded CRLF docs/prompts via `include_str!` (docs/cli.md's reference
+  test failed on it).
+- **Local cross-check** (no Windows box): `cargo xwin check --workspace
+  --all-targets --target x86_64-pc-windows-msvc --target-dir <scratch>`
+  (`cargo install cargo-xwin`; needs clang-cl; first run downloads the MSVC
+  CRT/SDK, ~1 GB, into `~/.cache/cargo-xwin`). Catches Rust-side errors in
+  under a minute; linking and tests still need the lane.
+- **Screenshot** via run.yml: build, `cargo run -q -- run <proj> &` (cargo
+  puts `target\debug\deps` and the toolchain's `std-*.dll` on PATH — bare
+  `target\debug\odm.exe` finds neither), sleep, then PowerShell
+  `System.Drawing` `CopyFromScreen` into `target/ci-out/`; `typeperf
+  "\Process(odm)\% Processor Time"` for idle CPU (0% when checked).
 
 ### macOS lane
 

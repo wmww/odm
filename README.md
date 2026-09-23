@@ -17,7 +17,7 @@ Features:
 
 To build and install under `$HOME/.local/bin` clone this repo and run `scripts/install.sh`. Official release and pre-built binaries coming soon.
 
-Runs on Linux and macOS (Apple silicon). Config lives in `~/.config/odm/config.toml` and data in `~/.local/share/odm/` on both (the XDG layout, `$XDG_CONFIG_HOME`/`$XDG_DATA_HOME` honored); macOS uses the same paths rather than `~/Library`.
+Runs on Linux, macOS (Apple silicon) and Windows (x86_64). Config lives in `~/.config/odm/config.toml` and data in `~/.local/share/odm/` on Linux and macOS (the XDG layout, `$XDG_CONFIG_HOME`/`$XDG_DATA_HOME` honored); macOS uses the same paths rather than `~/Library`. On Windows they are `%APPDATA%\odm\config.toml` and `%LOCALAPPDATA%\odm\`.
 
 ## Developing
 

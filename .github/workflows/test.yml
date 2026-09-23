@@ -38,7 +38,7 @@ jobs:
           all=$(jq -nc --arg image "$image" --arg tag "$TAG" '[
             {lane: "linux-x86_64", os: "ubuntu-latest", container: $image, env_key: $tag, adapter: "llvmpipe"},
             {lane: "linux-arm64", os: "ubuntu-24.04-arm", container: $image, env_key: $tag, adapter: "llvmpipe"},
-            {lane: "windows", os: "windows-latest", container: "", env_key: "runner", adapter: ""},
+            {lane: "windows", os: "windows-latest", container: "", env_key: "runner", adapter: "Microsoft Basic Render Driver"},
             {lane: "macos", os: "macos-15", container: "", env_key: "runner", adapter: ""}]')
           case "$LANES" in
             all) pick='.' ;;

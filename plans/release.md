@@ -4,10 +4,9 @@ How ODM (public on GitHub since before 2026-09-22) gets its first
 versioned, installable release, and how every release after it is cut. Written 2026-09-17
 from a release-process discussion; decisions marked (user) are theirs.
 
-**Order (2026-09-22):** `transport.md` + `ci.md` (in parallel) →
-`windows.md` + `macos.md` (in parallel) → **this plan last**. The release workflow reuses the test
-lanes, container and `run.yml` loop those plans build; nothing here starts
-until all four lanes are green.
+**Order:** every prerequisite is done — all four lanes green on
+`test.yml` since 2026-09-23 (architecture.md "Platforms"). The release
+workflow reuses the test lanes, container and `run.yml` loop.
 
 ## Decisions
 
@@ -120,9 +119,10 @@ All decided (see Decisions). Remaining paperwork:
 
 ## Checklist: release mechanics
 
-- [ ] **Container and test lanes**: Linux done (Ubuntu 22.04 image, glibc
-      2.35 floor; architecture.md "CI"), extended by `windows.md` and
-      `macos.md`. The release workflow runs on the same four lanes.
+- [x] **Container and test lanes**: Linux (Ubuntu 22.04 image, glibc
+      2.35 floor), Windows, macOS — architecture.md "CI". The release
+      workflow runs on the same four lanes. Windows links with
+      `/FORCE:MULTIPLE` (build-environment.md "Windows lane").
 - [ ] **`release.yml`** (`workflow_dispatch`, input: version): a Linux
       x86_64 job builds the web template once (wasm, host-independent)
       and uploads it as an artifact; each lane then downloads it, builds

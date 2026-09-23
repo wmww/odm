@@ -4,7 +4,7 @@
   per-crate gotchas, viewer fonts/icons/tree, the managed agent panel (ACP
   client, config, transcript, diagnostics push), feedback, STL export,
   invariants, testing (what earns a test here, the suites, the opt-in lanes, CI), seeing
-  the viewer. Start here.
+  the viewer, per-platform differences (Windows, macOS). Start here.
 - `api-stability-and-docs.md` — versioning (JS API + the integer engine
   version): the rationale behind
   `docs/versioning.md` and the implementation map (pragma, one-snapshot
@@ -34,7 +34,8 @@
 - `build-environment.md` — machine facts; per-checkout target dirs (seeding,
   why sharing corrupts), sweeping stale artifacts, patched crates (`patches/` +
   `scripts/patch-deps.sh`), why mold/sccache stay off,
-  the CI image/cache and reproducing a lane with podman, per-lane facts.
+  the CI image/cache and reproducing a lane with podman, per-lane facts
+  (incl. the Windows link workaround and the `cargo xwin` cross-check).
 - `agent-integration-research-2026-09.md` — ACP as the agent-agnostic
   protocol for an ODM-managed agent panel, which agents speak it and how,
   and the (paused) Anthropic Agent SDK billing change that makes the

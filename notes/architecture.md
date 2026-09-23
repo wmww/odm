@@ -1228,7 +1228,7 @@ build-environment.md, "CI lanes".
 |---------------|--------------------|-----------------------------|
 | linux-x86_64  | `ubuntu-latest`    | `ghcr.io/wmww/odm-build`    |
 | linux-arm64   | `ubuntu-24.04-arm` | same image, arm64           |
-| windows       | `windows-latest`   | none (red until the port)   |
+| windows       | `windows-latest`   | none                        |
 | macos         | `macos-15`         | none                        |
 
 - `test.yml` (`ref`, `lanes`, `real_adapters`): `cargo test --workspace`
@@ -1449,9 +1449,20 @@ live in the subsections below, not scattered through this file.
 - **Dirs**: `%APPDATA%\odm\config.toml`, `%LOCALAPPDATA%\odm` (odm-config
   `dirs()`, both branches unit-tested on every OS). `~` in Open Project
   falls back to `USERPROFILE`.
-- **rpath**: none; `odm_dylib.dll` is found because cargo puts
-  `target\debug\deps` on PATH for `cargo run`/`cargo test`. Running
-  `target\debug\odm.exe` by hand needs that dir on PATH.
+- **rpath**: none; `odm_dylib.dll` and `std-*.dll` are found because cargo
+  puts `target\debug\deps` and the toolchain's DLL dir on PATH for `cargo
+  run`/`cargo test`. Running `target\debug\odm.exe` by hand needs both.
+- **Paths**: `odm_config::canonical` (used for the project dir by the CLI
+  and `Session::open`) drops the `\\?\` verbatim prefix from drive paths:
+  it leaked into the UI and the agent's cwd (cmd.exe refuses UNC cwds).
+- **GPU**: no GPU on the runner; wgpu enumerates WARP as a Cpu-type adapter
+  and picks it unasked. `Renderer::new` still retries with
+  `force_fallback_adapter` (adapter string gains `, fallback`).
+- **Viewer**: checked on the lane (2026-09-23): renders on WARP, 0% CPU
+  idle. The default window is wider than the runner's 1024×768 desktop.
+- **Unverified**: Codex's Windows sandbox vs the named-pipe transport (the
+  mailbox fallback covers it either way); real_adapters runs logged out, so
+  it never reaches a sandboxed `odm` call.
 - **Agent files**: `CLAUDE.md` is a second regular file, kept in step by
   the marker update (not a symlink). A repo with the symlink cloned with
   `core.symlinks=false` gets a text file reading `AGENTS.md`, which sync
@@ -1479,8 +1490,10 @@ The Unix code paths apply unchanged; everything below is what differs.
   the README says so.
 - **Agent lifetime**: no `PR_SET_PDEATHSIG`. A clean shutdown kills the
   process group; a *killed* engine relies on the adapters exiting on stdin
-  EOF. The Windows port adds the test that pins that contract
-  (odm-agent/tests/client.rs); not yet run on this lane.
+  EOF, pinned by `closing_stdin_ends_the_agent` (green on the lane).
+- **Case-insensitive APFS**: `part_names_are_case_exact` and the FSEvents
+  watcher test (`the_watcher_rebuilds_without_any_query`, no extra timeout
+  scaling needed) green on the lane, 2026-09-23.
 - **Transport**: `GenericNamespaced` → `/tmp/<name>`; e2e's tempdirs live
   under the long per-user `$TMPDIR`, which the path-length-free transport
   handles (e2e green on the lane).
