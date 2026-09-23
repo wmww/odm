@@ -11,6 +11,8 @@ test = true
 
 [dependencies]
 odm-prompt = { path = "../odm-prompt" }
+# canonical(): project paths without Windows' \\?\ prefix.
+odm-config = { path = "../odm-config" }
 serde_json = "1"
 anyhow.workspace = true
 # The engine's local socket (odm-engine's server.rs).

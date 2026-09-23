@@ -49,6 +49,21 @@ pub fn data_dir() -> Option<PathBuf> {
     dirs(cfg!(windows), env).1
 }
 
+/// `path.canonicalize()`, minus Windows' `\\?\` prefix on a plain drive
+/// path: that form leaks into what users read and becomes the agent's cwd,
+/// which cmd.exe refuses. Long paths (MAX_PATH and up) keep it.
+pub fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+    let path = path.canonicalize()?;
+    Ok(strip_verbatim(&path.to_string_lossy()).map(PathBuf::from).unwrap_or(path))
+}
+
+fn strip_verbatim(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    let drive = rest.as_bytes();
+    (drive.len() < 260 && drive.len() >= 3 && drive[0].is_ascii_alphabetic() && &drive[1..3] == br":\")
+        .then_some(rest)
+}
+
 pub fn project_path(project: &Path) -> PathBuf {
     project.join(".odm/config.toml")
 }
@@ -356,6 +371,13 @@ fn edit(path: &Path, change: impl FnOnce(&mut DocumentMut)) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_drive_paths_lose_the_prefix() {
+        assert_eq!(strip_verbatim(r"\\?\D:\a\odm"), Some(r"D:\a\odm"));
+        assert_eq!(strip_verbatim(r"\\?\UNC\server\share"), None);
+        assert_eq!(strip_verbatim("/home/u"), None);
+    }
 
     #[test]
     fn user_dirs_per_platform() {

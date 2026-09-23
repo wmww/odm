@@ -2824,6 +2824,7 @@ dependencies = [
  "anyhow",
  "include_dir",
  "interprocess",
+ "odm-config",
  "odm-dylib",
  "odm-prompt",
  "serde_json",

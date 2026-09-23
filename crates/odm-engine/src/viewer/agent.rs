@@ -59,9 +59,11 @@ impl AgentDialog {
                 "Add",
             ),
             AgentQuestion::CreateFiles => (
-                "Create AGENTS.md with the standard ODM instructions? \
-                 (CLAUDE.md is created as a link to it.)"
-                    .to_owned(),
+                format!(
+                    "Create AGENTS.md with the standard ODM instructions? \
+                     (CLAUDE.md is created as {}.)",
+                    if cfg!(unix) { "a link to it" } else { "a copy of it" }
+                ),
                 "They will be kept up to date automatically.",
                 "Create",
             ),

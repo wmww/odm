@@ -353,8 +353,7 @@ pub fn is_project(dir: &Path) -> bool {
 /// "no engine, start one" instead of reaching past it to whichever project
 /// further up happens to be running.
 pub fn find_project(start: PathBuf) -> anyhow::Result<PathBuf> {
-    let start = start
-        .canonicalize()
+    let start = odm_config::canonical(&start)
         .with_context(|| format!("cannot read {}", start.display()))?;
     let mut dir = start.clone();
     loop {
@@ -374,8 +373,7 @@ pub fn find_project(start: PathBuf) -> anyhow::Result<PathBuf> {
 /// Canonical path to the project directory `path` names — exactly that dir, no
 /// walking: what `--project` and `odm run` are given is taken at face value.
 pub fn project_dir(path: PathBuf) -> anyhow::Result<PathBuf> {
-    let dir = path
-        .canonicalize()
+    let dir = odm_config::canonical(&path)
         .with_context(|| format!("cannot open project {}", path.display()))?;
     if !is_project(&dir) {
         // No hint about walking up: this is the path someone named, and naming

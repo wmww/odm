@@ -68,8 +68,7 @@ impl Sessions {
     /// Serve `project` instead. On any error the current project is still
     /// being served and nothing has moved.
     pub fn open(&self, project: &Path) -> Result<Arc<EngineState>, String> {
-        let project = project
-            .canonicalize()
+        let project = odm_config::canonical(project)
             .map_err(|e| format!("cannot open {}: {e}", project.display()))?;
         if !project.is_dir() {
             return Err(format!("{} is not a directory", project.display()));
