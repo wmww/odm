@@ -17,6 +17,8 @@ Features:
 
 To build and install under `$HOME/.local/bin` clone this repo and run `scripts/install.sh`. Official release and pre-built binaries coming soon.
 
+Runs on Linux and macOS (Apple silicon). Config lives in `~/.config/odm/config.toml` and data in `~/.local/share/odm/` on both (the XDG layout, `$XDG_CONFIG_HOME`/`$XDG_DATA_HOME` honored); macOS uses the same paths rather than `~/Library`.
+
 ## Developing
 
 `cargo test --workspace` is the gate. CI is GitHub Actions, manual trigger only (push the commit first):
