@@ -100,13 +100,20 @@ impl Renderer {
     /// Create with an own device on any available adapter.
     pub fn new() -> Result<Renderer, RenderError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = futures::executor::block_on(instance.request_adapter(
-            &wgpu::RequestAdapterOptions {
+        let request = |force_fallback_adapter| {
+            futures::executor::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter,
                 ..Default::default()
-            },
-        ))
-        .map_err(|e| RenderError::NoAdapter(e.to_string()))?;
+            }))
+        };
+        // No GPU: a software rasterizer (WARP, lavapipe) if one is there.
+        // wgpu already picks a CPU adapter when it is the only one; this is
+        // for backends that only expose theirs on request.
+        let (adapter, fallback) = match request(false) {
+            Ok(adapter) => (adapter, false),
+            Err(e) => (request(true).map_err(|_| RenderError::NoAdapter(e.to_string()))?, true),
+        };
 
         let (device, queue) = futures::executor::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -121,6 +128,9 @@ impl Renderer {
         let info = adapter.get_info();
         let mut renderer = Self::with_device(device, queue);
         renderer.adapter = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
+        if fallback {
+            renderer.adapter.push_str(", fallback");
+        }
         Ok(renderer)
     }
 

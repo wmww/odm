@@ -138,27 +138,42 @@ pub fn resolve(id: &str, config: &AgentConfig) -> Result<Resolved, Problem> {
     let Some(agent) = built_in(id) else {
         let custom = config.custom.as_ref().filter(|_| id == odm_config::CUSTOM);
         let custom = custom.ok_or_else(|| Problem::Unknown(id.to_owned()))?;
-        return Ok(Resolved { command: custom.command.clone(), env: custom.env.clone(), meta: None });
+        let mut command = custom.command.clone();
+        // A bare name gets the same lookup as the built-ins; anything else
+        // is left for the spawn to report.
+        if let Some(program) = command.first_mut()
+            && let Some(found) = which(program)
+        {
+            *program = found.display().to_string();
+        }
+        return Ok(Resolved { command, env: custom.env.clone(), meta: None });
     };
     let command = match &agent.source {
         Source::Npm { package, bin, .. } => {
             let dir = install_dir(id).ok_or(Problem::NotInstalled(agent.title))?;
             installed_version(&dir, package).ok_or(Problem::NotInstalled(agent.title))?;
-            npm_command(&dir, bin)
+            npm_command(&dir, package, bin).ok_or(Problem::NotInstalled(agent.title))?
         }
         Source::Path { program, args } => {
-            if !on_path(program) {
-                return Err(Problem::NotOnPath(program));
-            }
-            std::iter::once(*program).chain(args.iter().copied()).map(str::to_owned).collect()
+            let found = which(program).ok_or(Problem::NotOnPath(program))?;
+            std::iter::once(found.display().to_string()).chain(args.iter().map(|&a| a.to_owned())).collect()
         }
     };
     Ok(Resolved { command, env: Default::default(), meta: session_meta(id) })
 }
 
-/// How to run an npm adapter's `bin` installed under `dir`.
-pub fn npm_command(dir: &Path, bin: &str) -> Vec<String> {
-    vec![dir.join("node_modules/.bin").join(bin).display().to_string()]
+/// How to run an npm adapter's `bin` installed under `dir`: `node` on the
+/// script its package.json names — not `node_modules/.bin`, which holds a
+/// shell script on Unix and a `.cmd` shim on Windows.
+pub fn npm_command(dir: &Path, package: &str, bin: &str) -> Option<Vec<String>> {
+    let root = dir.join("node_modules").join(package);
+    let manifest: Value = serde_json::from_str(&std::fs::read_to_string(root.join("package.json")).ok()?).ok()?;
+    let script = match manifest.get("bin")? {
+        Value::String(script) => script,
+        bins => bins.get(bin)?.as_str()?,
+    };
+    let node = which("node").map_or_else(|| "node".to_owned(), |p| p.display().to_string());
+    Some(vec![node, root.join(script).display().to_string()])
 }
 
 /// `odm` commands and in-project edits never ask: allow rules handed to the
@@ -179,8 +194,30 @@ fn session_meta(id: &str) -> Option<Value> {
 }
 
 pub fn on_path(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else { return false };
-    std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
+    which(program).is_some()
+}
+
+/// Where PATH finds `program`, extension included: on Windows it is tried
+/// with each `PATHEXT` extension, since `Command::new("npm")` cannot find
+/// `npm.cmd` but runs it fine given the full path.
+pub fn which(program: &str) -> Option<PathBuf> {
+    let mut exts = vec![String::new()];
+    if cfg!(windows) {
+        if Path::new(program).extension().is_none() {
+            exts.clear();
+        }
+        let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
+        exts.extend(pathext.split(';').filter(|e| !e.is_empty()).map(str::to_owned));
+    }
+    which_in(program, &std::env::var_os("PATH")?, &exts)
+}
+
+fn which_in(program: &str, path: &std::ffi::OsStr, exts: &[String]) -> Option<PathBuf> {
+    std::env::split_paths(path).find_map(|dir| {
+        // Lowercased: Windows matches either way, and a test on a
+        // case-sensitive filesystem finds `tool.cmd` for `.CMD`.
+        exts.iter().map(|ext| dir.join(format!("{program}{}", ext.to_lowercase()))).find(|p| p.is_file())
+    })
 }
 
 /// node ≥ 22 and npm, or what is missing — checked before the install
@@ -213,7 +250,8 @@ pub fn install_into(id: &str, dir: &Path) -> Result<(), String> {
         return Err(format!("{} is not installed by ODM", agent.title));
     };
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let out = std::process::Command::new("npm")
+    let npm = which("npm").ok_or("npm is needed and was not found on PATH")?;
+    let out = std::process::Command::new(npm)
         .args(["install", "--no-fund", "--no-audit", "--prefix"])
         .arg(dir)
         .arg(format!("{package}@{version}"))
@@ -226,4 +264,34 @@ pub fn install_into(id: &str, dir: &Path) -> Result<(), String> {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let tail: Vec<&str> = stderr.lines().rev().take(6).collect();
     Err(format!("npm install failed:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn which_tries_pathext_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("tool.cmd");
+        std::fs::write(&tool, "").unwrap();
+        let path = std::env::join_paths([dir.path().join("missing"), dir.path().to_owned()]).unwrap();
+        let exts = [".EXE".to_owned(), ".CMD".to_owned()];
+        assert_eq!(which_in("tool", &path, &exts), Some(tool));
+        assert_eq!(which_in("other", &path, &exts), None);
+    }
+
+    #[test]
+    fn npm_bins_run_their_script_under_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("node_modules/@scope/pkg");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("package.json"), r#"{"bin": {"pkg-acp": "dist/index.js", "other": "x.js"}}"#).unwrap();
+        let command = npm_command(dir.path(), "@scope/pkg", "pkg-acp").unwrap();
+        assert!(Path::new(&command[0]).file_stem().is_some_and(|s| s == "node"), "{command:?}");
+        assert_eq!(command[1..], [root.join("dist/index.js").display().to_string()]);
+        std::fs::write(root.join("package.json"), r#"{"bin": "cli.js"}"#).unwrap();
+        assert_eq!(npm_command(dir.path(), "@scope/pkg", "pkg-acp").unwrap()[1], root.join("cli.js").display().to_string());
+        assert_eq!(npm_command(dir.path(), "@scope/pkg-missing", "pkg-acp"), None);
+    }
 }

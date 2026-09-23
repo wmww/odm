@@ -69,7 +69,7 @@ fn real_adapters_start_logged_out_and_die_cleanly() {
         let project = dir.path().join("project");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&project).unwrap();
-        let mut launch = Launch::new(table::npm_command(&install, bin), project);
+        let mut launch = Launch::new(table::npm_command(&install, package, bin).unwrap(), project);
         let home_str = home.display().to_string();
         for var in ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
             launch.env.insert(var.into(), home_str.clone());
@@ -79,7 +79,7 @@ fn real_adapters_start_logged_out_and_die_cleanly() {
         }
         launch.exit_grace = scaled(Duration::from_secs(2));
         let (live, events) = Agent::spawn(launch, SessionOptions::default(), std::sync::Arc::new(|| {})).unwrap();
-        let pgid = live.pid();
+        let pid = live.pid();
 
         let mut seen = until(&events, "initialize", |e| matches!(e, Event::Initialized(_)));
         // Logged out shows at session/new, or — for an adapter that makes
@@ -93,6 +93,10 @@ fn real_adapters_start_logged_out_and_die_cleanly() {
             live.prompt(vec![json!({"type": "text", "text": "hi"})]);
             seen.extend(until(&events, "the first turn", |e| matches!(e, Event::TurnEnded { .. })));
         }
+        // Windows keeps no process groups to look up afterwards: collect
+        // the tree now, while it is running.
+        #[cfg(windows)]
+        let tree = windows::tree(pid);
         let auth = match seen.last() {
             Some(Event::SessionFailed { auth_required, .. }) => *auth_required,
             Some(Event::TurnEnded { stop_reason }) => stop_reason.to_lowercase().contains("auth"),
@@ -105,13 +109,68 @@ fn real_adapters_start_logged_out_and_die_cleanly() {
         let Some(Event::Exited { reason, .. }) = exit.last() else { unreachable!() };
         assert_eq!(*reason, ExitReason::Shutdown, "{}", agent.id);
         #[cfg(target_os = "linux")]
+        let left = || group_alive(pid);
+        #[cfg(windows)]
+        let left = || tree.iter().copied().filter(|&pid| windows::alive(pid)).collect::<Vec<_>>();
+        #[cfg(any(target_os = "linux", windows))]
         {
             let deadline = Instant::now() + scaled(Duration::from_secs(2));
-            while !group_alive(pgid).is_empty() && Instant::now() < deadline {
+            while !left().is_empty() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(20));
             }
-            let left = group_alive(pgid);
+            let left = left();
             assert!(left.is_empty(), "{}: outlived shutdown: {left:?}", agent.id);
+        }
+    }
+}
+
+#[cfg(windows)]
+mod windows {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE, STILL_ACTIVE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    /// `pid` and every process descended from it.
+    pub fn tree(pid: u32) -> Vec<u32> {
+        let mut edges = Vec::new();
+        // SAFETY: plain Win32 calls; the snapshot handle is closed at the end.
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            assert!(snap != INVALID_HANDLE_VALUE);
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+            let mut more = Process32FirstW(snap, &mut entry) != 0;
+            while more {
+                edges.push((entry.th32ParentProcessID, entry.th32ProcessID));
+                more = Process32NextW(snap, &mut entry) != 0;
+            }
+            CloseHandle(snap);
+        }
+        let mut tree = vec![pid];
+        let mut i = 0;
+        while i < tree.len() {
+            let parent = tree[i];
+            let children: Vec<u32> =
+                edges.iter().filter(|&&(p, c)| p == parent && !tree.contains(&c)).map(|&(_, c)| c).collect();
+            tree.extend(children);
+            i += 1;
+        }
+        tree
+    }
+
+    pub fn alive(pid: u32) -> bool {
+        // SAFETY: plain Win32 calls; the handle is closed before returning.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut code = 0;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            ok != 0 && code == STILL_ACTIVE as u32
         }
     }
 }

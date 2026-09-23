@@ -113,9 +113,9 @@ impl Engine {
 }
 
 impl Drop for Engine {
-    /// SIGKILL: the headless engine installs no signal handler, so this is
-    /// also what a crash looks like — the stale files it leaves behind are
-    /// what `stale_state_is_reclaimed` exercises.
+    /// SIGKILL (TerminateProcess on Windows): the headless engine installs no
+    /// signal handler, so this is also what a crash looks like — the stale
+    /// files it leaves behind are what `stale_state_is_reclaimed` exercises.
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -461,7 +461,7 @@ fn a_rejected_token_falls_back_to_the_mailbox() {
     assert!(out.stderr.contains("socket") && out.stderr.contains("mailbox"), "{}", out.stderr);
 }
 
-/// The crashed-engine restart every user eventually needs: SIGKILL leaves
+/// The crashed-engine restart every user eventually needs: a kill leaves
 /// the lock file, `engine.json` and the mailbox behind, and the next engine
 /// must take them over.
 #[test]

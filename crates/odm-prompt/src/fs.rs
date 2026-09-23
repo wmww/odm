@@ -6,7 +6,7 @@
 //! the pair only when neither name is taken. Everything outside the markers is
 //! the user's.
 
-use crate::{FILES, Splice, block, splice};
+use crate::{FILES, Splice, block, eol, splice, with_eol};
 use std::path::{Path, PathBuf};
 
 /// What one project-open scan found. Names are as displayed: a symlink pair is
@@ -85,14 +85,16 @@ pub fn append(project: &Path, name: &str) -> Result<(), String> {
         Splice::Malformed => {
             return Err(format!("{name} has a stray ODM prompt marker; fix it by hand first"));
         }
-        // A blank line before the block, and the file ends with a newline.
+        // A blank line before the block, and the file ends with a newline,
+        // all in the file's own line endings.
         Splice::NoMarkers => {
+            let nl = eol(&contents);
             let gap = match () {
-                _ if contents.is_empty() || contents.ends_with("\n\n") => "",
-                _ if contents.ends_with('\n') => "\n",
-                _ => "\n\n",
+                _ if contents.is_empty() || contents.ends_with(&nl.repeat(2)) => String::new(),
+                _ if contents.ends_with('\n') => nl.to_owned(),
+                _ => nl.repeat(2),
             };
-            format!("{contents}{gap}{}\n", block())
+            format!("{contents}{gap}{}", with_eol(&format!("{}\n", block()), nl))
         }
     };
     std::fs::write(&path, new).map_err(|e| format!("could not write {name}: {e}"))
@@ -251,6 +253,32 @@ mod tests {
         assert_eq!(sync(dir.path()).unmarked, Vec::<String>::new());
         append(dir.path(), "CLAUDE.md").unwrap();
         assert_eq!(read(dir.path(), "CLAUDE.md"), out);
+    }
+
+    #[test]
+    fn append_to_a_crlf_file_writes_crlf() {
+        let dir = project();
+        std::fs::write(dir.path().join("CLAUDE.md"), "# Mine\r\nnotes\r\n").unwrap();
+        append(dir.path(), "CLAUDE.md").unwrap();
+        let out = read(dir.path(), "CLAUDE.md");
+        assert!(out.starts_with("# Mine\r\nnotes\r\n\r\n<!---"), "{out:?}");
+        assert!(!out.replace("\r\n", "").contains('\n'), "a bare LF crept in");
+        assert_eq!(sync(dir.path()), SyncReport::default());
+    }
+
+    /// Where CLAUDE.md is a copy rather than a symlink, both copies carry
+    /// the current block after an update.
+    #[test]
+    #[cfg(not(unix))]
+    fn the_copied_pair_is_updated_together() {
+        let dir = project();
+        create(dir.path()).unwrap();
+        stale(dir.path(), "AGENTS.md", "# Mine\n\n");
+        stale(dir.path(), "CLAUDE.md", "");
+        assert_eq!(sync(dir.path()).updated, ["AGENTS.md", "CLAUDE.md"]);
+        for name in FILES {
+            assert!(read(dir.path(), name).contains(&block()), "{name}");
+        }
     }
 
     #[test]

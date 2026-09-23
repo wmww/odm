@@ -277,27 +277,71 @@ fn logged_out_then_retried_by_the_next_prompt() {
 
 #[test]
 fn the_agents_odm_is_ours() {
-    // `path_prepend` wins over the inherited PATH: a shell script agent
-    // reports which `odm` it would run.
+    // `path_prepend` goes first on the child's PATH, ahead of the inherited
+    // one, so the agent's `odm` is the engine's.
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");
-    std::fs::create_dir(&bin).unwrap();
-    std::fs::write(bin.join("odm"), "").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(bin.join("odm"), std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut launch = Launch::new(
-        vec!["sh".into(), "-c".into(), "command -v odm >&2; pwd >&2; exit 1".into()],
-        dir.path().to_owned(),
-    );
-    launch.path_prepend = Some(bin.clone());
-    let (_agent, events) = Agent::spawn(launch, SessionOptions::default(), Arc::new(|| {})).unwrap();
-    let stderr = loop {
-        if let Event::Exited { stderr, .. } = events.recv_timeout(scaled(Duration::from_secs(10))).unwrap() {
-            break stderr;
+    let script = "{\"print_env\": [\"PATH\"]}\n{\"exit\": 1}\n";
+    let run = run_with(script, SessionOptions::default(), |launch| launch.path_prepend = Some(bin.clone()));
+    let (_, stderr) = run.until_exit();
+    let path = stderr.lines().find_map(|l| l.strip_prefix("PATH=")).expect(&stderr);
+    assert_eq!(std::env::split_paths(path).next(), Some(bin));
+    let cwd = stderr.lines().find_map(|l| l.strip_prefix("cwd=")).expect(&stderr);
+    assert_eq!(std::path::Path::new(cwd).canonicalize().unwrap(), run._dir.path().canonicalize().unwrap());
+}
+
+/// What a killed engine rests on where nothing else reaches the agent
+/// (macOS has no PDEATHSIG): closing its stdin is enough to end it.
+#[test]
+fn closing_stdin_ends_the_agent() {
+    let run = run_with(&format!("{HANDSHAKE}{NEW}"), SessionOptions::default(), |launch| {
+        launch.exit_grace = Duration::from_secs(600);
+    });
+    run.until(|e| matches!(e, Event::SessionStarted { .. }));
+    run.agent.shutdown();
+    let started = std::time::Instant::now();
+    assert_eq!(run.until_exit().0, ExitReason::Shutdown);
+    assert!(started.elapsed() < scaled(Duration::from_secs(5)), "exited only at the kill");
+}
+
+/// Agents spawn shells that spawn children; none outlive the agent.
+#[test]
+fn the_agents_children_die_with_it() {
+    let script = format!("{HANDSHAKE}{NEW}\n{{\"spawn_child\": 600000}}\n");
+    let run = run(&script);
+    run.until(|e| matches!(e, Event::SessionStarted { .. }));
+    run.agent.shutdown_wait();
+    let (_, stderr) = run.until_exit();
+    let pid: u32 = stderr.lines().find_map(|l| l.strip_prefix("child ")).expect(&stderr).parse().unwrap();
+    let deadline = std::time::Instant::now() + scaled(Duration::from_secs(5));
+    while alive(pid) {
+        assert!(std::time::Instant::now() < deadline, "grandchild {pid} outlived the agent");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Polled: a killed process lingers briefly (a zombie until reaped).
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only checks; a gone pid fails with ESRCH.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(windows)]
+fn alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: plain Win32 calls; the handle is closed before returning.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
         }
-    };
-    let cwd = dir.path().canonicalize().unwrap();
-    assert_eq!(stderr, format!("{}\n{}", bin.join("odm").display(), cwd.display()));
+        let mut code = 0;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        ok != 0 && code == STILL_ACTIVE as u32
+    }
 }
 
 #[test]

@@ -13,6 +13,10 @@
 //!   client must answer it with (omit the value to accept any).
 //! - `{"raw": "text"}`, `{"stderr": "text", "times": N}`, `{"sleep": ms}`,
 //!   `{"exit": code}`, `{"hang": true}` (ignore everything, stdin EOF too).
+//! - `{"spawn_child": ms}` — start a grandchild that sleeps `ms`; its pid
+//!   goes to stderr as `child <pid>`.
+//! - `{"print_env": ["NAME", …]}` — `NAME=value` per variable, then
+//!   `cwd=<dir>`, to stderr.
 //!
 //! At the end of the script it waits for stdin to close and exits 0, as the
 //! real adapters do. A failed expectation exits 3 with the reason on stderr.
@@ -124,6 +128,10 @@ fn fail(why: &str) -> ! {
 
 fn main() {
     let arg = std::env::args().nth(1).unwrap_or_else(|| fail("usage: <scenario.ndjson> | --chat"));
+    if arg == "--sleep" {
+        let ms = std::env::args().nth(2).and_then(|ms| ms.parse().ok()).unwrap_or(0);
+        return std::thread::sleep(Duration::from_millis(ms));
+    }
     let mut wire = Wire::new();
     if arg == "--chat" {
         return chat(&mut wire);
@@ -163,6 +171,21 @@ fn main() {
             std::thread::sleep(Duration::from_millis(ms));
         } else if let Some(code) = step.get("exit").and_then(Value::as_i64) {
             std::process::exit(code as i32);
+        } else if let Some(ms) = step.get("spawn_child").and_then(Value::as_u64) {
+            let exe = std::env::current_exe().unwrap_or_else(|e| fail(&e.to_string()));
+            let child = std::process::Command::new(exe)
+                .args(["--sleep", &ms.to_string()])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap_or_else(|e| fail(&format!("spawn_child: {e}")));
+            eprintln!("child {}", child.id());
+        } else if let Some(names) = step.get("print_env").and_then(Value::as_array) {
+            for name in names.iter().filter_map(Value::as_str) {
+                eprintln!("{name}={}", std::env::var(name).unwrap_or_default());
+            }
+            eprintln!("cwd={}", std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default());
         } else if step.get("hang").is_some() {
             loop {
                 std::thread::sleep(Duration::from_secs(3600));

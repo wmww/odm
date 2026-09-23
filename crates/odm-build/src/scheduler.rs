@@ -401,16 +401,7 @@ impl BuildEngine {
             return Err(fail(path, FailureKind::Cancelled, "build cancelled"));
         }
         let Some(source) = pass.snapshot.sources.get(path) else {
-            let available: Vec<&str> =
-                pass.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
-            return Err(fail(
-                path,
-                FailureKind::MissingPart,
-                format!(
-                    "no part at {path:?}; project has: {}",
-                    if available.is_empty() { "(no .js files)".into() } else { available.join(", ") }
-                ),
-            ));
+            return Err(fail(path, FailureKind::MissingPart, pass.snapshot.missing_part(path)));
         };
         let api = match &source.api {
             Ok(v) => *v,

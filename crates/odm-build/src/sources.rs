@@ -131,6 +131,22 @@ pub struct ProjectSnapshot {
     pub generation_sources: BTreeMap<String, Hash>,
 }
 
+impl ProjectSnapshot {
+    /// Why `path` names no part. Names are exact everywhere, so a spelling
+    /// that works on a case-insensitive filesystem (Windows, macOS) but
+    /// would fail on Linux fails where it was written, and says why.
+    pub fn missing_part(&self, path: &str) -> String {
+        if let Some(real) = self.sources.keys().find(|k| k.eq_ignore_ascii_case(path)) {
+            return format!("no part at {path:?}: names are case-sensitive, the file is {real:?}");
+        }
+        let files: Vec<&str> = self.sources.keys().map(|s| s.as_str()).take(20).collect();
+        format!(
+            "no part at {path:?}; project has: {}",
+            if files.is_empty() { "(no .js files)".into() } else { files.join(", ") }
+        )
+    }
+}
+
 pub fn scan_project(dir: &Path) -> Result<ProjectSnapshot, ScanError> {
     if !dir.is_dir() {
         return Err(ScanError::NotADirectory(dir.display().to_string()));

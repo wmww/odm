@@ -359,6 +359,20 @@ fn missing_part_lists_available() {
     assert!(err.message.contains("parts/wheel.js"), "should list files: {err:?}");
 }
 
+/// A name that only resolves on a case-insensitive filesystem fails on every
+/// platform, naming both spellings.
+#[test]
+fn part_names_are_case_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "root.js", "export default (ctx) => ctx.invoke('parts/wheel.js', { r: 1 })");
+    write(dir.path(), "parts/Wheel.js", WHEEL);
+
+    let e = engine(dir.path());
+    let sync = e.sync().unwrap();
+    let err = e.build_view(&e.start_pass(&sync, View::of("root.js"))).unwrap_err();
+    assert!(err.message.contains("\"parts/wheel.js\"") && err.message.contains("\"parts/Wheel.js\""), "{err:?}");
+}
+
 /// Module scope runs on every evaluation and never on a memo hit, so
 /// geometry built there is an error — at build time and at meta
 /// extraction alike, natively as in a web export.

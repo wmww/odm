@@ -321,12 +321,7 @@ impl EngineState {
             }
         };
         let Some(source) = sync.snapshot.sources.get(&path) else {
-            let files: Vec<&str> =
-                sync.snapshot.sources.keys().map(|s| s.as_str()).take(20).collect();
-            return Err(CmdError::bad_request(format!(
-                "no part at {path:?}; project has: {}",
-                if files.is_empty() { "(no .js files)".into() } else { files.join(", ") }
-            )));
+            return Err(CmdError::bad_request(sync.snapshot.missing_part(&path)));
         };
         let meta = self.build_engine().meta(&path, source);
         let meta = match meta.as_ref() {

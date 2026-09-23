@@ -115,11 +115,15 @@ impl OpenDialog {
 
 /// `~` only — enough for a typed path, and no surprises beyond it.
 fn shellexpand(path: &str) -> String {
+    expand_home(path, std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")))
+}
+
+fn expand_home(path: &str, home: Option<std::ffi::OsString>) -> String {
     let Some(rest) = path.strip_prefix('~') else { return path.to_owned() };
-    if !rest.is_empty() && !rest.starts_with('/') {
+    if !rest.is_empty() && !rest.starts_with(std::path::is_separator) {
         return path.to_owned();
     }
-    match std::env::var_os("HOME") {
+    match home {
         Some(home) => format!("{}{rest}", home.to_string_lossy()),
         None => path.to_owned(),
     }
@@ -131,10 +135,11 @@ mod tests {
 
     #[test]
     fn expands_only_a_leading_tilde() {
-        unsafe { std::env::set_var("HOME", "/home/x") };
-        assert_eq!(shellexpand("~/p"), "/home/x/p");
-        assert_eq!(shellexpand("~"), "/home/x");
-        assert_eq!(shellexpand("~x/p"), "~x/p");
-        assert_eq!(shellexpand("/a/~/b"), "/a/~/b");
+        let home = || Some("/home/x".into());
+        assert_eq!(expand_home("~/p", home()), "/home/x/p");
+        assert_eq!(expand_home("~", home()), "/home/x");
+        assert_eq!(expand_home("~x/p", home()), "~x/p");
+        assert_eq!(expand_home("/a/~/b", home()), "/a/~/b");
+        assert_eq!(expand_home("~/p", None), "~/p");
     }
 }

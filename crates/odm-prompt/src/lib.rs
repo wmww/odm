@@ -87,7 +87,9 @@ pub fn splice(contents: &str) -> Splice {
     if end.0 < begin.1 {
         return Splice::Malformed;
     }
-    let body = format!("{}\n", text());
+    // Written in the file's own line endings (git's autocrlf makes CRLF
+    // common on Windows), taken from the BEGIN line.
+    let body = with_eol(&format!("{}\n", text()), eol(&contents[begin.0..begin.1]));
     if contents[begin.1..end.0] == body {
         return Splice::Current;
     }
@@ -98,9 +100,31 @@ pub fn splice(contents: &str) -> Splice {
     Splice::Updated(out)
 }
 
+/// The line ending `text` uses: CRLF if its first line has one.
+pub(crate) fn eol(text: &str) -> &'static str {
+    match text.find('\n') {
+        Some(i) if text[..i].ends_with('\r') => "\r\n",
+        _ => "\n",
+    }
+}
+
+/// `text` (LF-only) with `eol` line endings.
+pub(crate) fn with_eol(text: &str, eol: &str) -> String {
+    if eol == "\n" { text.to_owned() } else { text.replace('\n', eol) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_crlf_file_keeps_its_line_endings() {
+        let stale = format!("# Mine\r\n\r\n{BEGIN}\r\nold\r\n{END}\r\ntail\r\n");
+        let Splice::Updated(out) = splice(&stale) else { panic!() };
+        assert!(!out.replace("\r\n", "").contains('\n'), "a bare LF crept in");
+        assert!(out.contains(&with_eol(&text(), "\r\n")));
+        assert_eq!(splice(&out), Splice::Current);
+    }
 
     fn fresh(before: &str, after: &str) -> String {
         format!("{before}{}\n{after}", block())

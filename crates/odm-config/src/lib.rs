@@ -17,6 +17,7 @@ mod state;
 pub use state::{AgentMemo, AgentState};
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
@@ -36,29 +37,38 @@ impl Files {
     }
 }
 
-/// `$XDG_CONFIG_HOME/odm/config.toml`, else `~/.config/odm/config.toml`.
+/// `$XDG_CONFIG_HOME/odm/config.toml`, else `~/.config/odm/config.toml`;
+/// `%APPDATA%\odm\config.toml` on Windows.
 pub fn system_path() -> Option<PathBuf> {
-    Some(xdg("XDG_CONFIG_HOME", ".config")?.join("odm/config.toml"))
+    dirs(cfg!(windows), env).0
 }
 
-/// `$XDG_DATA_HOME/odm`, else `~/.local/share/odm`: where installed agent
-/// adapters live.
+/// `$XDG_DATA_HOME/odm`, else `~/.local/share/odm`; `%LOCALAPPDATA%\odm` on
+/// Windows. Where installed agent adapters live.
 pub fn data_dir() -> Option<PathBuf> {
-    Some(xdg("XDG_DATA_HOME", ".local/share")?.join("odm"))
+    dirs(cfg!(windows), env).1
 }
 
 pub fn project_path(project: &Path) -> PathBuf {
     project.join(".odm/config.toml")
 }
 
-fn xdg(var: &str, fallback: &str) -> Option<PathBuf> {
-    // The spec: a relative value is invalid and must be ignored.
-    if let Some(dir) = std::env::var_os(var).map(PathBuf::from)
-        && dir.is_absolute()
-    {
-        return Some(dir);
+fn env(var: &str) -> Option<OsString> {
+    std::env::var_os(var)
+}
+
+/// (config file, data dir), from the environment `var` reads.
+fn dirs(windows: bool, var: impl Fn(&str) -> Option<OsString>) -> (Option<PathBuf>, Option<PathBuf>) {
+    // An absolute value only: the XDG spec says to ignore relative ones.
+    let dir = |name: &str| var(name).map(PathBuf::from).filter(|d| d.is_absolute() || windows);
+    if windows {
+        return (
+            dir("APPDATA").map(|d| d.join("odm").join("config.toml")),
+            dir("LOCALAPPDATA").map(|d| d.join("odm")),
+        );
     }
-    Some(PathBuf::from(std::env::var_os("HOME")?).join(fallback))
+    let xdg = |name: &str, fallback: &str| dir(name).or_else(|| Some(PathBuf::from(var("HOME")?).join(fallback)));
+    (xdg("XDG_CONFIG_HOME", ".config").map(|d| d.join("odm/config.toml")), xdg("XDG_DATA_HOME", ".local/share").map(|d| d.join("odm")))
 }
 
 /// A user-defined agent: a command speaking ACP on its stdio.
@@ -345,6 +355,25 @@ fn edit(path: &Path, change: impl FnOnce(&mut DocumentMut)) -> Result<(), String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_dirs_per_platform() {
+        let env = |vars: &'static [(&str, &str)]| move |name: &str| {
+            vars.iter().find(|(k, _)| *k == name).map(|(_, v)| OsString::from(v))
+        };
+        let unix = env(&[("HOME", "/home/u"), ("XDG_DATA_HOME", "relative"), ("APPDATA", "/nope")]);
+        assert_eq!(
+            dirs(false, unix),
+            (Some("/home/u/.config/odm/config.toml".into()), Some("/home/u/.local/share/odm".into()))
+        );
+        let xdg = env(&[("HOME", "/home/u"), ("XDG_CONFIG_HOME", "/c"), ("XDG_DATA_HOME", "/d")]);
+        assert_eq!(dirs(false, xdg), (Some("/c/odm/config.toml".into()), Some("/d/odm".into())));
+        let win = env(&[("HOME", "/home/u"), ("APPDATA", "C:/R"), ("LOCALAPPDATA", "C:/L")]);
+        let (config, data) = dirs(true, win);
+        assert_eq!(config, Some(Path::new("C:/R").join("odm").join("config.toml")));
+        assert_eq!(data, Some(Path::new("C:/L").join("odm")));
+        assert_eq!(dirs(true, env(&[("HOME", "/home/u")])), (None, None));
+    }
 
     fn files(dir: &Path) -> Files {
         Files { system: Some(dir.join("sys/config.toml")), project: dir.join("p/.odm/config.toml") }

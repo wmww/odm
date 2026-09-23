@@ -2796,6 +2796,7 @@ dependencies = [
  "libc",
  "serde_json",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2876,6 +2877,7 @@ dependencies = [
  "serde_path_to_error",
  "tempfile",
  "ureq",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

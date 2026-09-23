@@ -181,7 +181,8 @@ struct Shared {
     state: Mutex<State>,
     events: Mutex<Sender<Event>>,
     wake: Wake,
-    pgid: i32,
+    group: process::Group,
+    pid: u32,
     stderr: Mutex<VecDeque<String>>,
     exited: (Mutex<bool>, Condvar),
     launch: Launch,
@@ -206,8 +207,8 @@ impl Agent {
         // PDEATHSIG when the spawning thread dies, and this one lives exactly
         // as long as the child's stdout.
         std::thread::Builder::new().name("odm-agent".into()).spawn(move || {
-            let mut child = match process::spawn(&launch) {
-                Ok(child) => child,
+            let (mut child, group) = match process::spawn(&launch) {
+                Ok(spawned) => spawned,
                 Err(e) => return drop(started.send(Err(e))),
             };
             let stdout = child.stdout.take().expect("piped stdout");
@@ -233,7 +234,8 @@ impl Agent {
                 }),
                 events: Mutex::new(events),
                 wake,
-                pgid: child.id() as i32,
+                pid: child.id(),
+                group,
                 stderr: Mutex::new(VecDeque::new()),
                 exited: (Mutex::new(false), Condvar::new()),
                 launch,
@@ -336,7 +338,7 @@ impl Agent {
             if state.turn_running && state.turn_serial == serial {
                 state.hung = true;
                 drop(state);
-                process::kill_group(watch.pgid);
+                watch.group.kill();
             }
         });
     }
@@ -362,9 +364,9 @@ impl Agent {
         self.shared.send_all(out.into_iter().collect());
     }
 
-    /// The child's pid — also its process group's id.
+    /// The child's pid — on Unix also its process group's id.
     pub fn pid(&self) -> u32 {
-        self.shared.pgid as u32
+        self.shared.pid
     }
 
     /// Ask the agent to go: close its stdin, and kill its process group if
@@ -706,7 +708,7 @@ impl Shared {
         let shared = self.clone();
         Some(move || {
             if !shared.wait_exit(shared.launch.exit_grace) {
-                process::kill_group(shared.pgid);
+                shared.group.kill();
             }
         })
     }
@@ -732,7 +734,7 @@ impl Shared {
             }
         };
         // Agents spawn shells that spawn children; none of them outlive it.
-        process::kill_group(self.pgid);
+        self.group.kill();
         let status = status.or_else(|| child.wait().ok());
         // Let the stderr drain catch up, so a crash report has its last
         // words — briefly: a grandchild that escaped the group may hold the
