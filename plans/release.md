@@ -19,11 +19,27 @@ from a release-process discussion; decisions marked (user) are theirs.
 - **Web template embedded in the binary** (user). Done: odm-export's
   build.rs embeds `target/web-template.bin`; `--template` still overrides.
   `~/.local/share/odm` is no longer used.
-- **No CI** (user). Releases are cut by a script on the dev machine. The
-  test gate is `cargo test --workspace`, as always.
-- **Linux x86_64 only** for the first release (the socket is a Unix socket,
-  the watcher is inotify-backed, only this platform has ever been run).
-  Say so in the README; macOS and Windows are later ports.
+- **GitHub Actions for test and release, manual trigger only** (user,
+  2026-09-22, reversing "no CI"). Workflows run on `workflow_dispatch`
+  (Actions tab or `gh workflow run`), never on push or PR. Reason: four
+  targets, two of which cannot be built or tested on the dev machine (a
+  macOS VM is both against Apple's license and Metal-less; Windows needs
+  a VM either way). Public-repo runners are free; until the flip the
+  macOS lane costs 10× Linux minutes, so it can wait for the flip. The
+  local test gate stays `cargo test --workspace`.
+- **Four targets** (user, 2026-09-22): x86_64 Linux, aarch64 Linux, arm64
+  macOS, x86_64 Windows. Intel macOS skipped (cross-target from the arm64
+  runner later if asked). Prerequisite: `plans/transport.md` (the
+  platform-agnostic transport) and the port items in the 2026-09-22 port
+  discussion (agent process lifetime via Job Object / kqueue, `.cmd`
+  shims, user dirs, dylib rpath, watcher root canonicalization).
+- **No paid Apple developer account** (user). Binaries are ad-hoc signed
+  (`codesign -s -`, or rcodesign from Linux; required on Apple silicon at
+  all, and strip invalidates the linker's own ad-hoc signature). The
+  `curl | sh` installer and a Homebrew tap set no quarantine attribute, so
+  those paths run with no prompt; a browser download does, and the README
+  gives the one-liner (`xattr -d com.apple.quarantine odm`) and the
+  Privacy & Security "Open Anyway" route.
 - **Two version numbers** (user, 2026-09-17; semver bought nothing — no
   dependents, one binary, no maintained old branches):
   - Engine version: one integer N, bumped every release; tag `vN`. Cargo
@@ -101,32 +117,57 @@ All decided (see Decisions). Remaining paperwork:
 
 ## Checklist: release mechanics
 
-- [ ] **Build container.** The dev machine's glibc is bleeding-edge, so a
-      binary built on it will not run on an Ubuntu LTS. Build releases in
-      a container of the oldest supported distro (Ubuntu 22.04 → glibc
-      2.35 is the usual floor) with the whole toolchain: rust, cmake,
-      ninja, clang + wasm-ld + libc++ headers, wasm-bindgen-cli (see
-      `notes/web-export.md`). A `Containerfile` in `scripts/` makes the
-      release build reproducible on any machine. musl is out (prebuilt
-      V8). Both build-time network fetches (Manifold clone in
-      manifold-csg-sys, V8 prebuilt in rusty_v8) are pinned; either accept
-      them inside the container or bake them into the image.
+- [ ] **Build container (Linux lanes).** The dev machine's glibc is
+      bleeding-edge, so a binary built on it will not run on an Ubuntu
+      LTS. Both Linux lanes build inside a container of the oldest
+      supported distro (Ubuntu 22.04 → glibc 2.35) on `ubuntu-latest` /
+      `ubuntu-24.04-arm` runners — the container, not the runner image,
+      sets the glibc floor, so GitHub retiring runner images never moves
+      it. Toolchain in the image: rust, cmake, ninja, clang + wasm-ld +
+      libc++ headers, wasm-bindgen-cli (see `notes/web-export.md`), and
+      mesa's lavapipe for headless render tests. A `Containerfile` in
+      `scripts/` makes the same build reproducible locally. musl is out
+      (prebuilt V8). Both build-time network fetches (Manifold clone in
+      manifold-csg-sys, V8 prebuilt in rusty_v8; both have aarch64
+      prebuilts/sources) are pinned; cache the cargo target dir per lane so
+      the 180 MiB V8 download happens once per cache miss.
+- [ ] **Workflows** (`.github/workflows/`), all `workflow_dispatch`:
+      - `test`: `cargo test --workspace` on all four lanes. macOS on
+        `macos-15` (Apple silicon; its paravirtual GPU has Metal, so
+        render tests run). Windows on `windows-latest` (MSVC Build Tools
+        and cmake preinstalled; no GPU → wgpu WARP fallback, which the
+        render path must enable when no hardware adapter exists).
+      - `release`: takes the version as an input; per lane, builds the
+        web template once (Linux x86_64 job, uploaded as an artifact — it
+        is wasm and host-independent) and then the static
+        `--no-default-features` binary, runs the release-profile test
+        invocation, packages, and a final job creates the draft release
+        with all assets. Replaces the "in the container on the dev
+        machine" parts of `release.sh` below; the script keeps the
+        local-only steps (version bump, CHANGELOG check, tag) and
+        triggers the workflow.
+      - Golden-image render tests differ per GPU backend (Metal, DX12
+        WARP, lavapipe): per-platform goldens or a tolerance before the
+        macOS/Windows test lanes can be green.
 - [ ] `scripts/release.sh <version>`: refuses unless on `main` with a clean
       tree and a CHANGELOG entry; bumps the workspace version (`1.N.0`, and odm-dylib's copy) and commits;
-      runs `cargo deny check`; runs the release-profile test invocation
-      above in the container; builds the web template before the binary (embedded); packages
-      `odm-<version>-x86_64-linux.tar.gz` (odm, LICENSE,
-      THIRD_PARTY_LICENSES, README, `install.sh`) plus
-      `.sha256` and the debug `.dwp`; tags `v<version>`; `gh release
-      create --draft` with the assets and the CHANGELOG entry as notes.
-      The user publishes the draft. Pre-releases (`v4-alpha.1`, cargo `1.4.0-alpha.1`) use
+      runs `cargo deny check`; tags `v<version>` and triggers the
+      `release` workflow (`gh workflow run release -f version=…`), which
+      builds all four lanes and creates the draft. Assets per lane:
+      `odm-<version>-<arch>-<os>.tar.gz` (`.zip` on Windows) holding odm,
+      LICENSE, THIRD_PARTY_LICENSES, README, `install.sh` (not on
+      Windows), plus `.sha256` and the split debug info (`.dwp` on Linux,
+      `.dSYM` on macOS, `.pdb` on Windows). The user publishes the draft. Pre-releases (`v4-alpha.1`, cargo `1.4.0-alpha.1`) use
       `--prerelease` and are how testers get builds before the flip.
 - [ ] User installer: the tarball's `install.sh` places the binary and
       warns about PATH; a `curl -fsSL <release-url>/install.sh
       | sh` form fetches the latest release, verifies the sha256, and
       runs it. Upgrade = re-run; `odm uninstall` or documented paths for
       removal. `scripts/install.sh` stays the from-source developer
-      installer.
+      installer. The installer picks the asset by `uname -m`/`-s`; on
+      macOS it runs `xattr -d com.apple.quarantine` on the binary after
+      extraction as belt-and-braces. Windows: the zip plus PATH
+      instructions for the first release; winget/scoop manifests later.
 - [ ] Recurring per-release checklist (goes at the top of CHANGELOG or in
       DEVELOPING.md): tests green, CHANGELOG entry, API docs snapshot if an
       API version was cut, `release.sh`, smoke-test the tarball on a clean
@@ -142,8 +183,9 @@ All decided (see Decisions). Remaining paperwork:
 
 ## Later, not blocking
 
-- macOS: Unix socket and notify already work there; needs a Mac to build
-  on, and signing + notarization or users fight Gatekeeper.
-- Windows: named pipes or localhost TCP for the socket, the five
-  `cfg(unix)` sites, a Windows installer story.
-- aarch64 Linux: same container recipe on an arm64 builder.
+- Intel macOS (`x86_64-apple-darwin`): cross-target from the arm64 runner
+  if anyone asks; Manifold's cmake needs `CMAKE_OSX_ARCHITECTURES` passed
+  through the sys crate.
+- winget / scoop manifests and a Homebrew tap, once there is a release to
+  point them at.
+- Notarization, only if the quarantine one-liner turns out to lose users.
