@@ -302,6 +302,8 @@ odm-agent's `process.rs` (`process_group`, `libc::SIGKILL`: Unix-only).
 free, no `nproc` (use `sysctl -n hw.ncpu`), node 22.23, cmake 4.4. `cargo
 build --workspace` cold succeeds as is: 7m49 (9m13 on a later run).
 GPU: `Apple Paravirtual device (Metal, IntegratedGpu)`, real Metal.
+test.yml, 2026-09-23 (cache from a restore-key fallback): build 1m16, full
+`cargo test --workspace` 15 s, trimmed-cache save 14 s; job ~2m10 all-in.
 
 Debugging on it (2026-09-23): lldb works in `--batch` mode, but test
 binaries run outside cargo need
