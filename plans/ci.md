@@ -63,6 +63,21 @@ failure (a failed test run still warms the next one); on failure upload
 `target/ci-out/` if present (tests that want to leave evidence write
 there — nothing does yet).
 
+V8 is never compiled: rusty_v8 downloads a ~180 MiB prebuilt into
+`target/build/v8-*`, and a restored cache keeps it (its rerun triggers are
+cached registry files and env vars that are constant on a runner), so the
+download happens once per cache miss. `RUSTY_V8_ARCHIVE` could point at a
+copy baked into the image; not worth it at GitHub's network speed.
+
+**Cache budget:** GitHub caps a repo's caches at 10 GB total, LRU. Four
+lanes each saving a 5–8 GB target dir would evict each other and every
+run would be cold. Keep each lane's saved cache to ~2 GB: before saving,
+delete `target/*/incremental`, the workspace crates' own artifacts (they
+rebuild in seconds, as `scripts/seed-target.sh` already relies on) and
+uplifted binaries; if that is not enough, `CARGO_PROFILE_DEV_DEBUG=0` in
+CI, or cache only `~/.cargo` plus `target/build/{v8,manifold-csg-sys}-*`
+and accept recompiling the ~500 registry crates (~5–8 min).
+
 Disk: `ubuntu-latest` has ~20 GB free. A dev-profile target with
 line-tables and the dylib is ~5–8 GB; if the cache save trips the limit,
 set `CARGO_PROFILE_DEV_DEBUG=0` for CI only (its own cache key, so no
