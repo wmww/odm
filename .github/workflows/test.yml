@@ -1,6 +1,6 @@
 # The gate on CI runners: `cargo test --workspace`, one lane per platform.
 # Manual only. Linux lanes run in the container.yml image; the others straight
-# on the runner. Windows stays red until its port lands.
+# on the runner.
 #   gh workflow run test.yml -f ref=$(git rev-parse HEAD) -f lanes=linux
 name: test
 on:
