@@ -1028,17 +1028,124 @@ pub struct DialogResponse<R> {
     pub dismissed: bool,
 }
 
-/// A modal dialog, drawn as the era did: raised frame, filled title bar with a
-/// close box, contents below. Fixed width, because an auto-sizing modal can't
-/// tell its contents how wide to be until the frame after.
+/// A modal dialog. Where the backend has windows to give (the desktop
+/// viewer), it is one: a fixed-size OS window over a dimmed, input-blocking
+/// main window, titled and closed by the window manager. Otherwise (tests,
+/// a context with no windowing) it is drawn in-canvas as the era did.
+/// Fixed width, because an auto-sizing dialog can't tell its contents how
+/// wide to be until the frame after; the height follows the contents.
 pub fn dialog<R>(
     ctx: &egui::Context,
     id: &str,
     title: &str,
     width: f32,
-    add: impl FnOnce(&mut Ui) -> R,
+    add: impl FnMut(&mut Ui) -> R,
 ) -> DialogResponse<R> {
-    let frame = egui::Frame::new().fill(FACE).inner_margin(Margin::same(4));
+    if ctx.embed_viewports() {
+        in_canvas_dialog(ctx, id, title, width, add)
+    } else {
+        window_dialog(ctx, id, title, width, add)
+    }
+}
+
+/// Space between a dialog window's edge and its contents.
+const DIALOG_MARGIN: i8 = 4;
+
+fn window_dialog<R>(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    width: f32,
+    mut add: impl FnMut(&mut Ui) -> R,
+) -> DialogResponse<R> {
+    let id = egui::Id::new(id);
+    let viewport = egui::ViewportId(id);
+    let frame = egui::Frame::new().fill(FACE).inner_margin(Margin::same(DIALOG_MARGIN));
+    let outer_width = width + 2.0 * DIALOG_MARGIN as f32;
+
+    // The window's height is its contents'. A window is created at its size,
+    // so the first time round the contents are laid out unseen to learn it
+    // (resizing a mapped window would make it jump); after that each frame
+    // measures itself, and the builder diff resizes the window when it moves.
+    let height_id = id.with("height");
+    let height = match ctx.data(|d| d.get_temp::<f32>(height_id)) {
+        Some(h) => h,
+        None => {
+            let rect = Rect::from_min_size(Pos2::ZERO, vec2(outer_width, f32::INFINITY));
+            let mut ui = Ui::new(
+                ctx.clone(),
+                id.with("sizing"),
+                egui::UiBuilder::new().max_rect(rect).sizing_pass().invisible(),
+            );
+            let h = frame.show(&mut ui, |ui| {
+                ui.set_width(width);
+                add(ui)
+            });
+            let h = h.response.rect.height();
+            ctx.data_mut(|d| d.insert_temp(height_id, h));
+            ctx.request_repaint();
+            h
+        }
+    };
+
+    // The main window stays up behind, dimmed and deaf, as under any modal;
+    // clicking it asks focus back for the dialog, which a compositor may
+    // refuse — so Escape there dismisses too.
+    let escaped = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let blocked = egui::Modal::new(id.with("block"))
+        .backdrop_color(Color32::from_black_alpha(64))
+        .frame(egui::Frame::NONE)
+        .show(ctx, |_| {});
+    if blocked.backdrop_response.clicked() {
+        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+    }
+
+    let size = vec2(outer_width, height);
+    let mut builder = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_app_id("odm")
+        .with_inner_size(size)
+        .with_min_inner_size(size)
+        .with_max_inner_size(size)
+        .with_resizable(false)
+        .with_minimize_button(false)
+        .with_maximize_button(false)
+        .with_taskbar(false)
+        .with_window_type(egui::X11WindowType::Dialog);
+    // Centered over the main window where the platform says where that is
+    // (Wayland doesn't; the compositor places it there).
+    if let Some(parent) = ctx.input(|i| i.viewport().outer_rect) {
+        builder = builder.with_position(parent.center() - size / 2.0);
+    }
+
+    ctx.show_viewport_immediate(viewport, builder, |ui, _| {
+        ui.painter().rect_filled(ui.max_rect(), CornerRadius::ZERO, FACE);
+        let res = frame.show(ui, |ui| {
+            ui.set_width(width);
+            add(ui)
+        });
+        let h = res.response.rect.height();
+        if h != height {
+            ui.ctx().data_mut(|d| d.insert_temp(height_id, h));
+            ui.ctx().request_repaint();
+        }
+        let dismissed = ui.input(|i| {
+            i.viewport().close_requested() || i.key_pressed(egui::Key::Escape)
+        });
+        DialogResponse { inner: res.inner, dismissed: dismissed || escaped }
+    })
+}
+
+/// The dialog drawn inside the current window: raised frame, filled title
+/// bar with a close box, contents below.
+fn in_canvas_dialog<R>(
+    ctx: &egui::Context,
+    id: &str,
+    title: &str,
+    width: f32,
+    mut add: impl FnMut(&mut Ui) -> R,
+) -> DialogResponse<R> {
+    let frame = egui::Frame::new().fill(FACE).inner_margin(Margin::same(DIALOG_MARGIN));
     let res = egui::Modal::new(egui::Id::new(id))
         .backdrop_color(Color32::from_black_alpha(64))
         .frame(frame)

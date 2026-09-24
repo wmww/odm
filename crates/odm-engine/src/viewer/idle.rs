@@ -46,6 +46,7 @@ pub fn run_viewer(sessions: Arc<Sessions>) -> Result<(), String> {
             &event_loop,
         ),
         clamped_until: None,
+        main_window: None,
         quit,
     };
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
@@ -74,6 +75,10 @@ struct SlowIdle<'a> {
     inner: eframe::EframeWinitApplication<'a>,
     /// Deadline we installed, to recognize (and re-arm) our own expired timer.
     clamped_until: Option<std::time::Instant>,
+    /// The first window to send an event: the main one, since dialog windows
+    /// only exist once it has drawn a frame. Closing it quits; closing a
+    /// dialog doesn't.
+    main_window: Option<winit::window::WindowId>,
     quit: Quit,
 }
 
@@ -142,7 +147,8 @@ impl winit::application::ApplicationHandler<eframe::UserEvent> for SlowIdle<'_> 
     ) {
         // eframe tears the window down on this; nothing else will tell the loop
         // to stop, so note it and do that ourselves.
-        let closing = matches!(event, winit::event::WindowEvent::CloseRequested);
+        let main = *self.main_window.get_or_insert(window_id) == window_id;
+        let closing = main && matches!(event, winit::event::WindowEvent::CloseRequested);
         self.inner.window_event(event_loop, window_id, event);
         if closing {
             self.quit.request();

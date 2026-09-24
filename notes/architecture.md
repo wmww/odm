@@ -636,7 +636,7 @@ something to trip over next to Ctrl+O. `menu::shortcuts` reads those chords
 off the input queue at the top of the frame and `apply`s the same actions —
 consumed, so a chord never also lands in whatever has the caret (Ctrl+Enter
 has to beat the chat box it aims at). A modal
-owns the keyboard while it is up (only Quit still fires). `theme::menu` measures its own entries and pins the popup width
+owns the keyboard while it is up (only Quit still fires, and only from the main window). `theme::menu` measures its own entries and pins the popup width
 before drawing, because an auto-sizing egui popup doesn't know its width until
 the frame after — and a highlight that stops at the text looks broken. Titles
 are painted by hand (open = filled with `ACCENT`, never pressed in) rather than
@@ -708,6 +708,14 @@ odm.toml + a starter `root.js`, never over an existing file) and opens it in
 one gesture. Written-but-not-opened — the socket claim can fail — hands off to
 the Open dialog pointed at the new project, since making it is done and only
 opening is left.
+
+Dialogs are real OS windows (`theme::dialog`: an immediate egui viewport,
+fixed size = measured contents, so sway floats it; min=max, X11 type Dialog;
+no Wayland parent, winit has none). The main window gets an input-blocking dim
+backdrop; Escape in either window dismisses, since a compositor may refuse to
+hand focus back. The shim in `idle.rs` quits only on the *first* window's
+close (the main one) — a dialog's close must not end the app. Contexts that
+embed viewports (unit tests) get the old in-canvas modal instead.
 
 The two are one `Option<Dialog>` on `ViewerApp`: only one is ever up, both are
 drawn last (their backdrop covers everything above), and both keep themselves
