@@ -1,0 +1,105 @@
+diff --git a/src/native/wgpu_integration.rs b/src/native/wgpu_integration.rs
+index 918b841..1cbb180 100644
+--- a/src/native/wgpu_integration.rs
++++ b/src/native/wgpu_integration.rs
+@@ -143,12 +143,15 @@ impl<'app> WgpuWinitApp<'app> {
+             ..
+         } = &mut *shared;
+ 
++        let handles = window_handles(viewports);
+         for viewport in viewports.values_mut() {
++            let parent = handles.get(&viewport.ids.parent).copied();
+             viewport.initialize_window(
+                 event_loop,
+                 &running.integration.egui_ctx,
+                 viewport_from_window,
+                 painter,
++                parent,
+             );
+         }
+     }
+@@ -171,7 +174,7 @@ impl<'app> WgpuWinitApp<'app> {
+             None,
+             painter,
+         )
+-        .initialize_window(event_loop, egui_ctx, viewport_from_window, painter);
++        .initialize_window(event_loop, egui_ctx, viewport_from_window, painter, None);
+     }
+ 
+     #[cfg(target_os = "android")]
+@@ -967,6 +970,7 @@ impl Viewport {
+         egui_ctx: &egui::Context,
+         windows_id: &mut HashMap<WindowId, ViewportId>,
+         painter: &mut egui_wgpu::winit::Painter,
++        parent: Option<raw_window_handle::RawWindowHandle>,
+     ) {
+         if self.window.is_some() {
+             return; // we already have one
+@@ -976,7 +980,25 @@ impl Viewport {
+ 
+         let viewport_id = self.ids.this;
+ 
+-        match egui_winit::create_window(egui_ctx, event_loop, &self.builder) {
++        // odm patch: a Dialog-type viewport is a transient of its parent
++        // viewport's window — a real dialog to the window manager.
++        let dialog = self.builder.window_type == Some(egui::X11WindowType::Dialog);
++        let created = match parent {
++            Some(parent) if dialog => {
++                let attributes =
++                    egui_winit::create_winit_window_attributes(egui_ctx, self.builder.clone());
++                // SAFETY: `parent` is the live window of the parent viewport,
++                // which outlives its children's creation.
++                #[expect(unsafe_code)]
++                let attributes = unsafe { attributes.with_transient_parent(Some(parent)) };
++                event_loop.create_window(attributes).inspect(|window| {
++                    egui_winit::apply_viewport_builder_to_window(egui_ctx, window, &self.builder);
++                })
++            }
++            _ => egui_winit::create_window(egui_ctx, event_loop, &self.builder),
++        };
++
++        match created {
+             Ok(window) => {
+                 windows_id.insert(window.id(), viewport_id);
+ 
+@@ -1029,6 +1051,17 @@ fn create_window(
+     Ok((window, viewport_builder))
+ }
+ 
++/// The raw handle of each viewport's window, for its children to name as parent.
++fn window_handles(viewports: &Viewports) -> HashMap<ViewportId, raw_window_handle::RawWindowHandle> {
++    viewports
++        .iter()
++        .filter_map(|(id, viewport)| {
++            let handle = viewport.window.as_ref()?.window_handle().ok()?;
++            Some((*id, handle.as_raw()))
++        })
++        .collect()
++}
++
+ /// Is this viewport, or any of its (transitive) descendant viewports, visible?
+ ///
+ /// Immediate viewports are rendered inline while their parent's UI runs, so even
+@@ -1070,6 +1103,7 @@ fn render_immediate_viewport(
+             ..
+         } = &mut *shared.borrow_mut();
+ 
++        let parent = window_handles(viewports).get(&ids.parent).copied();
+         let viewport = initialize_or_update_viewport(
+             viewports,
+             ids,
+@@ -1080,7 +1114,13 @@ fn render_immediate_viewport(
+         );
+         if viewport.window.is_none() {
+             event_loop_context::with_current_event_loop(|event_loop| {
+-                viewport.initialize_window(event_loop, egui_ctx, viewport_from_window, painter);
++                viewport.initialize_window(
++                    event_loop,
++                    egui_ctx,
++                    viewport_from_window,
++                    painter,
++                    parent,
++                );
+             });
+         }
+ 

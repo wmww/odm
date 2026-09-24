@@ -710,10 +710,11 @@ the Open dialog pointed at the new project, since making it is done and only
 opening is left.
 
 Dialogs are real OS windows (`theme::dialog`: an immediate egui viewport,
-fixed size = measured contents, so sway floats it; min=max, X11 type Dialog;
-no Wayland parent, winit has none). The main window gets an input-blocking dim
-backdrop; Escape in either window dismisses, since a compositor may refuse to
-hand focus back. The shim in `idle.rs` quits only on the *first* window's
+fixed size = measured contents, X11 type Dialog — which the patched eframe
+turns into a transient of the main window on every platform; see
+build-environment.md, patched crates). The main window gets an input-blocking
+dim backdrop; Escape in either window dismisses, since a compositor may refuse
+to hand focus back. The shim in `idle.rs` quits only on the *first* window's
 close (the main one) — a dialog's close must not end the app. Contexts that
 embed viewports (unit tests) get the old in-canvas modal instead.
 

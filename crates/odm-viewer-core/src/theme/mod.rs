@@ -1030,7 +1030,8 @@ pub struct DialogResponse<R> {
 
 /// A modal dialog. Where the backend has windows to give (the desktop
 /// viewer), it is one: a fixed-size OS window over a dimmed, input-blocking
-/// main window, titled and closed by the window manager. Otherwise (tests,
+/// main window, titled and closed by the window manager. The Dialog window
+/// type is what makes it a transient of the main window (patched eframe). Otherwise (tests,
 /// a context with no windowing) it is drawn in-canvas as the era did.
 /// Fixed width, because an auto-sizing dialog can't tell its contents how
 /// wide to be until the frame after; the height follows the contents.

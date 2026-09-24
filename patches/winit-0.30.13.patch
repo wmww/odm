@@ -1,0 +1,149 @@
+diff --git a/src/platform_impl/linux/wayland/window/mod.rs b/src/platform_impl/linux/wayland/window/mod.rs
+index 6d29a5a..8a8cdb3 100644
+--- a/src/platform_impl/linux/wayland/window/mod.rs
++++ b/src/platform_impl/linux/wayland/window/mod.rs
+@@ -129,6 +129,16 @@ impl Window {
+             window.set_app_id(name);
+         }
+ 
++        #[cfg(feature = "rwh_06")]
++        if let Some(rwh_06::RawWindowHandle::Wayland(handle)) =
++            attributes.transient_parent.as_ref().map(|handle| handle.0)
++        {
++            let parent = super::WindowId(handle.surface.as_ptr() as u64);
++            if let Some(parent) = state.windows.borrow().get(&parent) {
++                window.set_parent(Some(&parent.lock().unwrap().window));
++            }
++        }
++
+         // Set the window title.
+         window_state.set_title(attributes.title);
+ 
+diff --git a/src/platform_impl/linux/x11/window.rs b/src/platform_impl/linux/x11/window.rs
+index 7e15d5f..0086ec5 100644
+--- a/src/platform_impl/linux/x11/window.rs
++++ b/src/platform_impl/linux/x11/window.rs
+@@ -419,6 +419,24 @@ impl UnownedWindow {
+             leap!(window.set_window_types(window_attrs.platform_specific.x11.x11_window_types))
+                 .ignore_error();
+ 
++            #[cfg(feature = "rwh_06")]
++            let transient = match window_attrs.transient_parent.as_ref().map(|handle| handle.0) {
++                Some(rwh_06::RawWindowHandle::Xlib(handle)) => Some(handle.window as xproto::Window),
++                Some(rwh_06::RawWindowHandle::Xcb(handle)) => Some(handle.window.get()),
++                _ => None,
++            };
++            #[cfg(feature = "rwh_06")]
++            if let Some(parent) = transient {
++                leap!(xconn.change_property(
++                    window.xwindow,
++                    xproto::Atom::from(xproto::AtomEnum::WM_TRANSIENT_FOR),
++                    xproto::Atom::from(xproto::AtomEnum::WINDOW),
++                    xproto::PropMode::REPLACE,
++                    &[parent],
++                ))
++                .ignore_error();
++            }
++
+             // Set size hints.
+             let mut min_inner_size =
+                 window_attrs.min_inner_size.map(|size| size.to_physical::<u32>(scale_factor));
+diff --git a/src/platform_impl/macos/window_delegate.rs b/src/platform_impl/macos/window_delegate.rs
+index e293505..26f32b8 100644
+--- a/src/platform_impl/macos/window_delegate.rs
++++ b/src/platform_impl/macos/window_delegate.rs
+@@ -703,6 +703,22 @@ impl WindowDelegate {
+             None => (),
+         }
+ 
++        // A transient parent is the same relation: the child stays above it
++        // and moves with it, but remains its own titled window.
++        #[cfg(feature = "rwh_06")]
++        if let Some(rwh_06::RawWindowHandle::AppKit(handle)) =
++            attrs.transient_parent.map(|handle| handle.0)
++        {
++            // SAFETY: Caller ensures the pointer is valid or NULL
++            let parent_view: Retained<NSView> =
++                unsafe { Retained::retain(handle.ns_view.as_ptr().cast()) }.unwrap();
++            let parent = parent_view.window().ok_or_else(|| {
++                os_error!(OsError::CreationError("parent view should be installed in a window"))
++            })?;
++            // SAFETY: as above, the child is brand new, so there is no cycle.
++            unsafe { parent.addChildWindow_ordered(&window, NSWindowOrderingMode::NSWindowAbove) };
++        }
++
+         let resize_increments =
+             match attrs.resize_increments.map(|i| i.to_logical(window.backingScaleFactor() as _)) {
+                 Some(LogicalSize { width, height }) if width >= 1. && height >= 1. => {
+diff --git a/src/platform_impl/windows/window.rs b/src/platform_impl/windows/window.rs
+index 228c6f0..2b91852 100644
+--- a/src/platform_impl/windows/window.rs
++++ b/src/platform_impl/windows/window.rs
+@@ -1330,7 +1330,14 @@ unsafe fn init(
+     window_flags.set(WindowFlags::CLOSABLE, true);
+     window_flags.set(WindowFlags::CLIP_CHILDREN, attributes.platform_specific.clip_children);
+ 
+-    let mut fallback_parent = || match attributes.platform_specific.owner {
++    #[cfg(feature = "rwh_06")]
++    let owner = match attributes.transient_parent.as_ref().map(|handle| handle.0) {
++        Some(rwh_06::RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get() as HWND),
++        _ => attributes.platform_specific.owner,
++    };
++    #[cfg(not(feature = "rwh_06"))]
++    let owner = attributes.platform_specific.owner;
++    let mut fallback_parent = || match owner {
+         Some(parent) => {
+             window_flags.set(WindowFlags::POPUP, true);
+             Some(parent)
+diff --git a/src/window.rs b/src/window.rs
+index e0158ef..d711e28 100644
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -123,6 +123,8 @@ pub struct WindowAttributes {
+     pub cursor: Cursor,
+     #[cfg(feature = "rwh_06")]
+     pub(crate) parent_window: Option<SendSyncRawWindowHandle>,
++    #[cfg(feature = "rwh_06")]
++    pub(crate) transient_parent: Option<SendSyncRawWindowHandle>,
+     pub fullscreen: Option<Fullscreen>,
+     // Platform-specific configuration.
+     #[allow(dead_code)]
+@@ -154,6 +156,8 @@ impl Default for WindowAttributes {
+             cursor: Cursor::default(),
+             #[cfg(feature = "rwh_06")]
+             parent_window: None,
++            #[cfg(feature = "rwh_06")]
++            transient_parent: None,
+             active: true,
+             platform_specific: Default::default(),
+         }
+@@ -479,6 +483,29 @@ impl WindowAttributes {
+         self.parent_window = parent_window.map(SendSyncRawWindowHandle);
+         self
+     }
++
++    /// Build a top-level window that is transient for `parent` (a dialog of
++    /// it): the window manager keeps it above its parent and may place,
++    /// group or minimize it with it. Unlike [`Self::with_parent_window`],
++    /// the window is not embedded in the parent.
++    ///
++    /// ## Safety
++    ///
++    /// `parent` must be a valid window handle, created by this event loop.
++    ///
++    /// ## Platform-specific
++    ///
++    /// - **Windows:** the owner window (as `with_owner_window`).
++    /// - **macOS:** a child window (`addChildWindow`).
++    /// - **X11:** `WM_TRANSIENT_FOR`.
++    /// - **Wayland:** `xdg_toplevel.set_parent`.
++    /// - **Android / iOS / Web / Orbital:** Unsupported.
++    #[cfg(feature = "rwh_06")]
++    #[inline]
++    pub unsafe fn with_transient_parent(mut self, parent: Option<rwh_06::RawWindowHandle>) -> Self {
++        self.transient_parent = parent.map(SendSyncRawWindowHandle);
++        self
++    }
+ }
+ 
+ /// Base Window functions.

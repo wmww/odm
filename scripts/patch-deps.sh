@@ -8,6 +8,10 @@
 # deno_core: the snapshot use-after-free that aborts macOS runs (see
 # notes/architecture.md, Platforms ▸ macOS). Drop the entry, the [patch] line
 # and the patch file once an upstream release fixes it.
+#
+# winit + eframe: dialog windows as real transients of the main window
+# (`WindowAttributes::with_transient_parent`, which eframe sets for
+# Dialog-type viewports). Upstream: rust-windowing/winit#4256.
 set -eu
 
 top=$(cd "$(dirname "$0")/.." && pwd)
@@ -45,3 +49,5 @@ materialize() {
 }
 
 materialize deno_core 0.408.0 9c1d2bf3bf9a7dd3f4184cf3af56ce9f06b7bb9cab93497ec3acd04196c9db3f
+materialize winit 0.30.13 a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d
+materialize eframe 0.35.0 8dc8234e2f681b2afd2b2e8c332fa614de2fddbdcb28d0acf5c420449682ea90

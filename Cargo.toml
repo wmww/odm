@@ -16,6 +16,8 @@ default-members = ["crates/odm"]
 # patches/ (run it once after cloning).
 [patch.crates-io]
 deno_core = { path = "vendor/deno_core" }
+winit = { path = "vendor/winit" }
+eframe = { path = "vendor/eframe" }
 
 [workspace.package]
 # 1.N.0, where N is THE engine version: one integer, bumped every release

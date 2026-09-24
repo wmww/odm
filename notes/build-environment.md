@@ -179,13 +179,22 @@ apply`s `patches/<name>-<version>.patch`, writes a stamp (patch hash +
 version) so reruns are no-ops. Called by `.wt-hooks/create`, install.sh and
 both workflows; a fresh clone that skips it fails at resolution with a
 missing `vendor/<name>/Cargo.toml`. `vendor` is in the workspace `exclude`
-(path deps under the root would otherwise become members), and each patch
-adds `[lints.rust] warnings = "allow"` (cargo shows and replays lints of path
-deps). To bump a patched crate: new patch file named for the new version,
+(path deps under the root would otherwise become members), and a patch whose
+crate warns adds `[lints.rust] warnings = "allow"` (cargo shows and replays
+lints of path deps; winit/eframe build clean without it). To bump a patched crate: new patch file named for the new version,
 update the script's line, `cargo update -p`.
 
 Current: **deno_core 0.408.0** — snapshot use-after-free (architecture.md,
 Platforms ▸ macOS). Drop it when an upstream release fixes it (0.412 hasn't).
+**winit 0.30.13 + eframe 0.35.0** — dialog windows as transients of the main
+window: winit gains `WindowAttributes::with_transient_parent` (Windows owner,
+macOS `addChildWindow`, X11 `WM_TRANSIENT_FOR`, Wayland
+`xdg_toplevel.set_parent`); eframe (wgpu path only) passes the parent
+viewport's window for `X11WindowType::Dialog` viewports. Verified on Wayland
+(`WAYLAND_DEBUG` shows `set_parent`) and X11 (`xprop WM_TRANSIENT_FOR`);
+Windows only `cargo xwin check`ed, macOS unchecked locally. winit 0.31-beta.3
+still ignores parents for Wayland toplevels (upstream winit#4256), and egui
+has no parent field — bumping egui means re-porting the eframe hunk.
 
 ## mold / sccache: installed, deliberately unused
 
