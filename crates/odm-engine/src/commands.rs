@@ -118,8 +118,20 @@ impl CmdError {
 impl EngineState {
     /// Answer one request.
     pub fn handle(&self, req: Value) -> Value {
-        let result = requests::parse(req).and_then(|req| self.dispatch(req));
-        match result {
+        let req = requests::parse(req);
+        let status = matches!(req, Ok(Request::Status));
+        let path = req.as_ref().ok().and_then(|r| r.path()).map(str::to_owned);
+        let result = req.and_then(|req| self.dispatch(req));
+        // The paths this command built itself: their errors are its answer.
+        let own: Vec<String> = match &result {
+            Ok(v) => v.get("view").and_then(Value::as_str).map(str::to_owned).into_iter().collect(),
+            Err(e) => {
+                let target = path.unwrap_or_else(|| odm_build::DEFAULT_ROOT.to_owned());
+                e.part.iter().cloned().chain([target]).collect()
+            }
+        };
+        let notes = self.response_diagnostics((!status).then_some(&own[..]));
+        let mut v = match result {
             Ok(mut v) => {
                 if let Some(o) = v.as_object_mut() {
                     o.insert("ok".into(), json!(true));
@@ -132,7 +144,14 @@ impl EngineState {
                 o.insert("error".into(), e.to_json());
                 Value::Object(o)
             }
+        };
+        if !notes.is_empty()
+            && let Some(o) = v.as_object_mut()
+            && let Some(all) = o.entry("warnings").or_insert_with(|| json!([])).as_array_mut()
+        {
+            all.extend(notes.into_iter().map(Value::String));
         }
+        v
     }
 
     fn dispatch(&self, req: Request) -> Result<Value, CmdError> {

@@ -98,6 +98,18 @@ fn file_edits(
     lines
 }
 
+/// "2 files failing (a.js, b.js); …": the response path's one line.
+fn failing_line<'a>(paths: impl ExactSizeIterator<Item = &'a String>) -> String {
+    const SHOWN: usize = 5;
+    let n = paths.len();
+    let mut names: Vec<&str> = paths.take(SHOWN).map(String::as_str).collect();
+    if n > SHOWN {
+        names.push("…");
+    }
+    let files = if n == 1 { "file" } else { "files" };
+    format!("{n} {files} failing ({}); odm status for the errors", names.join(", "))
+}
+
 /// The diagnostic value pushed to the agent (see `agent::AgentHost::run_pusher`):
 /// every failing key — active slots
 /// (`slot:<name>`) and swept files (`file:<path>`) — mapped to its error.
@@ -177,6 +189,19 @@ pub struct EngineState {
     /// does — and so nothing is queued when there is no viewer (the files
     /// themselves are the headless record, found at the next project open).
     feedback_notices: Mutex<Vec<String>>,
+    /// What responses have told an agent nothing pushes to (see
+    /// [`EngineState::response_diagnostics`]).
+    told: Mutex<Told>,
+}
+
+/// The response path's counterpart of the pusher's baseline. Engine-wide,
+/// not per client: one agent per project.
+#[derive(Default)]
+struct Told {
+    /// path → error, as last reported.
+    failing: BTreeMap<String, String>,
+    /// Host warnings not yet carried by a response.
+    warnings: Vec<String>,
 }
 
 impl EngineState {
@@ -221,6 +246,7 @@ impl EngineState {
             on_stop: Mutex::new(Vec::new()),
             agent_questions: Mutex::new(Vec::new()),
             feedback_notices: Mutex::new(Vec::new()),
+            told: Mutex::new(Told::default()),
         }))
     }
 
@@ -454,10 +480,61 @@ impl EngineState {
 
     /// A host warning (watcher dead, odm.toml/prompt sync trouble, …): a
     /// session event, not build output, so it rides the transcript — shown
-    /// in the Agent panel and forwarded to a live agent. Callers keep their
-    /// stderr print — that one is for daemon logs.
+    /// in the Agent panel and forwarded to a live agent, or else carried by
+    /// the next response. Callers keep their stderr print — that one is for
+    /// daemon logs.
     pub fn engine_warning(&self, text: String) {
+        if !self.agent.live() {
+            let mut told = self.told.lock().unwrap();
+            if !told.warnings.contains(&text) {
+                told.warnings.push(text.clone());
+            }
+        }
         self.agent.warning(text);
+    }
+
+    /// Diagnostics for an agent nothing pushes to: `warnings` lines for a
+    /// response, empty while a managed agent is live (its pusher has them).
+    /// One line when the failures the command didn't build itself differ
+    /// from what was last reported this way, plus any pending host warnings.
+    /// `own`: the paths it built — their errors are its answer. None for
+    /// `status`, which shows every failure in full (and so counts as told).
+    pub(crate) fn response_diagnostics(&self, own: Option<&[String]>) -> Vec<String> {
+        if self.agent.live() {
+            return Vec::new();
+        }
+        let current = self.last_generation.lock().unwrap().as_ref().map(|(g, _)| *g);
+        // Current-generation failures only: a stale one may be fixed already.
+        // `known` is every failure, stale or not; what is not in it healed.
+        let mut failing = BTreeMap::new();
+        let mut known = std::collections::HashSet::new();
+        let mut note = |path: &String, generation: u64, error: &String| {
+            known.insert(path.clone());
+            if Some(generation) == current {
+                failing.entry(path.clone()).or_insert_with(|| error.clone());
+            }
+        };
+        for p in self.published.lock().unwrap().values() {
+            if let Some(e) = &p.error {
+                note(&p.view.path, p.generation, e);
+            }
+        }
+        for (path, h) in self.health.lock().unwrap().iter() {
+            if let Some(e) = &h.error {
+                note(path, h.generation, e);
+            }
+        }
+        let mut told = self.told.lock().unwrap();
+        let mut lines = std::mem::take(&mut told.warnings);
+        // Healed: the next failure there is news again.
+        told.failing.retain(|path, _| known.contains(path));
+        failing.retain(|path, _| own.is_none_or(|own| !own.contains(path)));
+        let news = failing.iter().any(|(path, e)| told.failing.get(path) != Some(e));
+        if news && own.is_some() {
+            lines.push(failing_line(failing.keys()));
+        }
+        told.failing.extend(failing);
+        lines
     }
 
     /// The diagnostic value may have changed: the agent's pusher compares.
@@ -1121,5 +1198,45 @@ pub(crate) mod tests {
         // Closing the broken tab heals (error → none).
         state.remove_view(DEFAULT_SLOT);
         assert!(state.diagnostic_map().is_empty());
+    }
+
+    /// An agent nothing pushes to hears about failures it didn't build in
+    /// its responses: once per change, and never about its own target.
+    #[test]
+    fn responses_carry_diagnostics_on_change() {
+        let state = engine();
+        *state.last_generation.lock().unwrap() = Some((1, BTreeMap::new()));
+        let view = View::of("parts/x.js");
+        let fail = |g, error: &str| {
+            state.publish_failure(DEFAULT_SLOT, Some(g), &view, error.into(), vec![], None)
+        };
+        let lines = |own: &[&str]| {
+            let own: Vec<String> = own.iter().map(|s| s.to_string()).collect();
+            state.response_diagnostics(Some(&own))
+        };
+
+        fail(1, "boom");
+        assert_eq!(lines(&["parts/x.js"]), Vec::<String>::new(), "its own error is the answer");
+        assert_eq!(lines(&[]), ["1 file failing (parts/x.js); odm status for the errors"]);
+        assert!(lines(&[]).is_empty(), "the same failure again is not news");
+        fail(1, "boom 2");
+        assert_eq!(lines(&[]).len(), 1, "a changed error is");
+        // A stale value may be fixed already: not reported.
+        fail(0, "boom 3");
+        assert!(lines(&[]).is_empty());
+
+        // `status` shows everything, so it counts as told; host warnings
+        // still ride it, once.
+        fail(1, "boom 4");
+        state.engine_warning("file watcher unavailable".into());
+        assert_eq!(state.response_diagnostics(None), ["file watcher unavailable"]);
+        assert!(lines(&[]).is_empty());
+
+        // Healed, then broken the same way: news again.
+        state.remove_view(DEFAULT_SLOT);
+        assert!(lines(&[]).is_empty());
+        state.set_view(DEFAULT_SLOT, view.clone());
+        fail(1, "boom 4");
+        assert_eq!(lines(&[]).len(), 1);
     }
 }

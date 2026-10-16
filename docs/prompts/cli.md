@@ -92,6 +92,11 @@ text as typed; the rebuilt scene speaks for itself).
 - `odm` commands and edits inside the project run without asking;
   anything else may ask the user for permission first.
 
+Otherwise, the user, if there is one, talks to you in your own harness,
+and you can't see the viewer. Builds you didn't trigger that break show
+up as a `warnings` line on your next command; `odm status` has the
+details.
+
 ## Reporting ODM problems
 
 Hit a bug in ODM itself, or a wall `odm docs` has no answer for? File

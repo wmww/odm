@@ -75,13 +75,12 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
         bail!("`prompt` is a docs topic now: odm docs prompt");
     }
 
-    // The chat loop is gone: ODM runs the agent itself, and the conversation
-    // is the channel. Said here as well as engine-side, because these two
-    // took flags and free text — never the JSON the engine would parse.
+    // There is no chat loop. Said here as well as engine-side, because these
+    // two took flags and free text — never the JSON the engine would parse.
     if matches!(cmd.as_str(), "poll" | "say") {
         bail!(
-            "there is no `{cmd}`: ODM runs the agent itself now. The user's messages \
-             arrive as your conversation, and your replies show in the viewer"
+            "there is no `{cmd}`: talk to the user in your own harness, or, from the \
+             viewer's Agent panel, in the conversation"
         );
     }
 

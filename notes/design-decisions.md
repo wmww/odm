@@ -182,3 +182,9 @@ Anthropic's paused Agent-SDK billing change would hit Claude-over-ACP;
 no terminal fallback was built. Evidence:
 notes/agent-integration-research-2026-09.md; as built:
 architecture.md "Talking to the agent".
+
+Amended (user, 2026-10-15): external agents are supported again, for
+headless/agent-only use — CLI only, with no chat (`poll`/`say` stay
+gone), no user-state and no push; build diagnostics ride their command
+responses instead. The CLI is no longer free to change under them. The
+panel alongside an external agent is not supported.

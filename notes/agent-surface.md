@@ -1,8 +1,8 @@
 # Agent surface policy (prompt vs docs)
 
 Adopted 2026-08 (from plans/cli-diet.md, after the 2026-08 surface audit).
-The scarce resource is the agent's context: prompt is ~3K tokens (12.4 KB
-after the 2026-09-22 rewrite) paid once per session, but output *shape*
+The scarce resource is the agent's context: prompt is ~3K tokens (12.7 KB
+as of 2026-10-15) paid once per session, but output *shape*
 dominates everything (the un-dieted `tree` printed 191 KB). Priority order for cuts: output fields ≫ concepts ≫
 command count.
 
@@ -235,7 +235,8 @@ writing the values costs tokens ~nothing vs reading tiles.
   This replaced poll's `events`/`--follow` stream (2026-09-18), and with
   it the whole "stay reachable" section of the prompt: the harness
   mechanics agents kept getting wrong (exit-notify vs per-line watchers)
-  no longer exist.
+  no longer exist. Every other agent (external, headless) gets them as a
+  `warnings` line on its next response, on change only (2026-10-15).
 
 ## `feedback` is in the prompt (2026-09-17)
 

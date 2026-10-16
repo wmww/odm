@@ -811,9 +811,10 @@ accepted, wire facts: notes/agent-integration-research-2026-09.md.
 
 ACP carries only the conversation. The agent still drives ODM through the
 CLI from its own shell tool, cwd = project. No MCP server, no ACP client
-fs/terminal capabilities. Agents run by hand outside ODM still get the
-CLI, but have no chat — not a supported use case; the CLI may change
-freely with the managed agent.
+fs/terminal capabilities. External agents (one ODM didn't spawn: the
+user's own harness, autonomous runs) are supported again since
+2026-10-15, mostly headless: CLI only — no chat, no user-state, no push.
+They get diagnostics on responses instead (below).
 
 - **`odm-config`** — two TOML files, layered. System
   (`$XDG_CONFIG_HOME/odm/config.toml`): `[agent] default`, `permissions`
@@ -920,6 +921,18 @@ freely with the managed agent.
     Host warnings (`engine_warning`) ride the same prompts. The pusher
     never takes engine locks under the host's lock; `pokes` closes the
     lost-wakeup gap between looking and sleeping.
+  - **Diagnostics on responses**, for everyone the pusher doesn't serve
+    (gate: `AgentHost::live()` — no agent process; headless always):
+    `EngineState::response_diagnostics`, called from `handle` on every
+    response, parse errors included. One `warnings` line ("2 files
+    failing (a.js, b.js); odm status for the errors") when the failures
+    the command didn't build itself (its `view`, or its error's `part`
+    + requested path) differ from `Told.failing`, the engine-wide
+    last-reported map. Current-generation entries only (a stale one may
+    be fixed already); a heal drops the path from `Told` so the next
+    failure is news. `status` gets no line (it shows everything) but
+    counts as told. Host warnings queue in `Told.warnings` when no agent
+    is live and ride the next response, `status` included.
   - Permissions (user, 2026-09-18): `odm` commands and in-project edits
     *always* run unasked, wherever the agent can be told so — no switch.
     ODM never parses a shell string and never answers a request itself:

@@ -416,12 +416,14 @@ always produce the same bytes.
 
 ## Talking with the user
 
-There is no chat command. ODM runs the agent itself (over ACP — the
-Agent Client Protocol), and the conversation is the channel: what the
-user types into the viewer's Agent panel arrives as a message, and the
-agent's replies, tool calls and plan show there as they stream. The CLI
-is the agent's tool surface; it carries no messages. (`poll`, `say` and
-`ack` are gone; asking for them says so.)
+There is no chat command: the CLI is the agent's tool surface and
+carries no messages. (`poll`, `say` and `ack` are gone; asking for them
+says so.) How the user reaches the agent depends on who runs it.
+
+**From the viewer's Agent panel**, ODM runs the agent itself (over ACP —
+the Agent Client Protocol), and the conversation is the channel: what
+the user types arrives as a message, and the agent's replies, tool
+calls and plan show there as they stream.
 
 - **User state is sent, not sampled.** Each user message carries a
   second content block, an embedded resource `odm://user-state`: JSON
@@ -454,8 +456,15 @@ is the agent's tool surface; it carries no messages. (`poll`, `say` and
   unasked (where the agent has a way to be told so); everything else
   asks the user in the panel, unless they picked YOLO in Agent Settings.
 
-Agents run by hand, outside ODM, can still use the CLI — they just
-have no chat.
+**Any other agent** (the user's own harness, or none) talks to the user
+there, if at all; it has no view of the viewer and nothing is pushed to
+it. Instead, whenever no panel agent is running (always, headless), a
+failing view slot or swept file that the command didn't build itself
+adds one line to that command's `warnings`: `"2 files failing
+(parts/wheel.js, parts/axle.js); odm status for the errors"`. Only on
+change — the same failures are said once, engine-wide — and not on
+`status`, which shows them in full. Engine host warnings ride the next
+response the same way.
 
 ## Reporting problems
 

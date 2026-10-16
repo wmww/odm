@@ -311,8 +311,34 @@ fn poll_and_say_say_where_they_went() {
     for args in [&["poll", "--follow"][..], &["say", "hello", "there"]] {
         let out = odm(dir.path(), args);
         assert_ne!(out.code, 0);
-        assert!(out.stderr.contains("runs the agent itself"), "{}", out.stderr);
+        assert!(out.stderr.contains("your own harness"), "{}", out.stderr);
     }
+}
+
+/// An agent ODM didn't spawn hears about builds it didn't trigger in its
+/// responses: a file broken by hand shows up as one `warnings` line on an
+/// unrelated command (once the background sweep has seen it), then not again.
+#[test]
+fn a_file_broken_elsewhere_rides_the_next_response() {
+    const THROW: &str = "//! ODM API unstable\nexport default () => { throw new Error('x'); };\n";
+    let dir = project(&[("root.js", BOX10), ("parts/x.js", BOX10)]);
+    let _engine = Engine::start(dir.path());
+    write(dir.path(), "parts/x.js", THROW);
+
+    let mentions = |v: &Value| v["warnings"].as_array().is_some_and(|w| {
+        w.iter().any(|l| l.as_str().is_some_and(|l| l.contains("parts/x.js")))
+    });
+    let deadline = deadline(10);
+    loop {
+        let v = odm(dir.path(), &["inspect"]).ok_json();
+        if mentions(&v) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "parts/x.js never reported: {v}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let v = odm(dir.path(), &["inspect"]).ok_json();
+    assert!(!mentions(&v), "the same failure is said once: {v}");
 }
 
 // ----------------------------------------------------------------- 7. errors

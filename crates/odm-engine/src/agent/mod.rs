@@ -238,6 +238,12 @@ impl AgentHost {
         })
     }
 
+    /// An agent is running: diagnostics are pushed to it, not carried by
+    /// responses.
+    pub(crate) fn live(&self) -> bool {
+        self.inner.lock().unwrap().live.is_some()
+    }
+
     pub fn lamp(&self) -> Lamp {
         let inner = self.inner.lock().unwrap();
         match (&inner.live, inner.turn) {

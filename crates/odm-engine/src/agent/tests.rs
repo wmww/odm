@@ -192,6 +192,9 @@ fn diagnostics_are_pushed_and_bounded() {
 
     // A live session is told what stands once its turn is over — once.
     host.send("hi".into(), None);
+    // Pushed to it, so responses carry nothing (warnings included).
+    state.engine_warning("watcher down".into());
+    assert!(state.response_diagnostics(Some(&[])).is_empty());
     wait_until("the follow-up prompt", || pushes() == 1);
     wait_until("its turn to end", || host.lamp() == Lamp::Idle);
     std::thread::sleep(Duration::from_millis(150));

@@ -26,6 +26,21 @@ pub(crate) enum Request {
     Feedback(FeedbackReq),
 }
 
+impl Request {
+    /// The part a view command names; None when it takes the default (or
+    /// a view slot's), and for the commands that view nothing.
+    pub(crate) fn path(&self) -> Option<&str> {
+        match self {
+            Request::Inspect(r) => r.path.as_deref(),
+            Request::Render(r, _) => r.path.as_deref(),
+            Request::Raycast(r) => r.path.as_deref(),
+            Request::Clearance(r) => r.path.as_deref(),
+            Request::Export(r) => r.path.as_deref(),
+            Request::Status | Request::Feedback(_) => None,
+        }
+    }
+}
+
 /// `view`, the one "target what the user sees" knob: `true` adopts the
 /// user's active viewer tab, a string names a specific slot (see
 /// status.views).
@@ -492,15 +507,11 @@ fn removed(cmd: &str) -> Option<&'static str> {
             "`selection` is part of `status` now (the active view's `selection`); every \
              message from the user carries it too (odm://user-state)"
         }
-        "poll" | "ack" => {
-            "there is no `poll`: ODM runs the agent itself now, and the user's messages \
-             arrive as your conversation. Build errors are pushed to you the same way; \
+        "poll" | "ack" | "say" => {
+            "there is no chat command: talk to the user in your own harness, or, from \
+             the viewer's Agent panel, in the conversation. Build errors you didn't \
+             trigger come as a `warnings` line (or, in the panel, a pushed message); \
              `status` has the current build state"
-        }
-        "say" => {
-            "there is no `say`: ODM runs the agent itself now — just answer in your \
-             conversation, the user sees it in the viewer. The working status is derived \
-             from your turn, so there is nothing to set or clear"
         }
         "tree" => "`tree` is now `inspect`",
         "sync" => {
@@ -825,10 +836,10 @@ mod tests {
         assert!(e.contains("docs prompt"), "{e}");
         let e = parse_str(r#"{"cmd":"tree"}"#).err().unwrap();
         assert!(e.contains("inspect"), "{e}");
-        // The chat loop went with the managed agent panel.
+        // There is no chat loop, for either kind of agent.
         for cmd in ["poll", "say", "ack"] {
             let e = parse_str(&format!(r#"{{"cmd":"{cmd}"}}"#)).err().unwrap();
-            assert!(e.contains("runs the agent itself"), "{e}");
+            assert!(e.contains("your own harness"), "{e}");
         }
     }
 
