@@ -175,10 +175,13 @@ user wants only the patch committed, not the crate. So `[patch.crates-io]`
 points at gitignored `vendor/<name>`, and `scripts/patch-deps.sh`
 materializes it: downloads the exact `.crate` from static.crates.io, checks
 the sha256 (the old Cargo.lock checksum, hardcoded in the script), `git
-apply`s `patches/<name>-<version>.patch`, writes a stamp (patch hash +
-version) so reruns are no-ops. Called by `.wt-hooks/create`, install.sh and
-both workflows; a fresh clone that skips it fails at resolution with a
-missing `vendor/<name>/Cargo.toml`. `vendor` is in the workspace `exclude`
+apply`s `patches/<name>-<version>.patch`, writes a stamp (patch filename +
+verbatim copy) so reruns are no-ops. Called by `.wt-hooks/create`, install.sh and
+both workflows. A missing `vendor/<name>` fails at resolution (missing
+`Cargo.toml`) — before any build script, so nothing can hint or auto-run
+there. A stale one (patch edited/bumped since) is caught by
+`crates/odm/build.rs`, which compares stamps to `patches/` and fails with
+"run scripts/patch-deps.sh". `vendor` is in the workspace `exclude`
 (path deps under the root would otherwise become members), and a patch whose
 crate warns adds `[lints.rust] warnings = "allow"` (cargo shows and replays
 lints of path deps; winit/eframe build clean without it). To bump a patched crate: new patch file named for the new version,

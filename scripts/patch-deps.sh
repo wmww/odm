@@ -3,7 +3,8 @@
 # download the exact crates.io release, check its checksum, apply
 # patches/<name>-<version>.patch, into vendor/<name> (gitignored). Run once
 # after cloning and again whenever a patch changes; cargo fails with a missing
-# vendor/<name>/Cargo.toml until then. Idempotent: a stamp records the patch.
+# vendor/<name>/Cargo.toml until then. Idempotent: a stamp records the patch
+# (its filename, then a verbatim copy; crates/odm/build.rs checks it).
 #
 # deno_core: the snapshot use-after-free that aborts macOS runs (see
 # notes/architecture.md, Platforms ▸ macOS). Drop the entry, the [patch] line
@@ -26,8 +27,8 @@ materialize() {
   name=$1 version=$2 want=$3
   patch="$top/patches/$name-$version.patch"
   dest="$top/vendor/$name"
-  stamp="$(sha256 "$patch") $version"
-  if [ -f "$dest/.odm-patch-stamp" ] && [ "$(cat "$dest/.odm-patch-stamp")" = "$stamp" ]; then
+  stamp() { echo "$name-$version.patch"; cat "$patch"; }
+  if stamp | cmp -s - "$dest/.odm-patch-stamp" 2>/dev/null; then
     return
   fi
   tmp=$(mktemp -d)
@@ -44,7 +45,7 @@ materialize() {
   rm -rf "$dest"
   mkdir -p "$top/vendor"
   mv "$tmp/$name-$version" "$dest"
-  echo "$stamp" > "$dest/.odm-patch-stamp"
+  stamp > "$dest/.odm-patch-stamp"
   echo "patch-deps: vendor/$name ($version + patch)"
 }
 
