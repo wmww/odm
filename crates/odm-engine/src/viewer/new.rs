@@ -114,9 +114,7 @@ impl NewDialog {
         let name = self.name.trim();
         if name.is_empty() {
             // No name: the browsed folder itself becomes the project.
-            if is_project(dir) {
-                return Err("this folder is already a project — Open it instead".to_owned());
-            }
+            check(dir)?;
             let Some(leaf) = dir.file_name() else {
                 return Err("this folder has no name to call the project; type one".to_owned());
             };
@@ -129,16 +127,23 @@ impl NewDialog {
         if name.starts_with('.') {
             return Err("a name starting with '.' would be hidden".to_owned());
         }
-        // Every .js file under a project belongs to it, so a project inside a
-        // project would be built as part of its host.
-        if is_project(dir) {
-            return Err(nested());
-        }
         let path = dir.join(name);
         if path.exists() {
             return Err(format!("{name} is already here"));
         }
+        check(&path)?;
         Ok((path, name.to_owned()))
+    }
+}
+
+/// The rules every surface shares (`odm_build::check_new_project`), worded
+/// for the dialog.
+fn check(dir: &Path) -> Result<(), String> {
+    match odm_build::check_new_project(dir) {
+        Err(odm_build::ScanError::AlreadyProject) => {
+            Err("this folder is already a project — Open it instead".to_owned())
+        }
+        other => other.map_err(|e| e.to_string()),
     }
 }
 
@@ -251,6 +256,12 @@ mod tests {
         mark_project(dir.path());
         let err = dialog(dir.path(), "inner").resolve().unwrap_err();
         assert!(err.contains("inside another project"), "{err}");
+        // Any ancestor, not just the folder browsed.
+        let deep = dir.path().join("a/b");
+        std::fs::create_dir_all(&deep).unwrap();
+        let err = dialog(&deep, "inner").resolve().unwrap_err();
+        assert!(err.contains("inside another project"), "{err}");
+        assert!(dialog(&deep, "").resolve().unwrap_err().contains("inside another project"));
     }
 
     /// Nothing is written over: an existing entry of that name stops it here,

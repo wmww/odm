@@ -12,6 +12,19 @@ from anywhere inside the project — it walks up from cwd to the nearest
 from it). Start an engine with `odm run <dir> --headless` (or plain
 `odm run` for the viewer).
 
+## Starting a project
+
+```
+odm init [<dir>] [--name <name>] [--units mm|m|in|ft] [--append-prompt]
+```
+
+Makes `<dir>` (default cwd; created if missing, adopted if not) a project:
+`odm.toml`, a starter `root.js`, and `AGENTS.md`/`CLAUDE.md` with the ODM
+prompt. Files already there are kept. An existing agent file without the
+prompt block gets a warning; `--append-prompt` appends the block to it
+instead (and works on an existing project too). Refused inside another
+project. No engine: the output's `next` says how to start one.
+
 ## One grammar
 
 ```

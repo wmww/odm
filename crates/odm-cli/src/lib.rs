@@ -362,7 +362,7 @@ pub fn find_project(start: PathBuf) -> anyhow::Result<PathBuf> {
         if !dir.pop() {
             bail!(
                 "no ODM project at {} or above (looked for odm.toml); \
-                 name one with --project <dir>",
+                 name one with --project <dir>, or create one with `odm init`",
                 start.display()
             );
         }
@@ -377,7 +377,10 @@ pub fn project_dir(path: PathBuf) -> anyhow::Result<PathBuf> {
     if !is_project(&dir) {
         // No hint about walking up: this is the path someone named, and naming
         // one is already the hint the other resolution failure gives.
-        bail!("{} is not an ODM project: no odm.toml here", dir.display());
+        bail!(
+            "{} is not an ODM project: no odm.toml here — create one with `odm init`",
+            dir.display()
+        );
     }
     Ok(dir)
 }

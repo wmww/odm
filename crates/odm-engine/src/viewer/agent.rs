@@ -40,7 +40,7 @@ impl AgentDialog {
     pub fn apply(&self, project: &Path) -> Result<(), String> {
         match &self.question {
             AgentQuestion::AddTo(name) => odm_prompt::append(project, name),
-            AgentQuestion::CreateFiles => odm_prompt::create(project),
+            AgentQuestion::CreateFiles => odm_prompt::create(project).map(drop),
         }
     }
 

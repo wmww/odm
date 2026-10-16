@@ -7,9 +7,12 @@ license.workspace = true
 [dependencies]
 odm-cli = { path = "../odm-cli" }
 odm-engine = { path = "../odm-engine" }
+odm-build = { path = "../odm-build" }
+odm-prompt = { path = "../odm-prompt" }
 odm-export = { path = "../odm-export" }
 odm-dylib = { path = "../odm-dylib", optional = true }
 anyhow.workspace = true
+serde_json = "1"
 
 [dev-dependencies]
 # The e2e suite spawns the binary; it links nothing from the workspace.

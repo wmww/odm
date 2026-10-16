@@ -14,7 +14,9 @@ fn usage() -> String {
         "\
 odm — CAD/3D modelling for agents
 
-usage: odm run [<project-dir>] [--headless]        serve a project
+usage: odm init [<dir>] [--name <name>] [--units mm|m|in|ft] [--append-prompt]
+                                                   create a project
+       odm run [<project-dir>] [--headless]        serve a project
        odm export --web <out-dir> [<project-dir>]  export a static web viewer
        odm [--project <dir>] <command> [options]   query a running engine
        odm --version                               this build
@@ -62,6 +64,7 @@ fn dispatch(args: &[String]) -> anyhow::Result<i32> {
             Ok(2)
         }
         Some("run") => run_engine(&args[1..]),
+        Some("init") => init(&args[1..]),
         // Two exports share the word: `--web` (flags) is the standalone site
         // export; a JSON body is the engine's `export` command (STL).
         Some("export") if args.get(1).is_none_or(|a| a.starts_with("--")) => {
@@ -145,6 +148,106 @@ fn export_site(args: &[String]) -> anyhow::Result<i32> {
         report.out.display()
     );
     println!("serve it with any static file server, e.g.: python -m http.server -d {}", report.out.display());
+    Ok(0)
+}
+
+/// `odm init [<dir>] [--name <name>] [--units <u>] [--append-prompt]` —
+/// author a project, like File ▸ New Project; no engine. Flags, not JSON:
+/// binary-level and engineless, like `run`.
+fn init(args: &[String]) -> anyhow::Result<i32> {
+    let mut dir: Option<PathBuf> = None;
+    let mut name: Option<String> = None;
+    let mut units = odm_build::Units::default();
+    let mut append_prompt = false;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--name" => {
+                name = Some(it.next().ok_or_else(|| anyhow::anyhow!("--name takes a name"))?.clone());
+            }
+            "--units" => {
+                let u = it.next().ok_or_else(|| anyhow::anyhow!("--units takes mm, m, in or ft"))?;
+                units = u.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+            }
+            "--append-prompt" => append_prompt = true,
+            "--help" | "-h" => {
+                print!("{}", usage());
+                return Ok(0);
+            }
+            other if !other.starts_with('-') => {
+                if dir.is_some() {
+                    bail!("init takes at most one dir");
+                }
+                dir = Some(PathBuf::from(other));
+            }
+            other => bail!("unknown option {other} for init; run `odm --help`"),
+        }
+    }
+    let dir = std::path::absolute(dir.unwrap_or(std::env::current_dir()?))?;
+    let refuse = |msg: String| {
+        eprintln!("odm: {msg}");
+        Ok(1)
+    };
+
+    let (created, existing) = match odm_build::is_project(&dir) {
+        // Already one: the only thing left to do is the prompt, if asked.
+        true if append_prompt => (Vec::new(), odm_prompt::sync(&dir)),
+        _ => {
+            // Named after the folder, resolved, so `odm init .` works.
+            let name = match name {
+                Some(name) => name,
+                None => {
+                    let real = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+                    match real.file_name() {
+                        Some(leaf) => leaf.to_string_lossy().into_owned(),
+                        None => return refuse(format!("{} has no name to call the project; pass --name", dir.display())),
+                    }
+                }
+            };
+            match odm_build::create_project(&dir, &name, units) {
+                Ok(new) => (new.written, new.agent_files.unwrap_or_default()),
+                Err(odm_build::ScanError::AlreadyProject) => {
+                    return refuse(format!("already an ODM project — `odm run {} --headless`", dir.display()));
+                }
+                Err(e) => return refuse(e.to_string()),
+            }
+        }
+    };
+    let project = dir.canonicalize()?;
+
+    // Agent files that were already there and have not opted in: typing
+    // --append-prompt is the user's yes; otherwise say how to give it.
+    let mut appended = Vec::new();
+    let mut warnings = existing.warnings;
+    for file in existing.unmarked {
+        if append_prompt {
+            match odm_prompt::append(&project, &file) {
+                Ok(()) => appended.push(file),
+                Err(e) => warnings.push(e),
+            }
+        } else {
+            warnings.push(format!(
+                "{file} exists without the ODM prompt block, so agents reading it will not get \
+                 ODM's instructions; add it with `odm init {} --append-prompt`",
+                project.display()
+            ));
+        }
+    }
+
+    let marker = odm_build::read_marker(&project)?.expect("a project has a marker");
+    let mut out = serde_json::json!({
+        "project": project.display().to_string(),
+        "name": marker.name,
+        "units": marker.units.as_str(),
+        "created": created,
+    });
+    for (key, list) in [("updated", existing.updated), ("appended", appended), ("warnings", warnings)] {
+        if !list.is_empty() {
+            out[key] = list.into();
+        }
+    }
+    out["next"] = format!("odm run {} --headless", project.display()).into();
+    println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(0)
 }
 

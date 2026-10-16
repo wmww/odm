@@ -100,21 +100,31 @@ pub fn append(project: &Path, name: &str) -> Result<(), String> {
     std::fs::write(&path, new).map_err(|e| format!("could not write {name}: {e}"))
 }
 
+/// What `create` did: authored the pair, or found agent files already there.
+#[derive(Debug, PartialEq)]
+pub enum Created {
+    /// `AGENTS.md` with the block, and `CLAUDE.md` pointing at it.
+    Authored,
+    /// A name was taken, so nothing was authored; this is `sync`'s scan of
+    /// what is there (marked files are brought current, as on open).
+    Existing(SyncReport),
+}
+
 /// Author a project's agent files: `AGENTS.md` holding the block, and
-/// `CLAUDE.md` pointing at it. If either name is already taken (New Project
-/// into a folder that has one) nothing is written: those files are the
-/// user's, and `sync` reporting them unmarked at open time is what offers
-/// them the block.
-pub fn create(project: &Path) -> Result<(), String> {
+/// `CLAUDE.md` pointing at it. If either name is already taken (a project
+/// made in a folder that has one) nothing is authored: those files are the
+/// user's, and the report's `unmarked` are the ones to offer the block.
+pub fn create(project: &Path) -> Result<Created, String> {
     use std::io::Write;
     if FILES.iter().any(|name| project.join(name).symlink_metadata().is_ok()) {
-        return Ok(());
+        return Ok(Created::Existing(sync(project)));
     }
     let mut file = std::fs::File::create_new(project.join("AGENTS.md"))
         .map_err(|e| format!("could not write AGENTS.md: {e}"))?;
     file.write_all(format!("{}\n", block()).as_bytes())
         .map_err(|e| format!("could not write AGENTS.md: {e}"))?;
-    link_claude(project)
+    link_claude(project)?;
+    Ok(Created::Authored)
 }
 
 /// The second name for the same file. A relative symlink, so the project can
@@ -171,7 +181,7 @@ mod tests {
     #[test]
     fn create_authors_the_pair_and_sync_then_has_one_logical_file() {
         let dir = project();
-        create(dir.path()).unwrap();
+        assert_eq!(create(dir.path()).unwrap(), Created::Authored);
         assert!(read(dir.path(), "AGENTS.md").contains(&text()));
         assert_eq!(read(dir.path(), "CLAUDE.md"), read(dir.path(), "AGENTS.md"));
         #[cfg(unix)]
@@ -182,17 +192,17 @@ mod tests {
         // Fresh files: nothing to update, nothing to ask about.
         assert_eq!(sync(dir.path()), SyncReport::default());
         // And a second create has nothing left to author.
-        create(dir.path()).unwrap();
+        assert_eq!(create(dir.path()).unwrap(), Created::Existing(SyncReport::default()));
     }
 
     #[test]
     fn create_leaves_existing_agent_files_for_the_open_question() {
         let dir = project();
         std::fs::write(dir.path().join("CLAUDE.md"), "just mine\n").unwrap();
-        create(dir.path()).unwrap();
+        let Created::Existing(report) = create(dir.path()).unwrap() else { panic!() };
+        assert_eq!(report.unmarked, ["CLAUDE.md"]);
         assert!(!dir.path().join("AGENTS.md").exists());
         assert_eq!(read(dir.path(), "CLAUDE.md"), "just mine\n");
-        assert_eq!(sync(dir.path()).unmarked, ["CLAUDE.md"]);
     }
 
     #[test]
@@ -279,6 +289,22 @@ mod tests {
         for name in FILES {
             assert!(read(dir.path(), name).contains(&block()), "{name}");
         }
+    }
+
+    /// A symlinked pair is one file: appended once, through either name.
+    #[test]
+    #[cfg(unix)]
+    fn append_through_the_symlink_pair_writes_one_block() {
+        let dir = project();
+        std::fs::write(dir.path().join("AGENTS.md"), "# Mine\n").unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", dir.path().join("CLAUDE.md")).unwrap();
+        let Created::Existing(report) = create(dir.path()).unwrap() else { panic!() };
+        assert_eq!(report.unmarked, ["AGENTS.md"]);
+        append(dir.path(), "AGENTS.md").unwrap();
+        append(dir.path(), "CLAUDE.md").unwrap();
+        let out = read(dir.path(), "CLAUDE.md");
+        assert_eq!(out, format!("# Mine\n\n{}\n", block()));
+        assert!(dir.path().join("CLAUDE.md").symlink_metadata().unwrap().is_symlink());
     }
 
     #[test]

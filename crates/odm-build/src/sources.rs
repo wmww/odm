@@ -87,6 +87,16 @@ impl Units {
     }
 }
 
+impl std::str::FromStr for Units {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Units, String> {
+        Units::ALL
+            .into_iter()
+            .find(|u| u.as_str() == s)
+            .ok_or_else(|| format!("unknown units {s:?}: one of mm, m, in, ft"))
+    }
+}
+
 impl std::fmt::Display for Units {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -103,6 +113,10 @@ pub enum ScanError {
     NotADirectory(String),
     #[error("{0} already exists")]
     Exists(String),
+    #[error("already an ODM project")]
+    AlreadyProject,
+    #[error("a project cannot live inside another project ({0})")]
+    Nested(String),
 }
 
 /// One part's source as of a sync.
@@ -221,28 +235,88 @@ pub fn sync_marker_as(dir: &Path, engine: i64) -> Result<Option<String>, ScanErr
     Ok(None)
 }
 
-/// Author a new project in `dir`: the marker that makes it one, a starter
+/// Can a project be made at `dir`? Not if it is one already, or sits
+/// anywhere inside one (every `.js` under a project belongs to it, so a
+/// nested project would be built as part of its host), or is not a folder.
+/// `dir` need not exist yet.
+pub fn check_new_project(dir: &Path) -> Result<(), ScanError> {
+    let io = |e: std::io::Error| ScanError::Io { path: dir.display().to_string(), err: e.to_string() };
+    if dir.exists() && !dir.is_dir() {
+        return Err(ScanError::NotADirectory(dir.display().to_string()));
+    }
+    if is_project(dir) {
+        return Err(ScanError::AlreadyProject);
+    }
+    // Ancestors of the nearest part of the path that exists, resolved, so
+    // `..` and symlinks lead where they really go.
+    let abs = std::path::absolute(dir).map_err(io)?;
+    let mut probe = abs.as_path();
+    let real = loop {
+        match probe.canonicalize() {
+            Ok(real) => break real,
+            Err(_) => match probe.parent() {
+                Some(parent) => probe = parent,
+                None => return Ok(()),
+            },
+        }
+    };
+    let above = match probe == abs {
+        true => real.parent(), // `dir` itself was checked above
+        false => Some(real.as_path()),
+    };
+    match above.into_iter().flat_map(Path::ancestors).find(|a| is_project(a)) {
+        Some(host) => Err(ScanError::Nested(host.display().to_string())),
+        None => Ok(()),
+    }
+}
+
+/// What `create_project` wrote, and what it found already there.
+#[derive(Debug)]
+pub struct NewProject {
+    /// Files written, by name: `odm.toml`, then whichever of `root.js` and
+    /// the agent pair were not there already.
+    pub written: Vec<String>,
+    /// The agent files that were there: their scan, `None` if the pair was
+    /// authored.
+    pub agent_files: Option<odm_prompt::SyncReport>,
+}
+
+/// Author a new project at `dir`: the marker (`odm.toml`), a starter
 /// `root.js` so there is something to look at, and the agent files carrying
 /// the standard ODM instructions. `dir` may be an existing folder (it is
-/// created if not): the marker must be new — one already there means this is
-/// a project already — but a root.js or agent file already present is kept
-/// as-is, the root as the project's root, the agent files to be offered the
-/// block at open time.
+/// created if not): it must pass `check_new_project`, but a root.js or agent
+/// file already present is kept as-is, the root as the project's root, the
+/// agent files to be offered the block (at open time, or by `odm init
+/// --append-prompt`). File ▸ New Project and `odm init` both come here.
 ///
 /// The other places the engine writes project files are `sync_marker` and the
 /// agent-file block (`odm_prompt`). This one only ever writes files that do
 /// not exist yet, so nothing authored can be lost to it.
-pub fn create_project(dir: &Path, name: &str, units: Units) -> Result<(), ScanError> {
+pub fn create_project(dir: &Path, name: &str, units: Units) -> Result<NewProject, ScanError> {
+    check_new_project(dir)?;
     std::fs::create_dir_all(dir)
         .map_err(|e| ScanError::Io { path: dir.display().to_string(), err: e.to_string() })?;
     let marker = ProjectMarker { name: name.to_owned(), engine: ENGINE_VERSION, units };
     let marker = toml::to_string(&marker).map_err(|e| ScanError::BadMarker(e.to_string()))?;
     write_new(&dir.join("odm.toml"), &marker)?;
+    let mut written = vec!["odm.toml".to_owned()];
     match write_new(&dir.join("root.js"), &starter(name, units)) {
         Err(ScanError::Exists(_)) => {} // theirs, and the root now
-        other => other?,
+        other => {
+            other?;
+            written.push("root.js".to_owned());
+        }
     }
-    odm_prompt::create(dir).map_err(|e| ScanError::Io { path: "agent files".into(), err: e })
+    let agent_files = match odm_prompt::create(dir)
+        .map_err(|e| ScanError::Io { path: "agent files".into(), err: e })?
+    {
+        odm_prompt::Created::Authored => {
+            written.extend(odm_prompt::FILES.map(str::to_owned));
+            None
+        }
+        odm_prompt::Created::Existing(report) => Some(report),
+    };
+    Ok(NewProject { written, agent_files })
 }
 
 /// Write a file that is not there, and say so rather than clobber one that is.

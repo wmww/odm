@@ -8,7 +8,7 @@
 
 mod fs;
 
-pub use fs::{SyncReport, append, create, sync};
+pub use fs::{Created, SyncReport, append, create, sync};
 
 macro_rules! prompt {
     ($name:literal) => {

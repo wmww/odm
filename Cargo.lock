@@ -2778,10 +2778,12 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "libc",
+ "odm-build",
  "odm-cli",
  "odm-dylib",
  "odm-engine",
  "odm-export",
+ "odm-prompt",
  "png",
  "serde_json",
  "tempfile",

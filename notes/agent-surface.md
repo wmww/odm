@@ -32,7 +32,8 @@ command count.
 `odm [--project <dir>] <cmd> ['{…json}']` — the argument *is* the socket
 request body, minus `cmd`. No per-command flags, no other positionals;
 bare = defaults. Exceptions, deliberately: `docs` (engineless),
-`--project` prefix (transport). (`poll`/`say`, the old flag-taking
+`--project` prefix (transport), and the binary-level engineless commands
+with flags (`run`, `export --web`, `init`). (`poll`/`say`, the old flag-taking
 exceptions, went with the chat loop 2026-09-18 — both redirect.)
 The engine's spec table validates field names (typos list siblings,
 removed commands get redirect errors) — one error path, no CLI grammar

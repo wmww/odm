@@ -73,10 +73,13 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
   well-formed pair is the file's opt-in — `odm_prompt::sync` splices the
   current prompt in on every project open (viewer *and* headless), touching
   nothing outside the markers and not writing at all when the block is already
-  current. A new project (File ▸ New Project) gets AGENTS.md with the block and
-  CLAUDE.md as a relative symlink to it (`odm_prompt::create` — skipped
-  entirely if either name is already taken, leaving the open-time question to
-  offer the block). Anything else is a viewer question,
+  current. A new project (File ▸ New Project or `odm init`) gets AGENTS.md with
+  the block and CLAUDE.md as a relative symlink to it (`odm_prompt::create` —
+  skipped entirely if either name is already taken; it then returns `sync`'s
+  scan, whose unmarked files are the open-time question's to offer the
+  block, or `odm init`'s to warn about — `odm init --append-prompt` is the
+  CLI's yes, appending via `odm_prompt::append`, and also works on an
+  existing project). Anything else is a viewer question,
   one per logical file (the symlink pair dedupes by canonical path, asked about
   as AGENTS.md): an existing unmarked file offers an append, and no agent file
   at all offers to create the pair. Answers are not recorded — a "no" is asked
@@ -1220,11 +1223,13 @@ notes/spike-findings.md "Snapshot count/concurrency".
   an agent file (`odm_prompt::sync` — both run from `session::sync_on_open`;
   see "Agent files" under Project format). Agent-file writes are either marker-scoped (the markers *are* the
   file's opt-in) or user-consented (a viewer question box). (`create_project`,
-  File ▸ New Project, authors a project's first files, but only ever creates
-  files that are not there — it may target an existing folder, where the New
-  dialog's empty Name field means "this folder", named after its leaf; only
-  `odm.toml` already existing is an error, an existing root.js/agent file is
-  kept.)
+  File ▸ New Project and `odm init`, authors a project's first files, but only
+  ever creates files that are not there — it may target an existing folder
+  (the New dialog's empty Name field / init's default cwd mean "this folder",
+  named after its leaf); an existing root.js/agent file is kept and it reports
+  what it wrote. `check_new_project` holds the shared refusals: already a
+  project, inside one (any ancestor, path resolved), not a directory. The
+  dialog adds only its UI rules: one-component name, no leading dot.)
 - Engine queries on content-addressed handles are pure → never memo deps.
   Queries on transformed solids bake via op_transform_bake (cached per
   Solid) — exact, but costs a mesh copy per distinct transform.

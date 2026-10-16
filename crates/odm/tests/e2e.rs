@@ -186,6 +186,62 @@ fn await_published(project: &Path) -> Value {
     }
 }
 
+/// `odm init` with no flags in its args: the plain binary, cwd untouched.
+fn init(args: &[&str]) -> Out {
+    let out = Command::new(BIN).arg("init").args(args).output().expect("run odm init");
+    Out {
+        code: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// From nothing to a serving engine with only the commands an agent outside
+/// ODM has: init, then what its `next` says.
+#[test]
+fn init_makes_a_project_an_engine_can_serve() {
+    let tmp = tempdir();
+    let dir = tmp.path().join("widget");
+    let out = init(&[&dir.display().to_string()]).ok_json();
+    assert_eq!(out["name"], "widget");
+    assert_eq!(out["units"], "mm");
+    assert_eq!(out["created"], json!(["odm.toml", "root.js", "AGENTS.md", "CLAUDE.md"]));
+    assert!(out["next"].as_str().unwrap().contains("--headless"), "{out}");
+    let project = PathBuf::from(out["project"].as_str().unwrap());
+
+    let _engine = Engine::start(&project);
+    let inspect = odm(&project, &["inspect"]).ok_json();
+    assert!(inspect.to_string().contains("\"block\""), "{inspect}");
+
+    // A second init, here or anywhere below, is refused.
+    let again = init(&[&project.display().to_string()]);
+    assert_eq!(again.code, 1, "{}", again.stderr);
+    assert!(again.stderr.contains("odm run"), "{}", again.stderr);
+    let nested = init(&[&project.join("sub").display().to_string()]);
+    assert_eq!(nested.code, 1, "{}", nested.stderr);
+    assert!(nested.stderr.contains("inside another project"), "{}", nested.stderr);
+}
+
+/// An agent's own repo already has a CLAUDE.md: kept, warned about, and
+/// given the block only once --append-prompt says yes.
+#[test]
+fn init_keeps_an_existing_agent_file_until_told() {
+    let tmp = tempdir();
+    write(tmp.path(), "CLAUDE.md", "# Mine\n");
+    let dir = tmp.path().display().to_string();
+    let out = init(&[&dir, "--units", "in", "--name", "thing"]).ok_json();
+    assert_eq!((out["name"].as_str(), out["units"].as_str()), (Some("thing"), Some("in")));
+    assert_eq!(out["created"], json!(["odm.toml", "root.js"]));
+    assert!(out["warnings"][0].as_str().unwrap().contains("--append-prompt"), "{out}");
+    assert_eq!(std::fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap(), "# Mine\n");
+
+    let out = init(&[&dir, "--append-prompt"]).ok_json();
+    assert_eq!(out["appended"], json!(["CLAUDE.md"]));
+    assert!(out.get("warnings").is_none(), "{out}");
+    let claude = std::fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap();
+    assert!(claude.starts_with("# Mine\n\n<!---"), "{claude}");
+}
+
 // ------------------------------------------------------- 2. sync on query
 
 /// The headline invariant: every query rescans first, so a query can never
