@@ -254,6 +254,16 @@ Deliberately nothing agent-visible about what happens next — no "sent"
 state, no queue length, no reply channel. A report is a write into the
 project, and the human is the only reader that matters.
 
+## `odm prompt` is back (2026-10-15)
+
+It was cut (2026-08) for a docs topic while the whole prompt lived in a
+marker block in AGENTS.md. It came back because a frozen copy in a file
+every agent shares (and git tracks) can't fit the situation: who started
+the agent (panel vs own harness, `odm_prompt::Context`), and later which
+agent, the project's units, the OS/sandbox. Agent files now carry one
+pointer line; the panel agent gets the prompt from ODM directly. Not a
+docs topic: it varies, and two ways in is one too many.
+
 ## Project units are in the prompt (2026-09-18)
 
 The second deliberate prompt addition, beside `feedback`: one Conventions
@@ -276,9 +286,6 @@ exists. The `export` command itself is docs-only (spec table + docs/cli.md
   `warnings` channel of every view-targeting success.
 - **No `selection` command** (2026-08): `status` reports the active
   slot's selection; every user message carries it (`odm://user-state`).
-- **No `prompt` command** (2026-08): it's a docs topic (`odm docs
-  prompt`) — the prompt's standing home is the AGENTS.md marker block,
-  so the command's only remaining use was inspection, which is docs.
 - One "target what the user sees" knob: `"view": true` = active viewer
   tab, `"view": "<slot>"` = a named slot. There is no `--viewer-state`.
   Adoption covers path+inputs only, never the camera — per
@@ -287,5 +294,5 @@ exists. The `export` command itself is docs-only (spec table + docs/cli.md
 - `generation` appears only in `status` (internal consistency counter).
 - Nothing agent-visible prints content hashes.
 - Removed-command redirects live engine-side (`requests.rs::removed`),
-  so raw-socket users get them too; `prompt` alone redirects client-side
-  (its replacement needs no engine).
+  so raw-socket users get them too; `odm docs prompt` redirects to `odm
+  prompt` client-side.

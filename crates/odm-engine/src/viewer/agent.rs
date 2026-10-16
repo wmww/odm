@@ -1,7 +1,7 @@
-//! The agent-file question box: "shall I put the ODM instructions in here?".
+//! The agent-file question box: "shall I point this file at `odm prompt`?".
 //!
 //! Only ever asked about a file the engine will not touch on its own — one
-//! without the markers, or no agent file at all. Saying no just closes it:
+//! that has not opted in, or no agent file at all. Saying no just closes it:
 //! nothing is recorded, so the question comes back next time the project is
 //! opened (see `session::AgentQuestion`).
 
@@ -53,18 +53,18 @@ impl AgentDialog {
         let mut outcome = Outcome::Idle;
         let (question, note, verb) = match &self.question {
             AgentQuestion::AddTo(name) => (
-                format!("Add the standard ODM instructions to {name}?"),
-                "They go at the end of the file, and are kept up to date \
-                 automatically. The rest of the file is left alone.",
+                format!("Add a line to {name} telling agents how to get ODM's instructions?"),
+                "It goes at the end of the file, and says to run `odm prompt`. \
+                 The rest of the file is left alone.",
                 "Add",
             ),
             AgentQuestion::CreateFiles => (
                 format!(
-                    "Create AGENTS.md with the standard ODM instructions? \
+                    "Create AGENTS.md telling agents how to get ODM's instructions? \
                      (CLAUDE.md is created as {}.)",
                     if cfg!(unix) { "a link to it" } else { "a copy of it" }
                 ),
-                "They will be kept up to date automatically.",
+                "It holds one line, saying to run `odm prompt`.",
                 "Create",
             ),
         };

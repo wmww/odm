@@ -518,7 +518,6 @@ fn removed(cmd: &str) -> Option<&'static str> {
             "every command syncs first, so there is no `sync`; `status` if the rescan is \
              all you want"
         }
-        "prompt" => "`prompt` is a docs topic now: `odm docs prompt`",
         _ => return None,
     })
 }
@@ -832,8 +831,6 @@ mod tests {
         assert!(e.contains("status"), "{e}");
         let e = parse_str(r#"{"cmd":"sync"}"#).err().unwrap();
         assert!(e.contains("status"), "{e}");
-        let e = parse_str(r#"{"cmd":"prompt"}"#).err().unwrap();
-        assert!(e.contains("docs prompt"), "{e}");
         let e = parse_str(r#"{"cmd":"tree"}"#).err().unwrap();
         assert!(e.contains("inspect"), "{e}");
         // There is no chat loop, for either kind of agent.

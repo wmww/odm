@@ -94,6 +94,9 @@ All decided (see Decisions). Remaining paperwork:
       with `split-debuginfo = "packed"` so the `.dwp` can be archived per
       release for symbolizing user backtraces. Check the release build
       time stays sane with fat LTO over V8.
+- [ ] Drop the legacy agent-file marker migration (`odm_prompt::BEGIN`/`END`,
+      the block case in `splice`) once no pre-2026-10-15 project is around —
+      likely before the first release, since none exist outside dev.
 - [ ] `odm --version` reports more: it exists and prints
       `odm <engine version> (<git sha>, <target>)` (odm-engine's
       `build.rs` + `build_string()`, built 2026-09-17 for feedback

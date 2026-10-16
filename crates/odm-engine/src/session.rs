@@ -113,7 +113,7 @@ impl Sessions {
 /// transient: a "no" is not recorded anywhere, so a declined question comes
 /// back the next time the project is opened.
 pub enum AgentQuestion {
-    /// This agent file exists but has no markers: offer to append the block.
+    /// This agent file exists but has not opted in: offer to append the line.
     AddTo(String),
     /// No agent file at all: offer to author AGENTS.md + CLAUDE.md.
     CreateFiles,
@@ -129,13 +129,14 @@ pub struct OpenScan {
 }
 
 /// Everything the engine writes to a project it did not author, done in one
-/// place: this engine's version in `odm.toml`, and the standard prompt in
-/// whichever agent files opted in by carrying the markers. Both are
+/// place: this engine's version in `odm.toml`, and the `odm prompt` line in
+/// whichever agent files opted in by carrying it (or a legacy marker block,
+/// which becomes the line). Both are
 /// best-effort — warnings go to stderr (daemon logs) *and* into the
 /// returned scan, and nothing here blocks an open.
 ///
 /// Returns what could not be done without asking. Headless calls this too
-/// (for the marked-file updates) and ignores the questions.
+/// (for the opted-in updates) and ignores the questions.
 pub fn sync_on_open(project: &Path) -> OpenScan {
     let mut warnings = Vec::new();
     // An unreadable marker already fails loudly at scan time, and an

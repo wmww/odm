@@ -113,6 +113,26 @@ fn one_conversation_at_a_time() {
     host.shutdown(true);
 }
 
+/// An agent whose adapter takes no system prompt gets the ODM prompt with
+/// its first message — once per session, and not in the transcript.
+#[test]
+fn the_first_prompt_of_a_session_carries_the_odm_prompt() {
+    let (dir, files) = project();
+    let host = AgentHost::with_files(dir.path(), files);
+    let ask = |host: &Arc<AgentHost>, n: usize| {
+        host.send("list attachments".into(), Some(json!({"path": "root.js"})));
+        wait_until("the reply", || host.lamp() == Lamp::Idle && texts(host).len() == n);
+        texts(host).pop().unwrap()
+    };
+    assert_eq!(ask(&host, 2), "Attached: odm://prompt, odm://user-state; managed: 1");
+    assert_eq!(ask(&host, 4), "Attached: odm://user-state; managed: 1");
+    assert_eq!(texts(&host)[0], "> list attachments");
+    // A new session is primed afresh.
+    host.new_session();
+    assert_eq!(ask(&host, 2), "Attached: odm://prompt, odm://user-state; managed: 1");
+    host.shutdown(true);
+}
+
 #[test]
 fn a_crash_is_a_red_line_and_the_next_message_respawns() {
     let (dir, files) = project();

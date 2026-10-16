@@ -121,6 +121,9 @@ struct Live {
     serial: u64,
     /// The session exists: prompts go straight through.
     ready: bool,
+    /// The ODM prompt has reached this session: by its `_meta`, or with the
+    /// first prompt. Sessions are never resumed, so once per spawn.
+    primed: bool,
     login: Option<String>,
 }
 
@@ -356,8 +359,8 @@ impl AgentHost {
         }
         // Lit from Enter, not from the agent's first sign of life.
         inner.turn = true;
-        if let Some(live) = &inner.live {
-            live.agent.prompt(blocks);
+        if let Some(live) = &mut inner.live {
+            live.prompt(blocks);
         }
         drop(inner);
         self.wake();
@@ -537,8 +540,11 @@ impl AgentHost {
         config: Vec<(String, String)>,
     ) -> Result<(), String> {
         let resolved = table::resolve(id, &inner.config.agent).map_err(|e| e.to_string())?;
+        let primed = resolved.primes();
         let mut launch = Launch::new(resolved.command, self.project.clone());
         launch.env = resolved.env;
+        // So an `odm prompt` it runs anyway gets the variant meant for it.
+        launch.env.insert(odm_prompt::MANAGED_ENV.to_owned(), "1".to_owned());
         // The agent's `odm` is *this* odm, even when the user has none (or
         // another) on PATH.
         launch.path_prepend =
@@ -555,7 +561,7 @@ impl AgentHost {
             .map_err(|e| format!("could not start {}: {e}", table::title(id)))?;
         inner.serial += 1;
         let serial = inner.serial;
-        inner.live = Some(Live { agent, id: id.to_owned(), serial, ready: false, login: None });
+        inner.live = Some(Live { agent, id: id.to_owned(), serial, ready: false, primed, login: None });
         inner.baseline.clear();
         let host = self.clone();
         std::thread::Builder::new()
@@ -782,6 +788,23 @@ fn resource(uri: &str, body: &Value) -> Value {
     }})
 }
 
+impl Live {
+    /// Every prompt goes through here, whoever sent it (the user, or the
+    /// engine's push), so the session's first one carries the ODM prompt
+    /// when `_meta` could not. Ahead of the message: it is read first. The
+    /// panel shows only the message.
+    fn prompt(&mut self, mut blocks: Vec<Value>) {
+        if !self.primed {
+            self.primed = true;
+            let text = odm_prompt::text(&odm_prompt::Context { managed: true });
+            blocks.insert(0, json!({"type": "resource", "resource": {
+                "uri": "odm://prompt", "mimeType": "text/markdown", "text": text,
+            }}));
+        }
+        self.agent.prompt(blocks);
+    }
+}
+
 impl Inner {
     fn header(&self) -> Option<&Header> {
         self.items.iter().rev().find_map(|i| match i {
@@ -899,8 +922,8 @@ impl Inner {
         self.baseline = map.clone();
         self.engine_prompts += 1;
         self.turn = true;
-        if let Some(live) = &self.live {
-            live.agent.prompt(blocks);
+        if let Some(live) = &mut self.live {
+            live.prompt(blocks);
         }
     }
 }

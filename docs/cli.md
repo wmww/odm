@@ -1,7 +1,7 @@
 # CLI reference
 
 The full reference for the `odm` CLI. The short version — the core
-loop — is in the agent prompt (`odm docs prompt`); everything the CLI
+loop — is in the agent prompt (`odm prompt`); everything the CLI
 can do is here.
 
 The CLI talks to a running engine over a local socket, with a file
@@ -19,11 +19,21 @@ odm init [<dir>] [--name <name>] [--units mm|m|in|ft] [--append-prompt]
 ```
 
 Makes `<dir>` (default cwd; created if missing, adopted if not) a project:
-`odm.toml`, a starter `root.js`, and `AGENTS.md`/`CLAUDE.md` with the ODM
-prompt. Files already there are kept. An existing agent file without the
-prompt block gets a warning; `--append-prompt` appends the block to it
-instead (and works on an existing project too). Refused inside another
-project. No engine: the output's `next` says how to start one.
+`odm.toml`, a starter `root.js`, and `AGENTS.md`/`CLAUDE.md` holding one
+line that says to run `odm prompt`. Files already there are kept. An
+existing agent file without that line gets a warning; `--append-prompt`
+appends the line to it instead (and works on an existing project too).
+Refused inside another project. No engine: the output's `next` lists the
+commands to run next — start one, then read `odm prompt`.
+
+```
+odm prompt
+```
+
+The agent instructions: how to work on an ODM project, as markdown. No
+engine or project needed. Generated when run, so it fits the situation
+(an agent ODM started from the viewer's Agent panel gets that one's
+variant, and needn't run it at all: ODM hands it the prompt itself).
 
 ## One grammar
 

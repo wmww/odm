@@ -68,18 +68,21 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - `odm.toml` is one of the two project files the engine writes: it raises the
   `engine` version to its own on open (never lowers it; a file naming a newer
   engine only gets a warning — notes/api-stability-and-docs.md). The other is the agent files — see below.
-- **Agent files** (`AGENTS.md`, `CLAUDE.md` at the project root): the standard
-  prompt lives between `<!--- BEGIN/END STANDARD ODM PROMPT --->` lines, and a
-  well-formed pair is the file's opt-in — `odm_prompt::sync` splices the
-  current prompt in on every project open (viewer *and* headless), touching
-  nothing outside the markers and not writing at all when the block is already
-  current. A new project (File ▸ New Project or `odm init`) gets AGENTS.md with
-  the block and CLAUDE.md as a relative symlink to it (`odm_prompt::create` —
-  skipped entirely if either name is already taken; it then returns `sync`'s
-  scan, whose unmarked files are the open-time question's to offer the
-  block, or `odm init`'s to warn about — `odm init --append-prompt` is the
-  CLI's yes, appending via `odm_prompt::append`, and also works on an
-  existing project). Anything else is a viewer question,
+- **Agent files** (`AGENTS.md`, `CLAUDE.md` at the project root) carry one
+  line, `odm_prompt::LINE` ("…run `odm prompt` for how to use ODM"); the
+  prompt itself is generated per `odm_prompt::Context` and never written to
+  the project. Having the line is the file's opt-in: `odm_prompt::sync` (every
+  project open, viewer *and* headless) rewrites any `OLD_LINES` entry to it
+  and migrates a legacy `<!--- BEGIN/END STANDARD ODM PROMPT --->` block
+  (markers included) to it, touching nothing else and not writing when
+  current. A line mentioning `odm prompt` that isn't ours is the user's own
+  version: left alone and never asked about. A new project (File ▸ New
+  Project or `odm init`) gets AGENTS.md holding the line and CLAUDE.md as a
+  relative symlink to it (`odm_prompt::create` — skipped entirely if either
+  name is already taken; it then returns `sync`'s scan, whose unmarked files
+  are the open-time question's to offer the line, or `odm init`'s to warn
+  about — `odm init --append-prompt` is the CLI's yes, appending via
+  `odm_prompt::append`, and also works on an existing project). Anything else is a viewer question,
   one per logical file (the symlink pair dedupes by canonical path, asked about
   as AGENTS.md): an existing unmarked file offers an append, and no agent file
   at all offers to create the pair. Answers are not recorded — a "no" is asked
@@ -452,16 +455,21 @@ The system as it exists (MVP completed 2026-07-22). Why it's this way:
 - `odm-config`, `odm-agent` — user config and the ACP client; see
   "Talking to the agent".
 - `odm-prompt` — std-only, no odm deps (odm-cli must stay V8-free): the
-  `docs/prompts/*.md` `include_str!`s behind `text()`, plus the marked-block
-  machinery both the `prompt` docs topic and the engine's on-open sync use.
+  `docs/prompts/*.md` `include_str!`s behind `text(&Context)` (variants are
+  rows of `PROMPTS` switched in/out by `Context`, no templating; today only
+  `managed` — the panel vs own-harness "Talking with the user"), plus the
+  pointer-line machinery the engine's on-open sync and `odm init` use.
+  `MANAGED_ENV` (`ODM_MANAGED_AGENT=1`) is set on the agent ODM spawns, so
+  an `odm prompt` it runs anyway gets the managed variant.
 - `odm-cli` — transport only: project resolution — `find_project` (the
   cwd walk-up), `project_dir`, `is_project`, all reused by `run` — the
   socket, one JSON positional forwarded as the request body (the engine
   owns all validation; `poll`/`say` are redirected CLI-side, since they
   took flags), client-side `out` resolution, pretty-printing, exit code
-  from `ok`. Plus the engine-less `docs.rs`
-  (`odm docs` `include_dir!`s the whole `docs/` tree: topic dump —
-  including the `prompt` topic over `odm_prompt::text` — section-grepping
+  from `ok`. Plus the engine-less `odm prompt` (`odm_prompt::text` with
+  `Context::from_env()`) and `docs.rs`
+  (`odm docs` `include_dir!`s the whole `docs/` tree: topic dump
+  (`odm docs prompt` redirects to `odm prompt`), section-grepping
   `search`, `changes <from> <to>` migration concatenation, `--api N`
   rejected until frozen docs snapshots exist).
 - `odm` — the only binary. `odm run [<dir>] [--headless]` → the engine
@@ -904,6 +912,14 @@ They get diagnostics on responses instead (below).
   - A user message = text + an embedded resource `odm://user-state` (the
     view snapshot: "sent, not sampled" holds). Engine-authored prompts
     start `[odm engine]`.
+  - **The ODM prompt** (`text(&Context { managed: true })`, which says not
+    to run `odm prompt`) reaches each session once: Claude via `session/new`
+    `_meta.systemPrompt.append` (survives compaction; keeps the claude_code
+    preset; verified live 2026-10-15, adapter 0.79), so `Live.primed` starts
+    true (`Resolved::primes`); everyone else (Codex 1.12 has no way in,
+    custom) gets an `odm://prompt` markdown resource ahead of the first
+    prompt, whichever path sends it (`Live::prompt`: user or push). Not in
+    the transcript. The agent's env carries `ODM_MANAGED_AGENT=1`.
   - Working status is derived, never agent-set (`working()`): the plan
     entry in progress, else the running tool call's title, else
     "Working"; "Waiting for you" while a permission question is open.
@@ -1219,10 +1235,11 @@ notes/spike-findings.md "Snapshot count/concurrency".
   exceptions, neither of which can touch a part or churn a generation
   (neither odm.toml nor `.md` files are part of generation identity):
   the `engine` value in `odm.toml` (recorded on project open;
-  `odm_build::sync_marker`), and the standard prompt inside the marker pair of
-  an agent file (`odm_prompt::sync` — both run from `session::sync_on_open`;
-  see "Agent files" under Project format). Agent-file writes are either marker-scoped (the markers *are* the
-  file's opt-in) or user-consented (a viewer question box). (`create_project`,
+  `odm_build::sync_marker`), and the `odm prompt` line of an agent file that
+  already has one (or a legacy marker block) (`odm_prompt::sync` — both run
+  from `session::sync_on_open`; see "Agent files" under Project format).
+  Agent-file writes are either line-scoped (the line *is* the file's opt-in)
+  or user-consented (a viewer question box). (`create_project`,
   File ▸ New Project and `odm init`, authors a project's first files, but only
   ever creates files that are not there — it may target an existing folder
   (the New dialog's empty Name field / init's default cwd mean "this folder",
@@ -1317,7 +1334,7 @@ replay logs by design, so it is not observable from a conformance check;
 `cargo test` runs everything in ~1s after compile. Almost all tests are
 integration tests in `crates/*/tests/`; the unit tests in `src/` are
 `odm-render/src/grid.rs`, `odm-build/src/version.rs` (pragma parsing),
-`odm-prompt/src/` (marker splicing + the agent-file scan); in
+`odm-prompt/src/` (pointer-line splicing + the agent-file scan); in
 odm-viewer-core, `icons.rs`, `tree.rs`, `inputs.rs` (the input panel,
 headless egui) and `theme/scroll.rs`; and in odm-engine, `commands.rs`,
 `state.rs` (build loop, sweep, the watcher), `requests.rs`, `agent/` (the host

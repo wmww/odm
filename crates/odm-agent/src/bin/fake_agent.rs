@@ -24,7 +24,8 @@
 //! `odm-fake-agent --chat` is a canned conversationalist instead: every
 //! prompt gets a thought, a tool call and a reply. Words in the prompt pick
 //! extras: `plan`, `permission`, `slow` (a turn long enough to Stop),
-//! `crash`. `ODM_FAKE_AGENT_FAST=1` cuts its pauses to a tenth, for tests;
+//! `crash`, `attachments` (the reply lists the prompt's resource URIs and
+//! the `ODM_MANAGED_AGENT` it was started with). `ODM_FAKE_AGENT_FAST=1` cuts its pauses to a tenth, for tests;
 //! `ODM_TEST_TIMEOUT_SCALE` (CI) multiplies them back up.
 
 use serde_json::{Value, json};
@@ -306,12 +307,23 @@ fn idle(wire: &mut Wire, turn: u32, ms: u64) -> bool {
 }
 
 fn run_turn(wire: &mut Wire, turn: u32, params: &Value) -> &'static str {
-    let text = params.pointer("/prompt/0/text").and_then(Value::as_str).unwrap_or("").to_lowercase();
+    // Attachments come as text (no embeddedContext here): `<context ref="uri">`.
+    let blocks = params["prompt"].as_array().cloned().unwrap_or_default();
+    let texts = blocks.iter().filter_map(|b| b["text"].as_str());
+    let (attached, said): (Vec<&str>, Vec<&str>) = texts.partition(|t| t.starts_with("<context ref=\""));
+    let text = said.first().copied().unwrap_or("").to_lowercase();
     let has = |word: &str| text.contains(word);
     let id = |part: &str| format!("{part}{turn}");
     wire.update(chunk("agent_thought_chunk", &id("t"), "The user wants something. Looking at the project first."));
     if idle(wire, turn, 300) {
         return "cancelled";
+    }
+    if has("attachments") {
+        let uris: Vec<&str> = attached.iter().filter_map(|t| t["<context ref=\"".len()..].split('"').next()).collect();
+        let managed = std::env::var("ODM_MANAGED_AGENT").unwrap_or_default();
+        let reply = format!("Attached: {}; managed: {managed}", uris.join(", "));
+        wire.update(chunk("agent_message_chunk", &id("m"), &reply));
+        return "end_turn";
     }
     if has("crash") {
         eprintln!("fake agent: something went badly wrong");

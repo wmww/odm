@@ -1,4 +1,4 @@
-//! `odm docs` — the full API reference (plus the agent prompt as a topic),
+//! `odm docs` — the full API reference,
 //! compiled in from `docs/` so it works from any directory and always
 //! matches the engine build. Markdown out: for reading (or grepping), not
 //! parsing.
@@ -41,9 +41,6 @@ fn topics() -> Vec<(String, String)> {
             out.push((name.into_owned(), body.to_string()));
         }
     }
-    // The agent instructions: a topic, not a command — their standing home
-    // is the AGENTS.md marker block, so reading them here is docs.
-    out.push(("prompt".into(), odm_prompt::text()));
     out.sort();
     out
 }
@@ -91,6 +88,8 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
             args.remove(0);
             print_changes(&args)
         }
+        // It was a topic; it changes with the situation now, so it isn't docs.
+        Some("prompt") => bail!("the prompt is a command now: odm prompt"),
         Some(topic) if args.len() == 1 => {
             let want = topic.trim_end_matches(".md");
             let all = topics();

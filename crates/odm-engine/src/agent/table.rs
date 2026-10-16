@@ -134,6 +134,14 @@ pub struct Resolved {
     pub meta: Option<Value>,
 }
 
+impl Resolved {
+    /// `meta` hands the agent the ODM prompt as (part of) its system prompt,
+    /// so the first message need not carry it.
+    pub fn primes(&self) -> bool {
+        self.meta.as_ref().is_some_and(|m| m.get("systemPrompt").is_some())
+    }
+}
+
 pub fn resolve(id: &str, config: &AgentConfig) -> Result<Resolved, Problem> {
     let Some(agent) = built_in(id) else {
         let custom = config.custom.as_ref().filter(|_| id == odm_config::CUSTOM);
@@ -176,6 +184,10 @@ pub fn npm_command(dir: &Path, package: &str, bin: &str) -> Option<Vec<String>> 
     Some(vec![node, root.join(script).display().to_string()])
 }
 
+/// The ODM prompt as the system prompt, where the adapter takes one: it
+/// survives compaction, which a first message may not. Elsewhere it rides
+/// the first prompt (`AgentHost`). Codex's adapter has no way in (1.12).
+///
 /// `odm` commands and in-project edits never ask: allow rules handed to the
 /// *agent*, whose own parser applies them — ODM never reads a shell string
 /// or answers a permission request itself. Agents with no way to be told
@@ -186,7 +198,9 @@ fn session_meta(id: &str) -> Option<Value> {
         // The adapter spreads `options` into the Agent SDK's. Verified:
         // `odm status` and an in-project Write run unasked; `odm status;
         // touch x` and a Write outside cwd still ask.
+        // `systemPrompt.append` keeps the claude_code preset (0.79).
         "claude-acp" => Some(json!({
+            "systemPrompt": {"append": odm_prompt::text(&odm_prompt::Context { managed: true })},
             "claudeCode": {"options": {"allowedTools": ["Bash(odm:*)", "Edit(./**)"]}}
         })),
         _ => None,

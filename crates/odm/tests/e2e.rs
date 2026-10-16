@@ -206,7 +206,8 @@ fn init_makes_a_project_an_engine_can_serve() {
     assert_eq!(out["name"], "widget");
     assert_eq!(out["units"], "mm");
     assert_eq!(out["created"], json!(["odm.toml", "root.js", "AGENTS.md", "CLAUDE.md"]));
-    assert!(out["next"].as_str().unwrap().contains("--headless"), "{out}");
+    assert!(out["next"][0].as_str().unwrap().contains("--headless"), "{out}");
+    assert_eq!(out["next"][1], "odm prompt");
     let project = PathBuf::from(out["project"].as_str().unwrap());
 
     let _engine = Engine::start(&project);
@@ -223,7 +224,7 @@ fn init_makes_a_project_an_engine_can_serve() {
 }
 
 /// An agent's own repo already has a CLAUDE.md: kept, warned about, and
-/// given the block only once --append-prompt says yes.
+/// given the line only once --append-prompt says yes.
 #[test]
 fn init_keeps_an_existing_agent_file_until_told() {
     let tmp = tempdir();
@@ -239,7 +240,7 @@ fn init_keeps_an_existing_agent_file_until_told() {
     assert_eq!(out["appended"], json!(["CLAUDE.md"]));
     assert!(out.get("warnings").is_none(), "{out}");
     let claude = std::fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap();
-    assert!(claude.starts_with("# Mine\n\n<!---"), "{claude}");
+    assert!(claude.starts_with("# Mine\n\nThis is an ODM project.") && claude.contains("odm prompt"), "{claude}");
 }
 
 // ------------------------------------------------------- 2. sync on query
@@ -563,11 +564,35 @@ fn stale_state_is_reclaimed() {
 
 // ------------------------------------------------------------------ 9. docs
 
+/// `odm prompt`, engineless, from anywhere; the managed variant only for an
+/// agent ODM started (as `odm docs prompt`, its old home, now says).
+#[test]
+fn the_prompt_prints_without_an_engine() {
+    let tmp = tempdir();
+    let run = |managed: bool| {
+        let mut cmd = Command::new(BIN);
+        cmd.arg("prompt").current_dir(tmp.path()).env_remove("ODM_MANAGED_AGENT");
+        if managed {
+            cmd.env("ODM_MANAGED_AGENT", "1");
+        }
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let (own, managed) = (run(false), run(true));
+    assert!(own.starts_with("# ODM") && own.contains("own harness"), "{own}");
+    assert!(managed.contains("Agent panel") && !managed.contains("own harness"), "{managed}");
+
+    let old = Command::new(BIN).args(["docs", "prompt"]).output().unwrap();
+    assert!(!old.status.success());
+    assert!(String::from_utf8_lossy(&old.stderr).contains("odm prompt"));
+}
+
 /// The agent's documentation surface, engineless: every topic must print.
 #[test]
 fn every_docs_topic_prints() {
     let docs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs");
-    let mut topics = vec!["prompt".to_string()];
+    let mut topics = Vec::new();
     for dir in [docs.join("api"), docs.clone()] {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();

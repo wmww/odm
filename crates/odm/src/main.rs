@@ -227,8 +227,8 @@ fn init(args: &[String]) -> anyhow::Result<i32> {
             }
         } else {
             warnings.push(format!(
-                "{file} exists without the ODM prompt block, so agents reading it will not get \
-                 ODM's instructions; add it with `odm init {} --append-prompt`",
+                "{file} exists without the ODM line, so agents reading it will not know to \
+                 run `odm prompt`; add it with `odm init {} --append-prompt`",
                 project.display()
             ));
         }
@@ -246,7 +246,9 @@ fn init(args: &[String]) -> anyhow::Result<i32> {
             out[key] = list.into();
         }
     }
-    out["next"] = format!("odm run {} --headless", project.display()).into();
+    // The agent running `init` has no agent file in context yet: the second
+    // step is what that file would have told it.
+    out["next"] = serde_json::json!([format!("odm run {} --headless", project.display()), "odm prompt"]);
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(0)
 }

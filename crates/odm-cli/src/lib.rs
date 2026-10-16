@@ -6,7 +6,7 @@
 //! One grammar: `odm <cmd> ['{…json}']` — the JSON object *is* the engine
 //! request body (minus `cmd`), so the engine's field validation and errors
 //! are the CLI's too. The only command with its own argument parsing is the
-//! one whose arguments aren't a request: `docs` (engineless).
+//! one whose arguments aren't a request: `docs` (engineless, as is `prompt`).
 
 mod docs;
 
@@ -27,6 +27,7 @@ pub const USAGE: &str = "  status                     project, files, view slots
   export  '{…}'              write the view's solids to a file (STL)
   feedback '{…}'             report an ODM bug or missing feature (a human
                              reviews it before anything is sent)
+  prompt                     the agent instructions: how to work on an ODM project
   docs    [<topic>]          the reference, markdown, no engine (bare: topics)
   docs    search <pattern>   grep the reference, whole sections out
   docs    changes <from> <to>  API migration guides, concatenated
@@ -64,15 +65,17 @@ pub fn run(args: &[String]) -> anyhow::Result<i32> {
     };
     let rest = &args[1..];
 
-    // The engineless commands: docs are compiled in, so they work with no
-    // project and no engine running.
+    // The engineless commands: docs and the prompt are compiled in, so they
+    // work with no project and no engine running.
     if cmd == "docs" {
         return docs::run(rest);
     }
     if cmd == "prompt" {
-        // Redirected here rather than engine-side so it still redirects
-        // when no engine is running — `docs`, its home, doesn't need one.
-        bail!("`prompt` is a docs topic now: odm docs prompt");
+        if !rest.is_empty() {
+            bail!("prompt takes no arguments");
+        }
+        println!("{}", odm_prompt::text(&odm_prompt::Context::from_env()));
+        return Ok(0);
     }
 
     // There is no chat loop. Said here as well as engine-side, because these

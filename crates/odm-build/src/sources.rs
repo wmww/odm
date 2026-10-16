@@ -282,15 +282,15 @@ pub struct NewProject {
 }
 
 /// Author a new project at `dir`: the marker (`odm.toml`), a starter
-/// `root.js` so there is something to look at, and the agent files carrying
-/// the standard ODM instructions. `dir` may be an existing folder (it is
+/// `root.js` so there is something to look at, and the agent files pointing
+/// at the ODM instructions. `dir` may be an existing folder (it is
 /// created if not): it must pass `check_new_project`, but a root.js or agent
 /// file already present is kept as-is, the root as the project's root, the
-/// agent files to be offered the block (at open time, or by `odm init
+/// agent files to be offered the line (at open time, or by `odm init
 /// --append-prompt`). File ▸ New Project and `odm init` both come here.
 ///
 /// The other places the engine writes project files are `sync_marker` and the
-/// agent-file block (`odm_prompt`). This one only ever writes files that do
+/// agent-file line (`odm_prompt`). This one only ever writes files that do
 /// not exist yet, so nothing authored can be lost to it.
 pub fn create_project(dir: &Path, name: &str, units: Units) -> Result<NewProject, ScanError> {
     check_new_project(dir)?;

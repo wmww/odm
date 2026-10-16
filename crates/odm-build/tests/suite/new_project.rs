@@ -16,11 +16,10 @@ fn a_new_project_is_a_project_that_builds() {
     assert!(created.agent_files.is_none());
 
     assert!(is_project(&project));
-    // The agent files: the block in AGENTS.md, CLAUDE.md a link to it (a
+    // The agent files: the line in AGENTS.md, CLAUDE.md a link to it (a
     // copy where there are no symlinks).
     let agents = std::fs::read_to_string(project.join("AGENTS.md")).unwrap();
-    assert!(agents.contains(odm_prompt::BEGIN) && agents.contains(odm_prompt::END), "{agents}");
-    assert!(agents.contains("ODM"), "{agents}");
+    assert_eq!(agents, format!("{}\n", odm_prompt::LINE));
     assert_eq!(std::fs::read_to_string(project.join("CLAUDE.md")).unwrap(), agents);
     #[cfg(unix)]
     assert_eq!(
